@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, formatBytes, type Batch, type Snapshot } from './api';
+import { SOURCE_INFO, api, formatBytes, type Batch, type LibraryEntry, type Snapshot } from './api';
+import { LibraryView } from './LibraryView';
 import { BatchLauncher } from './BatchLauncher';
 import { CandidateCard } from './CandidateCard';
 
@@ -41,6 +42,13 @@ export function ReviewPage() {
   const [days, setDays] = useState(7);
   const [cleanMsg, setCleanMsg] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [view, setView] = useState<'batch' | 'library'>('batch');
+  const [library, setLibrary] = useState<LibraryEntry[]>([]);
+  const refreshLibrary = useCallback(async () => {
+    const [lib, st] = await Promise.all([api.library(), api.storage()]);
+    setLibrary(lib);
+    setStorage(st);
+  }, []);
   const snap = useBatchStream(selected);
   const prevStatus = useRef<string | null>(null);
 
@@ -53,10 +61,15 @@ export function ReviewPage() {
 
   useEffect(() => {
     void refresh();
-    api.storage().then(setStorage).catch(() => {});
+    refreshLibrary().catch(() => {});
     const t = setInterval(refresh, 5000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, refreshLibrary]);
+
+  // Keep the library current while renders finish.
+  useEffect(() => {
+    if (view === 'library' || snap?.batch.status === 'done') refreshLibrary().catch(() => {});
+  }, [view, snap?.counts.ready, snap?.batch.status, refreshLibrary]);
 
   // Batch finished: browser notification + tab title until the tab is focused.
   useEffect(() => {
@@ -71,7 +84,7 @@ export function ReviewPage() {
       };
       window.addEventListener('focus', reset);
       void refresh();
-      api.storage().then(setStorage).catch(() => {});
+      refreshLibrary().catch(() => {});
     }
     prevStatus.current = st;
   }, [snap, refresh]);
@@ -91,6 +104,7 @@ export function ReviewPage() {
           claude={status.claude}
           onStarted={(id) => {
             setSelected(id);
+            setView('batch');
             void refresh();
           }}
         />
@@ -98,7 +112,14 @@ export function ReviewPage() {
           <h3>History</h3>
           <ul className="history">
             {batches.map((x) => (
-              <li key={x.id} className={x.id === selected ? 'active' : ''} onClick={() => setSelected(x.id)}>
+              <li
+                key={x.id}
+                className={x.id === selected && view === 'batch' ? 'active' : ''}
+                onClick={() => {
+                  setSelected(x.id);
+                  setView('batch');
+                }}
+              >
                 <span>{batchTitle(x)}</span>
                 <span className={`hint status-${x.status}`}>
                   {ACTIVE.has(x.status) ? STATUS_LABEL[x.status] : `${x.counts?.ready ?? 0} ready${x.approved ? ` · ${x.approved} ✓` : ''}`}
@@ -115,6 +136,23 @@ export function ReviewPage() {
               Renders {formatBytes(storage.rendersBytes)} · Exports {formatBytes(storage.exportsBytes)}
             </p>
           )}
+          {library.length > 0 && (
+            <ul className="hint storage-breakdown">
+              {(['batch', 'playground', 'cli'] as const).map((g) => {
+                const items = library.filter((e) => SOURCE_INFO[e.source].group === g);
+                if (!items.length) return null;
+                return (
+                  <li key={g}>
+                    {g === 'batch' ? 'Batches' : g === 'playground' ? 'Playground' : 'Command line'}: {items.length} video{items.length === 1 ? '' : 's'},{' '}
+                    {formatBytes(items.reduce((sum, e) => sum + e.sizeBytes, 0))}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <button className="link" onClick={() => setView('library')}>
+            See all renders →
+          </button>
           <div className="row">
             <label className="param-check">
               Older than
@@ -126,7 +164,7 @@ export function ReviewPage() {
                 if (!confirm(`Delete renders older than ${days} days that aren't approved or exported (including Playground test exports)?`)) return;
                 const r = await api.housekeeping(days);
                 setCleanMsg(`Deleted ${r.deleted} render(s), freed ${formatBytes(r.freedBytes)}`);
-                setStorage(await api.storage());
+                await refreshLibrary();
               }}
             >
               Clean up
@@ -137,7 +175,27 @@ export function ReviewPage() {
       </aside>
 
       <section className="review-main">
-        {!b ? (
+        <div className="view-tabs">
+          <button className={view === 'batch' ? 'on' : ''} onClick={() => setView('batch')}>
+            Batch review
+          </button>
+          <button className={view === 'library' ? 'on' : ''} onClick={() => setView('library')}>
+            All renders ({library.length})
+          </button>
+        </div>
+        {view === 'library' ? (
+          <LibraryView
+            entries={library}
+            onOpenBatch={(id) => {
+              setSelected(id);
+              setView('batch');
+            }}
+            onChanged={() => {
+              void refreshLibrary();
+              void refresh();
+            }}
+          />
+        ) : !b ? (
           <div className="empty">
             <h2>Batches &amp; Review</h2>
             <p className="hint">Start a batch on the left. It plans concepts, finds the most dramatic run of each, renders them, and ranks them here for review.</p>

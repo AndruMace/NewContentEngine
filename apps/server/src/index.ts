@@ -32,6 +32,7 @@ const { SearchPool } = await import('./searchPool');
 const { BatchRunner } = await import('./batch');
 const { ReviewActions, dirSize } = await import('./review');
 const { batchSnapshot, batchSummary, jobView, reviewItem } = await import('./views');
+const { scanLibrary, deleteLibraryEntry } = await import('./library');
 type BatchSettings = import('./db').BatchSettings;
 
 const PORT = Number(process.env.SIM_SERVER_PORT ?? 5174);
@@ -198,6 +199,14 @@ app.get<{ Params: { id: string }; Querystring: { name: string } }>('/api/exports
 });
 
 app.get('/api/storage', async () => ({ rendersBytes: await dirSize(RENDERS_DIR), exportsBytes: await dirSize(EXPORTS_DIR) }));
+
+// Every render on disk, labelled by where it came from (batch / Playground / command line).
+app.get('/api/library', async () => scanLibrary());
+
+app.delete<{ Querystring: { path: string } }>('/api/library', async (req, reply) => {
+  const ok = await deleteLibraryEntry(req.query.path ?? '');
+  return ok ? { ok: true } : reply.code(400).send({ error: 'bad path' });
+});
 
 app.post<{ Body: { days?: number } }>('/api/housekeeping', async (req) => review.housekeeping(Math.max(0, Number(req.body?.days ?? 7))));
 

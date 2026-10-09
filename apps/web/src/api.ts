@@ -96,6 +96,33 @@ export const api = {
   storage: () => call<{ rendersBytes: number; exportsBytes: number }>('GET', '/api/storage'),
   housekeeping: (days: number) => call<{ deleted: number; freedBytes: number }>('POST', '/api/housekeeping', { days }),
   reveal: (path: string, root: 'renders' | 'exports' = 'renders') => call('POST', '/api/reveal', { path, root }),
+  library: () => call<LibraryEntry[]>('GET', '/api/library'),
+  deleteRender: (path: string) => call('DELETE', `/api/library?path=${encodeURIComponent(path)}`),
+};
+
+export type RenderSource = 'batch' | 'playground-review' | 'playground-export' | 'cli';
+
+export interface LibraryEntry {
+  dir: string;
+  source: RenderSource;
+  createdAt: number;
+  sizeBytes: number;
+  durationS: number | null;
+  recipe: Recipe | null;
+  qcPass: boolean | null;
+  hasCover: boolean;
+  renderId: string | null;
+  batchId: string | null;
+  batchCreatedAt: number | null;
+  decision: 'pending' | 'approved' | 'rejected' | 'rerolled' | null;
+  hook: string | null;
+}
+
+export const SOURCE_INFO: Record<RenderSource, { label: string; group: 'batch' | 'playground' | 'cli'; help: string }> = {
+  batch: { label: 'Batch', group: 'batch', help: 'Made by a batch run' },
+  'playground-review': { label: 'Playground → Review', group: 'playground', help: 'Sent from the Playground with "Add to review queue"' },
+  'playground-export': { label: 'Playground export', group: 'playground', help: 'Made with "Export MP4" in the Playground' },
+  cli: { label: 'Command line', group: 'cli', help: 'Made with npm run render (not tracked in the review database)' },
 };
 
 export const exportFileUrl = (exportId: string, name: string) => `/api/exports/${exportId}/file?name=${encodeURIComponent(name)}`;

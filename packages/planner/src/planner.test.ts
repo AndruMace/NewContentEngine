@@ -63,3 +63,24 @@ describe('concepts', () => {
     }
   });
 });
+
+describe('copy hygiene', () => {
+  it('strips tool/AI self-references from hashtags and captions', () => {
+    const c = normalizeCopy({
+      hook: 'h',
+      cta: 'c',
+      title: 'Marble race #Claude',
+      youtubeDescription: 'Eight marbles race to the bottom #ai',
+      tiktokCaption: 'who wins? #marblerace #Claude #satisfying #AIgenerated',
+      xPost: 'Pick a marble #anthropic #oddlysatisfying',
+      hashtags: ['#claude', 'ai', '#marblerace', 'Satisfying', '#ChatGPT'],
+    });
+    expect(c.hashtags).toEqual(['#marblerace', '#Satisfying']);
+    expect(c.tiktokCaption).toBe('who wins? #marblerace #satisfying');
+    expect(c.xPost).toBe('Pick a marble #oddlysatisfying');
+    expect(c.title).toBe('Marble race');
+    expect(c.youtubeDescription).toBe('Eight marbles race to the bottom');
+    // Normal words containing "ai" are untouched.
+    expect(normalizeCopy({ ...c, tiktokCaption: 'raining sand #rain' }).tiktokCaption).toBe('raining sand #rain');
+  });
+});

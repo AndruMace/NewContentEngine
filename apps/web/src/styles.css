@@ -125,3 +125,34 @@ button.danger { background: #3a1616; border-color: #5a2020; color: #ffb3b3; }
 .caption-row code { font-size: 11px; color: #c4c8d2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .copy-editor, .posts { border-top: 1px solid var(--line); padding-top: 4px; }
 .empty { max-width: 520px; margin: 80px auto; text-align: center; }
+
+/* ---- All renders ---- */
+.view-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.view-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 12px; color: var(--muted); }
+.view-tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+.lib-filters { margin-bottom: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0 0 14px; }
+.lib-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.lib-media { cursor: pointer; max-height: 360px; }
+.lib-media img { width: 100%; height: 100%; object-fit: contain; }
+.badge.src { font-weight: 600; }
+.src-batch { background: #12382b; color: var(--accent); }
+.src-playground { background: #1d2b4a; color: #8fb4ff; }
+.src-cli { background: #33281a; color: #f3c969; }
+.storage-breakdown { list-style: none; padding: 0; margin: 4px 0; }
+button.link { color: var(--accent); padding: 0; }
+
+/* ---- Card: published copy vs internal details ---- */
+.post-preview { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; background: #1a1d26; border-radius: 8px; }
+.post-title { margin: 0; font-weight: 600; font-size: 13px; }
+.post-desc { margin: 0; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: #1d2b4a; color: #8fb4ff; }
+.captions-box, .planner-details { border-top: 1px solid var(--line); padding-top: 4px; }
+.caption-full { margin-bottom: 8px; }
+.caption-full-head { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+.caption-full pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: 12px; background: #0b0c10; padding: 6px 8px; border-radius: 6px; color: #c4c8d2; }
+.planner-details summary { color: var(--muted); }
+.planner-details dl { display: grid; grid-template-columns: 110px 1fr; gap: 3px 8px; margin: 4px 0 0; font-size: 12px; }
+.planner-details dt { color: var(--muted); }
+.planner-details dd { margin: 0; color: #c4c8d2; }

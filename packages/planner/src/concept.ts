@@ -31,16 +31,39 @@ export const LIMITS = { hook: 60, cta: 48, title: 90, tiktok: 300, x: 270, hasht
 
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…');
 
-/** Enforce platform limits and tidy hashtags. Never throws. */
+/**
+ * Hashtags about the tooling rather than the video. They attract no relevant viewers, so they
+ * are stripped from hashtag lists and caption text no matter who wrote the copy.
+ */
+const BLOCKED_TAGS = new Set([
+  'claude', 'claudeai', 'anthropic', 'opus', 'sonnet', 'haiku', 'ai', 'aiart', 'aigenerated', 'aivideo', 'madewithai',
+  'generativeai', 'genai', 'chatgpt', 'openai', 'gpt', 'llm', 'aitools', 'artificialintelligence',
+]);
+
+const isBlockedTag = (tag: string) => BLOCKED_TAGS.has(tag.replace(/^#+/, '').toLowerCase());
+
+/** Remove blocked #tags from free text and tidy the leftover whitespace. */
+function stripBlockedTags(text: string): string {
+  return text
+    .replace(/#[\p{L}\p{N}_]+/gu, (tag) => (isBlockedTag(tag) ? '' : tag))
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ +\n/g, '\n')
+    .trim();
+}
+
+/** Enforce platform limits, tidy hashtags and drop self-referencing ones. Never throws. */
 export function normalizeCopy(c: SocialCopy): SocialCopy {
-  const tags = [...new Set(c.hashtags.map((h) => '#' + h.replace(/^#+/, '').replace(/[^\p{L}\p{N}_]/gu, '')).filter((h) => h.length > 1))].slice(0, LIMITS.hashtags);
+  const tags = [...new Set(c.hashtags.map((h) => '#' + h.replace(/^#+/, '').replace(/[^\p{L}\p{N}_]/gu, '')).filter((h) => h.length > 1 && !isBlockedTag(h)))].slice(
+    0,
+    LIMITS.hashtags,
+  );
   return {
     hook: clip(c.hook.trim(), LIMITS.hook),
     cta: clip(c.cta.trim(), LIMITS.cta),
-    title: clip(c.title.replace(/#shorts/gi, '').trim(), LIMITS.title),
-    youtubeDescription: c.youtubeDescription.trim(),
-    tiktokCaption: clip(c.tiktokCaption.trim(), LIMITS.tiktok),
-    xPost: clip(c.xPost.trim(), LIMITS.x),
+    title: clip(stripBlockedTags(c.title.replace(/#shorts/gi, '')), LIMITS.title),
+    youtubeDescription: stripBlockedTags(c.youtubeDescription),
+    tiktokCaption: clip(stripBlockedTags(c.tiktokCaption), LIMITS.tiktok),
+    xPost: clip(stripBlockedTags(c.xPost), LIMITS.x),
     hashtags: tags,
   };
 }
@@ -164,11 +187,18 @@ export function conceptOutputSchema(template: Template) {
       hook: str(`On-screen hook shown in the first 2 seconds. Max ${LIMITS.hook} characters.`),
       cta: str(`On-screen call to action at the end. Max ${LIMITS.cta} characters.`),
       title: str(`YouTube Shorts title without #Shorts. Max ${LIMITS.title} characters.`),
-      youtubeDescription: str('YouTube description, 1-3 short lines, no hashtags.'),
-      tiktokCaption: str(`TikTok caption including 3-5 hashtags. Max ${LIMITS.tiktok} characters.`),
-      xPost: str(`Post text for X including 1-2 hashtags. Max ${LIMITS.x} characters.`),
-      hashtags: { type: 'array', items: { type: 'string' }, description: '3-6 hashtags without spaces.' },
-      rationale: str('One sentence on why this concept should hold attention.'),
+      youtubeDescription: str(
+        'Published YouTube description, written to the viewer: 1-3 short lines saying what happens in this video, using words people search for (e.g. "marble race", "satisfying sand art"). No hashtags. Never mention retention, hooks, strategy or how it was made.',
+      ),
+      tiktokCaption: str(`Published TikTok caption, written to the viewer, ending with 3-5 hashtags. Max ${LIMITS.tiktok} characters.`),
+      xPost: str(`Published post for X, written to the viewer, with 1-2 hashtags. Max ${LIMITS.x} characters.`),
+      hashtags: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          '3-6 hashtags, without spaces, chosen to reach people who would enjoy this exact video: mix 1-2 broad ones (#satisfying, #oddlysatisfying) with specific ones for the format and subject (#marblerace, #sandart, #sortingalgorithms). Never tags about tools or AI (#claude, #ai).',
+      },
+      rationale: str('Private note for the channel owner (never published): one sentence on why this concept should hold attention.'),
     },
   };
 }

@@ -25,7 +25,8 @@ What works on this channel:
 - The hook appears in the first 2 seconds and creates an open question the video answers at the very end. Short, concrete, no clickbait the video can't pay off.
 - Stakes and progress are visible (rings left, who's still in, HP). Pick parameters that make the outcome uncertain and the climax land late.
 - The CTA invites a comment (a guess, a rating, a side) rather than asking for likes.
-- Captions are casual and human. Hashtags are relevant (satisfying, oddlysatisfying, asmr, physics, the specific format), never spammy.
+- Titles, descriptions and captions are published as-is, so write them to the viewer about what happens in the video: casual, human, and using the words people actually search for. Keep strategy talk (retention, hooks, "viewers", stakes) out of them; that belongs only in the private rationale.
+- Hashtags exist to reach people who would enjoy this exact video: one or two broad tags plus specific ones for the format and subject. Never tag the tools used to make it (no #claude, #ai, #anthropic).
 - Never claim something the simulation might not show (e.g. "it fails at the end"); the outcome is decided by real physics.
 
 Parameter guidance: stay near the defaults unless you have a reason; extreme values can make simulations that never finish. Choose values so the video plausibly runs close to the requested length.`;
