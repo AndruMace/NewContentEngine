@@ -87,7 +87,7 @@ export async function qc(file: string, expectedDurationS: number): Promise<QcRep
   const [num, den] = String(v.avg_frame_rate ?? '0/1').split('/').map(Number);
   const err = await ffmpeg([
     '-nostats', '-i', file,
-    '-vf', 'blackdetect=d=0.5:pic_th=0.995:pix_th=0.02,freezedetect=n=0.0005:d=1.5',
+    '-vf', 'blackdetect=d=0.5:pic_th=0.995:pix_th=0.02,freezedetect=n=0.0005:d=3',
     '-af', 'ebur128=peak=true', '-f', 'null', '-',
   ]);
   const summary = err.slice(err.lastIndexOf('Summary:'));

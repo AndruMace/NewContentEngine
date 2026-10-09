@@ -118,6 +118,8 @@ export interface Template<P = any, S = any> {
   hud(s: S): Record<string, string | number | boolean | LeaderboardRow[]>;
   overlays(params: P, copy: Copy): OverlaySpec[];
   render(rc: RenderCtx, s: S): void;
+  /** Optional layer drawn after bloom/post-processing (crisp, unglowed), before overlays. */
+  renderTop?(rc: RenderCtx, s: S): void;
   audio(e: SimEvent, m: AudioMapCtx): AudioEventInput[];
   score(events: SimEvent[], info: { durationS: number; targetS: number; timedOut: boolean }): DramaScore;
 }

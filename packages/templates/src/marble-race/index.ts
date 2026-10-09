@@ -1,9 +1,63 @@
 import { z } from 'zod';
-import { FONT_FAMILY, paletteAt, rgbToCss, type DramaScore, type LeaderboardRow, type Rng, type SimEvent, type Template } from '@sim/engine';
+import { FONT_FAMILY, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type LeaderboardRow, type Rng, type SimEvent, type Template } from '@sim/engine';
 import { hypot, World, type Body, type Contact, type Disc, type Segment } from '@sim/physics';
 import { clamp01, gaussFit, mean } from '../scoring';
 import { COLOR_TEAMS, COUNTRY_TEAMS, burst, drawSparks, drawTeamBall, pickTeams, updateSparks, type Spark, type Team } from '../fx';
 import * as dm from '@sim/physics/math';
+
+const VIEW_H = 1920;
+const MIN_ZOOM = 0.5;
+
+/**
+ * Follow the "decision zone": the marble whose crossing will trigger the next elimination (or
+ * finish) plus everyone at risk behind it. In the final duel that's the leader, so the winning
+ * moment is always on screen. Zooms out (down to MIN_ZOOM) to keep the whole zone in frame.
+ */
+function updateCamera(s: State, dt: number) {
+  let focus: Marble[];
+  let key: Marble;
+  const order = aliveSorted(s).map((i) => s.marbles[i]);
+  if (s.winner >= 0) {
+    focus = [s.marbles[s.winner]];
+    key = focus[0];
+  } else if (order.length === 0) {
+    return;
+  } else if (s.p.mode === 'elimination') {
+    // Rounds keep the field within about a section, so frame everyone still in; the key marble
+    // is the one whose crossing decides the round (the leader in the final duel).
+    const cut = s.cuts[Math.min(s.nextCheckpoint, s.cuts.length - 1)] ?? 1;
+    focus = order;
+    key = order[Math.max(0, order.length - cut - 1)];
+  } else {
+    focus = order.slice(0, 3);
+    key = order[0];
+  }
+  const ys = focus.map((m) => m.body.y);
+  let lo = Math.min(...ys);
+  let hi = Math.max(...ys);
+  // Look ahead to the line the key marble is racing towards.
+  const line = s.checkpoints[Math.min(key.passed, s.checkpoints.length - 1)];
+  if (s.winner < 0 && line > hi && line - hi < 500) hi = line + 80;
+  const margin = 520;
+  const zoom = Math.max(MIN_ZOOM, Math.min(1, (VIEW_H * 0.8) / (hi - lo + margin)));
+  let target = (lo + hi) / 2;
+  // Too spread out even fully zoomed out: keep the key marble in view.
+  const halfView = VIEW_H / (2 * zoom) - 200;
+  if (key.body.y < target - halfView) target = key.body.y + halfView;
+  if (key.body.y > target + halfView) target = key.body.y - halfView;
+  if (s.winner >= 0) target = key.body.y - 260;
+  s.camY += (target - s.camY) * (1 - dm.exp(-5 * dt));
+  s.camZoom += (zoom - s.camZoom) * (1 - dm.exp(-3 * dt));
+}
+
+/** World -> screen transform for the current camera. Returns the visible world y range. */
+function applyCamera(ctx: Ctx2D, s: State, height: number) {
+  ctx.translate(540, height / 2);
+  ctx.scale(s.camZoom, s.camZoom);
+  ctx.translate(-540, -s.camY);
+  const half = height / (2 * s.camZoom);
+  return { top: s.camY - half, bottom: s.camY + half };
+}
 
 export const marbleRaceSchema = z.object({
   marbleCount: z.number().int().min(3).max(16).default(8).meta({ title: 'Marbles' }),
@@ -11,7 +65,7 @@ export const marbleRaceSchema = z.object({
   teams: z.enum(['countries', 'colors']).default('countries').meta({ title: 'Teams' }),
   raceSections: z.number().int().min(2).max(10).default(5).meta({ title: 'Sections (race mode)' }),
   maxEliminationSections: z.number().int().min(2).max(10).default(7).meta({ title: 'Max sections (elimination)' }),
-  sectionHeight: z.number().min(700).max(1600).default(1050).meta({ title: 'Section height', step: 10 }),
+  sectionHeight: z.number().min(700).max(1600).default(880).meta({ title: 'Section height', step: 10 }),
   marbleRadius: z.number().min(14).max(40).default(32).meta({ title: 'Marble radius' }),
   gravity: z.number().min(600).max(2500).default(1300).meta({ title: 'Gravity', step: 50 }),
   bounciness: z.number().min(0.1).max(0.9).default(0.5).meta({ title: 'Bounciness', step: 0.05 }),
@@ -45,6 +99,8 @@ interface State {
   cuts: number[];
   nextCheckpoint: number;
   gate: Segment;
+  /** Elimination mode: a gate under each line holds qualifiers until the round is decided. */
+  roundGates: Segment[];
   gateOpen: boolean;
   bumpers: (Disc & { flash: number })[];
   leader: number;
@@ -54,6 +110,7 @@ interface State {
   endAt: number | null;
   t: number;
   camY: number;
+  camZoom: number;
   visual: boolean;
   rng: Rng;
   fxRng: Rng;
@@ -201,6 +258,12 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     world.addSegment({ ax: R, ay: -900, bx: R, by: end + 1200, r: 10, tag: 'wall', restitution: 0.4 });
     world.addSegment({ ax: L, ay: end + 900, bx: R, by: end + 900, r: 10, tag: 'floor', restitution: 0.2 });
     const gate = world.addSegment({ ax: L, ay: -60, bx: R, by: -60, r: 8, tag: 'gate', restitution: 0.1 });
+    // Round gates (elimination): marbles that make it past line k wait on gate k until round k is
+    // decided, so nobody runs away by several sections and every round restarts bunched up.
+    const roundGates =
+      p.mode === 'elimination'
+        ? sections.slice(0, -1).map((sec) => world.addSegment({ ax: L, ay: sec.y1 + 120, bx: R, by: sec.y1 + 120, r: 8, tag: 'gate', restitution: 0.15 }))
+        : [];
 
     const r = p.marbleRadius;
     const perRow = Math.floor((W - 40) / (r * 2.3));
@@ -222,6 +285,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
       cuts: p.mode === 'elimination' ? sectionCuts(p.marbleCount, nSections) : [],
       nextCheckpoint: 0,
       gate,
+      roundGates,
       gateOpen: false,
       bumpers,
       leader: -1,
@@ -231,6 +295,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
       endAt: null,
       t: 0,
       camY: 300,
+      camZoom: 1,
       visual,
       rng,
       fxRng,
@@ -262,6 +327,12 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     // Unstick: a marble that hasn't made progress for a while gets a nudge.
     s.marbles.forEach((m, i) => {
       if (m.out || m.finishedAt >= 0 || !s.gateOpen) return;
+      // Waiting on a closed round gate is not being stuck.
+      if (p.mode === 'elimination' && m.passed > s.nextCheckpoint) {
+        m.lastProgressT = t;
+        m.bestY = m.body.y;
+        return;
+      }
       if (m.body.y > m.bestY + 15) {
         m.bestY = m.body.y;
         m.lastProgressT = t;
@@ -287,6 +358,10 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
           if (through.length >= alive.length - s.cuts[cp]) {
             const losers = alive.map((m) => s.marbles.indexOf(m)).filter((i) => s.marbles[i].passed <= cp);
             losers.forEach((i) => eliminate(s, i, cp, t, emit));
+            if (s.roundGates[cp]) {
+              s.roundGates[cp].active = false;
+              emit({ type: 'roundGate', cp });
+            }
             s.nextCheckpoint++;
             if (s.nextCheckpoint < s.checkpoints.length) emit({ type: 'checkpoint', cp: s.nextCheckpoint });
           }
@@ -322,14 +397,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     }
     s.t = t + dt;
 
-    // Camera: frame the whole pack if it fits, otherwise watch the back (that's where eliminations happen).
-    const live = s.marbles.filter((m) => !m.out);
-    const focus = s.winner >= 0 ? [s.marbles[s.winner]] : live;
-    const ys = focus.map((m) => m.body.y);
-    const lo = Math.min(...ys);
-    const hi = Math.max(...ys);
-    const target = s.winner >= 0 ? hi - 260 : hi - lo < 1300 ? (lo + hi) / 2 + 120 : lo + 500;
-    s.camY += (target - s.camY) * (1 - dm.exp(-4 * dt));
+    updateCamera(s, dt);
 
     if (s.visual) {
       s.sparks = updateSparks(s.sparks, dt, 1200);
@@ -369,10 +437,12 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
   },
 
   render({ ctx, theme, height }, s) {
-    const top = s.camY - height / 2;
-    const bottom = s.camY + height / 2;
     ctx.save();
-    ctx.translate(0, -top);
+    const { top, bottom } = applyCamera(ctx, s, height);
+    // Fill the margins revealed when zoomed out.
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(-2000, top, 2000 + L, bottom - top);
+    ctx.fillRect(R, top, 2000, bottom - top);
 
     // Section bands and checkpoint lines.
     s.sections.forEach((sec, i) => {
@@ -404,7 +474,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     s.world.segments.forEach((seg, i) => {
       if (!seg.active || Math.max(seg.ay, seg.by) < top - 40 || Math.min(seg.ay, seg.by) > bottom + 40) return;
       const u = clamp01((seg.ay - s.sections[0].y0) / Math.max(1, s.checkpoints[s.checkpoints.length - 1]));
-      ctx.strokeStyle = seg.tag === 'spinner' ? theme.accent : seg.tag === 'wall' ? rgbToCss(paletteAt(theme.palette, 0.85)) : rgbToCss(paletteAt(theme.palette, u));
+      ctx.strokeStyle = seg.tag === 'gate' ? 'rgba(255,255,255,0.9)' : seg.tag === 'spinner' ? theme.accent : seg.tag === 'wall' ? rgbToCss(paletteAt(theme.palette, 0.85)) : rgbToCss(paletteAt(theme.palette, u));
       ctx.lineWidth = seg.r * 2;
       ctx.beginPath();
       ctx.moveTo(seg.ax, seg.ay);
@@ -434,6 +504,13 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     }
 
     drawSparks(ctx, s.sparks);
+    ctx.restore();
+  },
+
+  // Marbles are drawn after bloom so flags stay crisp and saturated.
+  renderTop({ ctx, height }, s) {
+    ctx.save();
+    const { top, bottom } = applyCamera(ctx, s, height);
     for (const m of s.marbles) {
       if (m.out) continue;
       const b = m.body;
@@ -468,6 +545,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
         return [{ kind: 'sfx', name: 'tick', vel: 0.1 + 0.25 * v, pan }];
       }
       case 'gate':
+      case 'roundGate':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.6 }];
       case 'checkpoint':
         return [];
@@ -496,7 +574,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     const durFit = gaussFit(durationS, targetS, targetS * 0.2);
     if (timedOut || !win) return { total: 0.02 * durFit, parts: { durFit }, notes: ['no winner'] };
     const leadChanges = events.filter((e) => e.type === 'leadChange');
-    const lcFit = clamp01(leadChanges.length / 8);
+    const lcFit = clamp01(leadChanges.length / 5);
     const elims = events.filter((e) => e.type === 'eliminate');
     const closeFit = elims.length ? mean(elims.map((e) => dm.exp(-(e.margin as number) / 500))) : 0.6;
     const kicks = events.filter((e) => e.type === 'kick').length;

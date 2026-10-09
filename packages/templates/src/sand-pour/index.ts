@@ -9,7 +9,9 @@ export const sandPourSchema = z.object({
   fillSeconds: z.number().min(10).max(60).default(26).meta({ title: 'Fill time (s)' }),
   fillTarget: z.number().min(0.5).max(1).default(0.95).meta({ title: 'Stop at fill %', step: 0.01 }),
   emitterWidth: z.number().int().min(1).max(10).default(4).meta({ title: 'Stream width (grains)' }),
-  emitterWander: z.number().min(0).max(1).default(0.85).meta({ title: 'Stream wander', step: 0.05 }),
+  emitterWander: z.number().min(0).max(1).default(0.85).meta({ title: 'Stream wander (range)', step: 0.05 }),
+  aimStrength: z.number().min(0).max(1).default(0.35).meta({ title: 'Aim strength (0 = pure wander, 1 = fill gaps)', step: 0.05 }),
+  overflowSeconds: z.number().min(0).max(5).default(1.5).meta({ title: 'Overflow before stopping (s)', step: 0.1 }),
   layerSeconds: z.number().min(0.5).max(6).default(2).meta({ title: 'Seconds per colour layer', step: 0.1 }),
 });
 
@@ -28,7 +30,27 @@ interface State {
   shade: Uint8Array;
   inside: Uint8Array;
   capacity: number;
+  top: Int32Array;
+  mouthX0: number;
+  mouthX1: number;
+  /** Highest row of the shape (smallest y). */
+  minTop: number;
   stopCells: number[];
+  deficit: Int32Array;
+  maxDeficit: number;
+  emitX: number;
+  aimX: number;
+  /** Random-walk wander: current target column, and when to pick a new one / stop dwelling. */
+  wanderX: number;
+  wanderUntil: number;
+  dwellUntil: number;
+  /** Overflow tracking: grains spilled recently (decaying) and when steady overflow began. */
+  spillRate: number;
+  overflowSince: number | null;
+  overflowed: boolean;
+  lastScanT: number;
+  progressT: number;
+  progressFilled: number;
   filled: number;
   poured: number;
   active: number[];
@@ -78,7 +100,12 @@ interface Built {
   grid: Uint8Array;
   inside: Uint8Array;
   capacity: number;
-  /** Settled sand in any of these cells means the container is full (sand reached the mouth). */
+  /** First inside row per column (-1 if none): the container's opening, column by column. */
+  top: Int32Array;
+  /** Columns the stream may pour into. */
+  mouthX0: number;
+  mouthX1: number;
+  /** Galton only: settled sand here means the centre bin is full. */
   stopCells: number[];
 }
 
@@ -110,17 +137,32 @@ function build(p: SandPourParams, gw: number, gh: number): Built {
   const cx = Math.floor(gw / 2);
   const inside = full.slice();
   let stopCells: number[] = [];
+  // Open the top: no rim above the first inside cell of each column. The heart only opens
+  // between its two lobe peaks (a visible gap); its outer lobe curves stay solid so sand fills
+  // underneath them instead of sliding out.
+  let openX0 = 0;
+  let openX1 = gw - 1;
   if (p.container === 'heart') {
-    // Keep the outline closed except a mouth at the cusp; only fill below the cusp.
-    const cuspY = top[cx];
-    for (let y = 0; y <= cuspY + 1; y++) for (let x = cx - 5; x <= cx + 5; x++) if (grid[y * gw + x] === WALL) grid[y * gw + x] = EMPTY;
-    for (let i = 0; i < inside.length; i++) if (((i / gw) | 0) < cuspY) inside[i] = 0;
-    for (let x = cx - 2; x <= cx + 2; x++) stopCells.push((cuspY - 2) * gw + x);
-  } else {
-    // Open mouth: no rim above the top of the shape.
-    for (let x = 0; x < gw; x++) if (top[x] >= 0) for (let y = 0; y < top[x]; y++) if (grid[y * gw + x] === WALL) grid[y * gw + x] = EMPTY;
-    const mouth = top[cx];
-    for (let x = 0; x < gw; x++) if (top[x] === mouth) stopCells.push((mouth - 1) * gw + x);
+    let bestL = Infinity;
+    let bestR = Infinity;
+    for (let x = 0; x < gw; x++) {
+      if (top[x] < 0) continue;
+      if (x < cx && top[x] < bestL) [bestL, openX0] = [top[x], x];
+      if (x > cx && top[x] <= bestR) [bestR, openX1] = [top[x], x];
+    }
+  }
+  for (let x = openX0; x <= openX1; x++) {
+    if (top[x] < 0) continue;
+    for (let y = 0; y < top[x]; y++) {
+      if (grid[y * gw + x] === WALL) grid[y * gw + x] = EMPTY;
+    }
+  }
+  let mouthX0 = gw;
+  let mouthX1 = -1;
+  for (let x = openX0; x <= openX1; x++) {
+    if (top[x] < 0) continue;
+    mouthX0 = Math.min(mouthX0, x);
+    mouthX1 = Math.max(mouthX1, x);
   }
 
   if (p.container === 'galton') {
@@ -159,7 +201,54 @@ function build(p: SandPourParams, gw: number, gh: number): Built {
   }
   let capacity = 0;
   for (let i = 0; i < inside.length; i++) if (inside[i] && grid[i] === EMPTY) capacity++;
-  return { grid, inside, capacity, stopCells };
+  // Floor under the container: overflow lands here and piles up.
+  const floorY = Math.min(gh - 2, Math.floor(gh * 0.955));
+  for (let x = 0; x < gw; x++) for (let y = floorY; y < floorY + 2; y++) grid[y * gw + x] = WALL;
+  return { grid, inside, capacity, top, mouthX0, mouthX1, stopCells };
+}
+
+/**
+ * Per-column free space measured from the opening down to the first settled sand or wall.
+ * Falling grains don't count as filled, so a stream passing through never looks "full".
+ */
+function scanSurface(s: State) {
+  const { gw, grid, inside, top, isActive } = s;
+  let max = 0;
+  for (let x = s.mouthX0; x <= s.mouthX1; x++) {
+    let d = 0;
+    if (top[x] >= 0) {
+      for (let y = top[x]; y < s.gh; y++) {
+        const i = y * gw + x;
+        if (!inside[i] || grid[i] === WALL || (grid[i] >= 2 && !isActive[i])) break;
+        d++;
+      }
+    }
+    s.deficit[x] = d;
+    max = Math.max(max, d);
+  }
+  s.maxDeficit = max;
+  // Aim at the emptiest region (box-smoothed), preferring spots near the stream.
+  const R = 6;
+  let best = -Infinity;
+  let bestX = s.emitX;
+  for (let x = s.mouthX0; x <= s.mouthX1; x++) {
+    let sum = 0;
+    for (let k = -R; k <= R; k++) sum += s.deficit[Math.max(s.mouthX0, Math.min(s.mouthX1, x + k))];
+    const score = sum - Math.abs(x - s.emitX) * 0.5;
+    if (score > best) {
+      best = score;
+      bestX = x;
+    }
+  }
+  s.aimX = bestX;
+}
+
+/** Outside the container and below its rim: where overflowing sand ends up. */
+function isOutside(s: State, i: number): boolean {
+  if (s.inside[i]) return false;
+  const x = i % s.gw;
+  const y = (i / s.gw) | 0;
+  return s.top[x] < 0 ? y > s.minTop : y > s.top[x];
 }
 
 function wake(s: State, x: number, y: number) {
@@ -196,7 +285,7 @@ export const sandPour: Template<SandPourParams, State> = {
   name: 'Sand Pour',
   family: 'particles',
   description:
-    'Coloured sand pours from a wandering stream into a container (jar, heart, hourglass or Galton board), building up satisfying striped layers until it is full.',
+    'Coloured sand pours from a wandering stream into a container (jar, heart, hourglass or Galton board), building up striped layers. Overfilled sand spills over the rim and piles up on the floor.',
   schema: sandPourSchema,
   substeps: 2,
   searchBudget: 16,
@@ -209,7 +298,7 @@ export const sandPour: Template<SandPourParams, State> = {
   init({ params: p, rng, fxRng, width, height }) {
     const gw = Math.floor(width / p.cellSize);
     const gh = Math.floor(height / p.cellSize);
-    const { grid, inside, capacity, stopCells } = build(p, gw, gh);
+    const { grid, inside, capacity, top, mouthX0, mouthX1, stopCells } = build(p, gw, gh);
     return {
       p,
       gw,
@@ -218,7 +307,24 @@ export const sandPour: Template<SandPourParams, State> = {
       shade: new Uint8Array(gw * gh),
       inside,
       capacity,
+      top,
+      mouthX0,
+      mouthX1,
+      minTop: Math.min(...Array.from(top).filter((v) => v >= 0)),
       stopCells,
+      deficit: new Int32Array(gw),
+      maxDeficit: Infinity,
+      emitX: gw / 2,
+      aimX: gw / 2,
+      wanderX: gw / 2,
+      wanderUntil: 0,
+      dwellUntil: 0,
+      spillRate: 0,
+      overflowSince: null,
+      overflowed: false,
+      lastScanT: -1,
+      progressT: 0,
+      progressFilled: 0,
       filled: 0,
       poured: 0,
       active: [],
@@ -244,7 +350,7 @@ export const sandPour: Template<SandPourParams, State> = {
     // Emit.
     if (s.emitting) {
       // Galton boards stop at the centre bin (a bell curve fills ~half the bins).
-      const share = p.container === 'galton' ? 0.5 : p.fillTarget;
+      const share = p.container === 'galton' ? 0.33 : p.fillTarget;
       s.emitAcc += ((s.capacity * share) / p.fillSeconds) * dt;
       const layer = Math.floor(t / p.layerSeconds);
       if (layer !== s.lastLayer) {
@@ -252,10 +358,36 @@ export const sandPour: Template<SandPourParams, State> = {
         emit({ type: 'layer', n: layer });
       }
       const colorV = 2 + Math.floor((((s.colorU + layer * 0.137) % 1) * 253));
-      const wander = dm.sin(t * 0.9) * 0.6 + dm.sin(t * 0.37 + 1.3) * 0.4;
-      // Narrow-mouthed containers need the stream dead centre.
-      const wanderAmt = p.container === 'heart' || p.container === 'galton' ? 0 : p.emitterWander;
-      const cx = Math.floor(gw / 2 + wander * wanderAmt * gw * 0.34);
+      let cx: number;
+      if (p.container === 'galton') {
+        cx = Math.floor(gw / 2);
+      } else {
+        if (t - s.lastScanT >= 0.05) {
+          scanSurface(s);
+          s.lastScanT = t;
+        }
+        const margin = Math.ceil(p.emitterWidth / 2) + 2;
+        const lo = s.mouthX0 + margin;
+        const hi = s.mouthX1 - margin;
+        const mid = (lo + hi) / 2;
+        // Wander: a seeded random walk between points across the mouth, sometimes pausing
+        // (pauses build peaks; quick sweeps leave valleys).
+        if (t >= s.wanderUntil) {
+          s.wanderX = mid + s.rng.range(-1, 1) * ((hi - lo) / 2) * p.emitterWander;
+          s.wanderUntil = t + s.rng.range(0.8, 2.6);
+          if (s.rng.chance(0.3)) s.dwellUntil = t + s.rng.range(0.4, 1.4);
+        }
+        // Aim: pull towards the emptiest region, stronger as the container fills up.
+        const frac0 = s.filled / Math.max(1, s.capacity);
+        const bias = p.aimStrength * (0.3 + 0.7 * Math.min(1, frac0 / 0.7));
+        const target = s.wanderX + (s.aimX - s.wanderX) * bias;
+        if (t >= s.dwellUntil) {
+          const maxStep = gw * 0.3 * dt;
+          s.emitX += Math.max(-maxStep, Math.min(maxStep, target - s.emitX));
+        }
+        const wobble = (dm.sin(t * 2.3) * 0.6 + dm.sin(t * 0.9 + 1.3) * 0.4) * 2;
+        cx = Math.round(Math.max(lo, Math.min(hi, s.emitX + wobble)));
+      }
       const y0 = Math.floor(gh * 0.1);
       while (s.emitAcc >= 1) {
         s.emitAcc -= 1;
@@ -279,6 +411,7 @@ export const sandPour: Template<SandPourParams, State> = {
     s.active.sort((a, b) => b - a);
     const next: number[] = [];
     let moved = 0;
+    let spilledNow = 0;
     for (const start of s.active) {
       let i = start;
       if (grid[i] < 2) {
@@ -310,6 +443,17 @@ export const sandPour: Template<SandPourParams, State> = {
               break;
             }
           }
+          // Gentle slopes: slide sideways if there's a drop two cells over. Lowers the angle of
+          // repose from 45° to ~27°, so piles flatten and curved containers fill to their edges.
+          if (to < 0 && steps === Math.min(MAX_FALL, s.vel[start] + 1) - 1) {
+            for (const d of [first, -first]) {
+              const xx = x + 2 * d;
+              if (xx >= 0 && xx < gw && grid[i + d] === EMPTY && grid[i + 2 * d] === EMPTY && grid[below + 2 * d] === EMPTY && grid[below + d] !== WALL) {
+                to = i + d;
+                break;
+              }
+            }
+          }
         }
         if (to < 0) break;
         grid[to] = grid[i];
@@ -320,6 +464,8 @@ export const sandPour: Template<SandPourParams, State> = {
         s.isActive[to] = 1;
         if (s.inside[i]) s.filled--;
         if (s.inside[to]) s.filled++;
+        // Overflow: a grain leaving the container (or its mouth) for the outside, below the rim.
+        if (!isOutside(s, i) && isOutside(s, to)) spilledNow++;
         wake(s, x, y);
         i = to;
         x = i % gw;
@@ -345,14 +491,37 @@ export const sandPour: Template<SandPourParams, State> = {
       s.milestones++;
       emit({ type: 'milestone', pct: s.milestones * 25 });
     }
-    const reachedMouth = s.stopCells.some((i) => grid[i] >= 2 && !s.isActive[i]);
-    const done = reachedMouth || (p.container !== 'galton' && frac >= p.fillTarget);
+    let done: boolean;
+    if (p.container === 'galton') {
+      done = s.stopCells.some((i) => grid[i] >= 2 && !s.isActive[i]);
+    } else {
+      // Full when the target is reached, or every column is filled to its top with settled sand.
+      // (98.5% counts as full: levelling the last few grains takes disproportionately long.)
+      done = frac >= Math.min(p.fillTarget, 0.985) || (frac > 0.2 && s.maxDeficit <= 1);
+      // Overflow: once sand has been spilling steadily for overflowSeconds, stop.
+      s.spillRate = s.spillRate * dm.exp(-dt / 0.25) + spilledNow;
+      const overflowing = s.spillRate > 6;
+      if (overflowing && !s.overflowed) {
+        s.overflowed = true;
+        emit({ type: 'overflow' });
+      }
+      if (overflowing) s.overflowSince ??= t;
+      else s.overflowSince = null;
+      if (s.emitting && s.overflowSince !== null && t - s.overflowSince >= p.overflowSeconds) done = true;
+      // Safety: sand is going in but the fill level has stalled (nowhere left for it to go).
+      if (s.emitting && t - s.progressT >= 4) {
+        if (frac > 0.3 && s.filled - s.progressFilled < s.capacity * 0.002) done = true;
+        s.progressT = t;
+        s.progressFilled = s.filled;
+      }
+    }
     if (s.emitting && done) {
       s.emitting = false;
       s.fullAt = t;
       emit({ type: 'full' });
     }
-    if (!s.emitting && s.settledAt === null && s.active.length === 0) s.settledAt = t;
+    // "Settled" once only a trickle is still moving (a few grains can creep for a long time).
+    if (!s.emitting && s.settledAt === null && moved < 8) s.settledAt = t;
     if (t - s.lastPourEventT >= 0.06 && moved > 0) {
       s.lastPourEventT = t;
       emit({ type: 'pour', amount: Math.min(1, moved / 400), x: 0 });
@@ -361,7 +530,10 @@ export const sandPour: Template<SandPourParams, State> = {
   },
 
   isDone(s) {
-    return s.fullAt !== null && s.t >= Math.max(s.fullAt + OUTRO_S, (s.settledAt ?? Infinity) + 0.6);
+    if (s.fullAt === null) return false;
+    // Wait for the sand to settle, but cap it (an hourglass can keep draining for a while).
+    const settled = Math.min((s.settledAt ?? Infinity) + 0.6, s.fullAt + 8);
+    return s.t >= Math.max(s.fullAt + OUTRO_S, settled);
   },
 
   hud(s) {
@@ -421,6 +593,8 @@ export const sandPour: Template<SandPourParams, State> = {
         return [{ kind: 'sfx', name: 'sand', vel: 0.25 + 0.6 * (e.amount as number), pitch: ((e.t * 0.37) % 1) }];
       case 'layer':
         return melody.next().map((midi, i) => ({ kind: 'note' as const, midi, vel: i ? 0.25 : 0.45, voice: theme.voice, dur: 1.6 }));
+      case 'overflow':
+        return [{ kind: 'sfx', name: 'whoosh', vel: 0.35 }];
       case 'milestone':
         return [{ kind: 'sfx', name: 'chime', vel: 0.45, pitch: (e.pct as number) / 100 }];
       case 'full':

@@ -4,7 +4,7 @@ import { MELODIES } from '@sim/audio';
 import { TEMPLATES, getTemplate } from '@sim/templates';
 import { ParamControls } from './ParamControls';
 import { usePlayer } from './usePlayer';
-import { makeRunner } from './recipe';
+import { useAnalysis } from './useAnalysis';
 import { ExportPanel } from './ExportPanel';
 import type { SearchResult } from './searchWorker';
 
@@ -68,11 +68,10 @@ export function Playground() {
     }
   }, [recipe]);
 
-  // Headless pre-run of the current recipe: exact duration and drama score (~5ms).
-  const analysis = useMemo(() => {
-    const r = makeRunner(recipe, false).runToEnd();
-    return { durationS: r.durationS, timedOut: r.timedOut, score: r.score(recipe.targetS ?? 30), events: r.events.length };
-  }, [recipe]);
+  // Headless pre-run of the current recipe (exact duration + drama score), in a worker so heavy
+  // templates never block the UI.
+  const { analysis: fresh, stale, pending } = useAnalysis(recipe);
+  const analysis = fresh ?? stale;
 
   const runSearch = (count: number) => {
     const worker = new Worker(new URL('./searchWorker.ts', import.meta.url), { type: 'module' });
@@ -219,19 +218,19 @@ export function Playground() {
             <input type="checkbox" checked={safeZones} onChange={(e) => setSafeZones(e.target.checked)} /> Safe zones
           </label>
           <span className="time">
-            {player.time.toFixed(1)}s / {analysis.durationS.toFixed(1)}s
+            {player.time.toFixed(1)}s / {analysis ? `${analysis.durationS.toFixed(1)}s` : '…'}
           </span>
         </div>
       </section>
 
       <aside className="panel right">
         <section>
-          <h3>Drama score</h3>
-          <div className="score">{(analysis.score.total * 100).toFixed(0)}</div>
-          {analysis.timedOut && <p className="warn">Timed out — never finishes. Adjust params.</p>}
+          <h3>Drama score {pending && <span className="hint">analyzing…</span>}</h3>
+          <div className={`score${fresh ? '' : ' stale'}`}>{analysis ? (analysis.score.total * 100).toFixed(0) : '–'}</div>
+          {analysis?.timedOut && <p className="warn">Timed out — never finishes. Adjust params.</p>}
           <table className="parts">
             <tbody>
-              {Object.entries(analysis.score.parts).map(([k, v]) => (
+              {Object.entries(analysis?.score.parts ?? {}).map(([k, v]) => (
                 <tr key={k}>
                   <td>{k}</td>
                   <td>
@@ -242,7 +241,7 @@ export function Playground() {
               ))}
             </tbody>
           </table>
-          {analysis.score.notes?.map((n) => (
+          {analysis?.score.notes?.map((n) => (
             <p key={n} className="hint">
               {n}
             </p>

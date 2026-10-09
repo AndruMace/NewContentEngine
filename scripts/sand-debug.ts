@@ -4,8 +4,8 @@ import { Runner, getTheme } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 
-const [container = 'jar', out = '/tmp/sand', ...times] = process.argv.slice(2);
-const r = new Runner(getTemplate('sand-pour'), { seed: 1, theme: getTheme('neon-dark'), melody: getMelody('ode-to-joy'), params: { container }, visual: false });
+const [container = 'jar', out = '/tmp/sand', extra = '{}', ...times] = process.argv.slice(2);
+const r = new Runner(getTemplate('sand-pour'), { seed: 1, theme: getTheme('neon-dark'), melody: getMelody('ode-to-joy'), params: { container, ...JSON.parse(extra) }, visual: false });
 for (const ts of times.map(Number)) {
   while (!r.done && r.t < ts) r.advanceFrame();
   const s = r.state;

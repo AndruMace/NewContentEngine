@@ -72,3 +72,4 @@ button.wide { width: 100%; padding: 9px; }
 .volume { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .volume input { width: 90px; padding: 0; accent-color: var(--accent); }
 .volume b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; min-width: 36px; }
+.score.stale { opacity: 0.45; }

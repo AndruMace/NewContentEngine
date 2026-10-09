@@ -141,6 +141,11 @@ export class Runner<P = any, S = any> {
     ctx.restore();
     const glowScale = this.template.glowScale ?? 1;
     this.postFx.apply(ctx, canvas, glowScale === 1 ? this.theme : { ...this.theme, glow: this.theme.glow * glowScale });
+    if (this.template.renderTop) {
+      ctx.save();
+      this.template.renderTop({ ctx, width: W, height: H, theme: this.theme, t: this.t, frame: this.frame }, this.state);
+      ctx.restore();
+    }
     const hud = { ...(this.params as Record<string, unknown>), ...this.template.hud(this.state) };
     drawOverlays(ctx, W, H, this.overlays, this.overlayState, this.t, hud, this.theme);
   }

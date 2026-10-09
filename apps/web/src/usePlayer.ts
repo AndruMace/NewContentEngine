@@ -58,8 +58,11 @@ export function usePlayer(canvasRef: React.RefObject<HTMLCanvasElement | null>, 
     const audio = audioRef.current;
     if (!runner || !audio) return;
     const target = Math.floor((audio.ctx.currentTime - clockRef.current.origin) * FPS);
-    let n = 0;
-    while (runner.frame < target && !runner.done && n++ < 8) runner.advanceFrame();
+    // Spend at most ~10ms simulating per animation frame. If a heavy template can't keep up,
+    // slide the clock (slight slow-motion) instead of piling up work and freezing the UI.
+    const budgetEnd = performance.now() + 10;
+    while (runner.frame < target && !runner.done && performance.now() < budgetEnd) runner.advanceFrame();
+    if (target - runner.frame > 2) clockRef.current.origin += (target - runner.frame - 1) / FPS;
     const evs = runner.audio;
     for (let i = clockRef.current.audioIdx; i < evs.length; i++) {
       if (!mutedRef.current) scheduleEvent(audio.bus, evs[i], Math.max(audio.ctx.currentTime, clockRef.current.origin + evs[i].t));
