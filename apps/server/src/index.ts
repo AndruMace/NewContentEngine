@@ -1,77 +1,266 @@
 import { spawn } from 'node:child_process';
-import { resolve, sep } from 'node:path';
-import Fastify from 'fastify';
+import { createReadStream, existsSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import type { Recipe } from '@sim/engine';
-import { RENDERS_DIR } from '@sim/render';
-import { RenderQueue } from './jobs';
+import { RENDERS_DIR, ROOT } from '@sim/render';
+import { claudeAvailable, type SocialCopy } from '@sim/planner';
 
-const PORT = Number(process.env.SIM_SERVER_PORT ?? 5174);
-const app = Fastify({ logger: { level: 'warn' } });
-const queue = new RenderQueue();
-
-/** Resolve a path relative to data/renders, refusing anything that escapes it. */
-function safeRenderPath(rel: string): string | null {
-  const abs = resolve(RENDERS_DIR, rel);
-  return abs.startsWith(RENDERS_DIR + sep) ? abs : null;
+// Load .env (ANTHROPIC_API_KEY etc.) before anything reads the environment.
+try {
+  process.loadEnvFile(join(ROOT, '.env'));
+} catch {
+  /* no .env */
 }
 
-// Rendered files (range requests supported, so <video> can seek).
-await app.register(fastifyStatic, { root: RENDERS_DIR, prefix: '/files/', decorateReply: true });
+const {
+  DEFAULT_BATCH_SETTINGS,
+  EXPORTS_DIR,
+  getExport,
+  getKv,
+  getRender,
+  insertRender,
+  listBatches,
+  listExportJobs,
+  setKv,
+  upsertPost,
+  deletePost,
+} = await import('./db');
+const { RenderScheduler } = await import('./scheduler');
+const { SearchPool } = await import('./searchPool');
+const { BatchRunner } = await import('./batch');
+const { ReviewActions, dirSize } = await import('./review');
+const { batchSnapshot, batchSummary, jobView, reviewItem } = await import('./views');
+type BatchSettings = import('./db').BatchSettings;
 
-app.post<{ Body: { recipe: Recipe; search?: number } }>('/api/renders', async (req) => {
-  const { recipe, search } = req.body;
-  return queue.enqueue(recipe, { search: search ? Math.min(5000, Math.max(1, search)) : undefined });
-});
+const PORT = Number(process.env.SIM_SERVER_PORT ?? 5174);
+const app = Fastify({ logger: { level: 'warn' }, bodyLimit: 5 * 1024 * 1024 });
+const scheduler = new RenderScheduler();
+const pool = new SearchPool();
+const batches = new BatchRunner(scheduler, pool);
+const review = new ReviewActions(scheduler, pool, batches);
 
-app.get('/api/renders', async () => queue.list());
+/** Resolve a path relative to a root, refusing anything that escapes it. */
+function safePath(root: string, rel: string): string | null {
+  const abs = resolve(root, rel);
+  return abs.startsWith(root + sep) ? abs : null;
+}
 
-app.get<{ Params: { id: string } }>('/api/renders/:id', async (req, reply) => {
-  const job = queue.get(req.params.id);
-  return job ?? reply.code(404).send({ error: 'not found' });
-});
-
-// Server-sent events: job snapshots until it finishes.
-app.get<{ Params: { id: string } }>('/api/renders/:id/stream', (req, reply) => {
-  const job = queue.get(req.params.id);
-  if (!job) return reply.code(404).send({ error: 'not found' });
+/** Server-sent events: `send` pushes JSON; returns when the client disconnects. */
+function sse(req: FastifyRequest, reply: FastifyReply, subscribe: (send: (data: unknown) => void, end: () => void) => () => void) {
   reply.hijack();
   reply.raw.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-  const send = (j: typeof job) => {
-    reply.raw.write(`data: ${JSON.stringify(j)}\n\n`);
-    if (j.status === 'done' || j.status === 'error') {
-      unsubscribe();
-      reply.raw.end();
-    }
+  let closed = false;
+  const send = (data: unknown) => !closed && reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+  const end = () => {
+    if (closed) return;
+    closed = true;
+    unsubscribe();
+    reply.raw.end();
   };
-  const unsubscribe = queue.subscribe(job.id, send);
-  req.raw.on('close', unsubscribe);
-  send(job);
+  const unsubscribe = subscribe(send, end);
+  const ping = setInterval(() => !closed && reply.raw.write(': ping\n\n'), 15000);
+  req.raw.on('close', () => {
+    clearInterval(ping);
+    closed = true;
+    unsubscribe();
+  });
+}
+
+const errorReply = (reply: FastifyReply, e: unknown, code = 400) => reply.code(code).send({ error: e instanceof Error ? e.message : String(e) });
+
+await app.register(fastifyStatic, { root: RENDERS_DIR, prefix: '/files/', decorateReply: true });
+
+// ---- status & settings ----------------------------------------------------------------------
+
+app.get('/api/status', async () => ({ claude: claudeAvailable(), busy: batches.isBusy(), rendering: scheduler.current }));
+
+app.get('/api/batch-settings', async () => ({ ...DEFAULT_BATCH_SETTINGS, ...getKv<Partial<BatchSettings>>('batchSettings', {}) }));
+
+// ---- batches --------------------------------------------------------------------------------
+
+app.post<{ Body: { settings?: Partial<BatchSettings> } }>('/api/batches', async (req, reply) => {
+  const settings: BatchSettings = { ...DEFAULT_BATCH_SETTINGS, ...getKv<Partial<BatchSettings>>('batchSettings', {}), ...(req.body?.settings ?? {}) };
+  settings.postsWanted = Math.max(1, Math.min(10, Math.round(settings.postsWanted)));
+  settings.factor = Math.max(1, Math.min(5, settings.factor));
+  settings.minLengthS = Math.max(12, Math.min(settings.minLengthS, settings.maxLengthS - 3));
+  settings.maxLengthS = Math.min(75, settings.maxLengthS);
+  setKv('batchSettings', settings);
+  try {
+    return batchSummary(batches.start(settings));
+  } catch (e) {
+    return errorReply(reply, e, 409);
+  }
 });
 
+app.get('/api/batches', async () => listBatches().map(batchSummary));
+
+app.get<{ Params: { id: string } }>('/api/batches/:id', async (req, reply) => {
+  return batchSnapshot(req.params.id, batches.eta(req.params.id)) ?? reply.code(404).send({ error: 'not found' });
+});
+
+app.get<{ Params: { id: string } }>('/api/batches/:id/stream', (req, reply) => {
+  const id = req.params.id;
+  sse(req, reply, (send) => {
+    let timer: NodeJS.Timeout | null = null;
+    const push = () => send(batchSnapshot(id, batches.eta(id)));
+    const onChange = (batchId: string) => {
+      if (batchId !== id || timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        push();
+      }, 250);
+    };
+    batches.on('changed', onChange);
+    push();
+    return () => {
+      batches.off('changed', onChange);
+      if (timer) clearTimeout(timer);
+    };
+  });
+});
+
+app.post<{ Params: { id: string } }>('/api/batches/:id/cancel', async (req) => {
+  batches.cancel(req.params.id);
+  return { ok: true };
+});
+
+// ---- review ---------------------------------------------------------------------------------
+
+const changed = (r: { batchId: string | null }) => r.batchId && batches.emit('changed', r.batchId);
+
+app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected' | 'pending' } }>('/api/review/:id/decision', async (req) => {
+  const r = review.setDecision(req.params.id, req.body.decision);
+  changed(r);
+  return reviewItem(r);
+});
+
+app.post<{ Params: { id: string }; Body: { kind: 'seed' | 'copy' | 'concept' } }>('/api/review/:id/reroll', async (req, reply) => {
+  try {
+    const kind = req.body.kind;
+    const r = kind === 'seed' ? await review.rerollSeed(req.params.id) : kind === 'copy' ? await review.rerollCopy(req.params.id) : await review.rerollConcept(req.params.id);
+    changed(r);
+    return reviewItem(r);
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.patch<{ Params: { id: string }; Body: Partial<SocialCopy> }>('/api/review/:id/copy', async (req, reply) => {
+  try {
+    const r = review.editCopy(req.params.id, req.body);
+    changed(r);
+    return reviewItem(r);
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.post<{ Params: { id: string } }>('/api/review/:id/export', async (req, reply) => {
+  try {
+    await review.exportBundle(req.params.id);
+    const r = getRender(req.params.id)!;
+    changed(r);
+    return reviewItem(r);
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.put<{ Params: { id: string }; Body: { platform: 'youtube' | 'tiktok' | 'x'; url: string } }>('/api/review/:id/posts', async (req, reply) => {
+  const { platform, url } = req.body;
+  if (!['youtube', 'tiktok', 'x'].includes(platform)) return reply.code(400).send({ error: 'bad platform' });
+  if (url?.trim()) {
+    if (!/^https?:\/\//.test(url.trim())) return reply.code(400).send({ error: 'URL must start with http(s)://' });
+    upsertPost({ renderId: req.params.id, platform, url: url.trim(), postedAt: Date.now() });
+  } else deletePost(req.params.id, platform);
+  const r = getRender(req.params.id)!;
+  changed(r);
+  return reviewItem(r);
+});
+
+app.post<{ Body: { recipe: Recipe } }>('/api/manual', async (req) => {
+  const r = review.addManual(req.body.recipe);
+  changed(r);
+  return reviewItem(r);
+});
+
+app.get<{ Params: { id: string }; Querystring: { name: string } }>('/api/exports/:id/file', (req, reply) => {
+  const ex = getExport(req.params.id);
+  const name = req.query.name;
+  if (!ex || !['bundle.zip', 'video.mp4', 'cover.jpg', 'youtube.txt', 'tiktok.txt', 'x.txt'].includes(name)) return reply.code(404).send({ error: 'not found' });
+  const abs = safePath(EXPORTS_DIR, join(ex.dir, name));
+  if (!abs || !existsSync(abs)) return reply.code(404).send({ error: 'missing' });
+  const base = ex.dir.split(sep).pop();
+  reply.header('content-disposition', `attachment; filename="${base}-${name}"`);
+  return reply.type(name.endsWith('.zip') ? 'application/zip' : name.endsWith('.mp4') ? 'video/mp4' : name.endsWith('.jpg') ? 'image/jpeg' : 'text/plain').send(createReadStream(abs));
+});
+
+app.get('/api/storage', async () => ({ rendersBytes: await dirSize(RENDERS_DIR), exportsBytes: await dirSize(EXPORTS_DIR) }));
+
+app.post<{ Body: { days?: number } }>('/api/housekeeping', async (req) => review.housekeeping(Math.max(0, Number(req.body?.days ?? 7))));
+
+// ---- Playground export jobs (same shape as before, now persisted) ---------------------------------
+
+app.post<{ Body: { recipe: Recipe } }>('/api/renders', async (req) => {
+  const r = insertRender({ batchId: null, conceptId: null, kind: 'export', recipe: req.body.recipe, copy: null, score: null, scoreParts: null, altSeeds: [], rankScore: null });
+  scheduler.notify();
+  return jobView(r);
+});
+
+app.get('/api/renders', async () => listExportJobs().map(jobView));
+
+app.get<{ Params: { id: string } }>('/api/renders/:id', async (req, reply) => {
+  const r = getRender(req.params.id);
+  return r ? jobView(r) : reply.code(404).send({ error: 'not found' });
+});
+
+app.get<{ Params: { id: string } }>('/api/renders/:id/stream', (req, reply) => {
+  const first = getRender(req.params.id);
+  if (!first) return reply.code(404).send({ error: 'not found' });
+  sse(req, reply, (send, end) => {
+    const onRender = (r: { id: string }) => {
+      if (r.id !== req.params.id) return;
+      const v = jobView(getRender(r.id)!);
+      send(v);
+      if (v.status === 'done' || v.status === 'error') setImmediate(end);
+    };
+    scheduler.on('render', onRender);
+    const v = jobView(first);
+    send(v);
+    if (v.status === 'done' || v.status === 'error') setImmediate(end);
+    return () => scheduler.off('render', onRender);
+  });
+});
+
+// ---- files ----------------------------------------------------------------------------------
+
 app.get<{ Querystring: { path: string } }>('/api/download', (req, reply) => {
-  const abs = safeRenderPath(req.query.path ?? '');
+  const abs = safePath(RENDERS_DIR, req.query.path ?? '');
   if (!abs) return reply.code(400).send({ error: 'bad path' });
   const rel = abs.slice(RENDERS_DIR.length + 1);
-  const name = rel.split(sep).slice(-2).join('-');
-  return reply.download(rel, name);
+  return reply.download(rel, rel.split(sep).slice(-2).join('-'));
 });
 
 // Local-only convenience: reveal a render in Finder.
-app.post<{ Body: { path: string } }>('/api/reveal', async (req, reply) => {
-  const abs = safeRenderPath(req.body.path ?? '');
+app.post<{ Body: { path: string; root?: 'renders' | 'exports' } }>('/api/reveal', async (req, reply) => {
+  const abs = safePath(req.body.root === 'exports' ? EXPORTS_DIR : RENDERS_DIR, req.body.path ?? '');
   if (!abs) return reply.code(400).send({ error: 'bad path' });
   spawn('open', ['-R', abs], { stdio: 'ignore' }).unref();
   return { ok: true };
 });
 
 const shutdown = async () => {
-  await queue.close();
+  await scheduler.stop();
+  await pool.close();
   await app.close();
   process.exit(0);
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
+scheduler.start();
+batches.resumeAll();
 await app.listen({ port: PORT, host: '127.0.0.1' });
-console.log(`Sim server on http://127.0.0.1:${PORT}`);
+console.log(`Sim server on http://127.0.0.1:${PORT} (Claude ${claudeAvailable() ? 'enabled' : 'not configured'})`);

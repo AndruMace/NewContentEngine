@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Recipe } from '@sim/engine';
 import { renderCommand } from './recipe';
+import { api } from './api';
 
 /** Mirrors JobView in apps/server/src/jobs.ts. */
 interface Job {
@@ -86,6 +87,18 @@ export function ExportPanel({ recipe, volume }: { recipe: Recipe; volume: number
     }
   };
 
+  const [queued, setQueued] = useState(false);
+  const addToQueue = async () => {
+    setError(null);
+    try {
+      await api.addManual(recipe);
+      setQueued(true);
+      setTimeout(() => setQueued(false), 2500);
+    } catch (e) {
+      setError(`Could not add to the review queue (${(e as Error).message}).`);
+    }
+  };
+
   const reveal = (path: string) =>
     fetch('/api/reveal', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) });
 
@@ -112,6 +125,9 @@ export function ExportPanel({ recipe, volume }: { recipe: Recipe; volume: number
         <p className="hint">Renders exactly what you're previewing: 1080×1920 60fps MP4, audio mastered to -14 LUFS.</p>
         <button className="primary wide" disabled={busy} onClick={exportVideo}>
           {busy ? 'Exporting…' : 'Export MP4'}
+        </button>
+        <button className="wide" style={{ marginTop: 8 }} onClick={addToQueue}>
+          {queued ? 'Added — see Batches & Review' : 'Add to review queue'}
         </button>
         {error && <p className="warn">{error}</p>}
         {job && (

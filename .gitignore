@@ -6,3 +6,4 @@ data/exports/
 .env
 *.log
 .DS_Store
+data/sqlite.db*

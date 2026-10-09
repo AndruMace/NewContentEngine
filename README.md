@@ -19,6 +19,30 @@ In the Playground, **Export MP4** renders exactly what you're previewing through
 pipeline as the CLI, shows progress, and gives you Download / Cover / Show in Finder buttons.
 The equivalent CLI command is shown underneath for reference.
 
+## Daily workflow: batches and review
+
+1. *(Optional, once)* `cp .env.example .env` and add your `ANTHROPIC_API_KEY`. Claude then
+   plans each video's parameters and writes the hook, CTA, title and captions per platform.
+   Without a key, batches still work using template copy.
+2. `npm run dev`, then open **Batches & Review**. Choose how many posts you want and how many
+   candidates per post (default 3 × 3 = 9), length range, templates, themes, and optional
+   notes for today, then click **Start batch**. A 9-video batch takes roughly 6–8 minutes;
+   the Mac is kept awake while it runs, and you get a notification when it's done.
+3. Review the ranked candidates: **Approve / Reject**, **Re-roll** (different run of the same
+   idea, new copy, or a new concept), or edit the copy (changing the on-screen hook/CTA
+   re-renders that video).
+4. **Export for upload** writes `data/exports/<date>/<slug>/` (video, cover, `youtube.txt`,
+   `tiktok.txt`, `x.txt`, `bundle.zip`) with download and copy buttons in the card.
+5. After posting, paste the post URLs into the card (used by analytics in Phase 5).
+
+From the terminal: `npm run batch` (uses the running server if there is one, so the UI sees
+it), with flags like `--posts 2 --factor 2 --templates ring-escape,marble-race --min 20 --max 35`.
+`npm run batch -- --dry` runs an offline smoke test with a mock planner (server must be stopped).
+
+Batches, renders, reviews and exports live in `data/sqlite.db`. A batch interrupted by a
+restart resumes automatically. **Clean up** in the Review sidebar deletes old renders that
+aren't approved or exported.
+
 ## Templates
 
 | Template | Family | What happens |
@@ -64,12 +88,14 @@ Output goes to `data/renders/<date>/<id>/`:
 
 ```
 apps/web            Playground: live preview with audio, param sliders, seed search, export
-apps/server         Local API: render queue (one reused Chrome), progress via SSE, file serving
+apps/server         Local API: batch runner, seed-search worker pool, persistent render queue
+                    (one reused Chrome), review/export actions, SQLite (node:sqlite), SSE
 packages/engine     Runner (fixed-step loop), PRNG, Template interface, themes, overlays, bloom
 packages/physics    Collision helpers, circle-body World, deterministic math
 packages/templates  One folder per template (schema, sim, render, audio mapping, drama score)
 packages/audio      Public-domain melody library, Web Audio synth, offline renderer, WAV writer
 packages/render     Headless Chrome harness (WebCodecs → MP4), FFmpeg mastering, QC, CLI
+packages/planner    Arm selection (Thompson sampling), Claude concepts + captions, fallback copy
 ```
 
 ## Adding a template

@@ -1,0 +1,374 @@
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import type { Recipe } from '@sim/engine';
+import type { Concept, SocialCopy } from '@sim/planner';
+import { ROOT, type QcReport } from '@sim/render';
+
+export const DATA_DIR = join(ROOT, 'data');
+export const EXPORTS_DIR = join(DATA_DIR, 'exports');
+mkdirSync(DATA_DIR, { recursive: true });
+
+export const newId = () => randomUUID().replace(/-/g, '').slice(0, 12);
+
+export interface BatchSettings {
+  postsWanted: number;
+  factor: number;
+  templateIds: string[];
+  themeIds: string[];
+  melodyIds: string[];
+  minLengthS: number;
+  maxLengthS: number;
+  useClaude: boolean;
+  notes: string;
+  notifyMac: boolean;
+}
+
+export const DEFAULT_BATCH_SETTINGS: BatchSettings = {
+  postsWanted: 3,
+  factor: 3,
+  templateIds: [],
+  themeIds: [],
+  melodyIds: [],
+  minLengthS: 20,
+  maxLengthS: 45,
+  useClaude: true,
+  notes: '',
+  notifyMac: true,
+};
+
+export type BatchStatus = 'planning' | 'searching' | 'rendering' | 'done' | 'cancelled' | 'failed' | 'manual';
+
+export interface BatchRow {
+  id: string;
+  createdAt: number;
+  finishedAt: number | null;
+  status: BatchStatus;
+  settings: BatchSettings;
+  warnings: string[];
+  error: string | null;
+  /** Concepts this batch should end up with. */
+  target: number;
+}
+
+export interface ConceptRow {
+  id: string;
+  batchId: string;
+  idx: number;
+  concept: Concept;
+}
+
+export type RenderStatus = 'queued' | 'rendering' | 'ready' | 'failed' | 'cancelled' | 'deleted';
+export type Decision = 'pending' | 'approved' | 'rejected' | 'rerolled';
+export type RenderKind = 'batch' | 'manual' | 'export';
+
+export interface RenderRow {
+  id: string;
+  batchId: string | null;
+  conceptId: string | null;
+  kind: RenderKind;
+  recipe: Recipe;
+  copy: SocialCopy | null;
+  score: number | null;
+  scoreParts: Record<string, number> | null;
+  altSeeds: number[];
+  status: RenderStatus;
+  stage: string | null;
+  progress: number;
+  /** Relative to data/renders. */
+  dir: string | null;
+  qc: QcReport | null;
+  durationS: number | null;
+  rankScore: number | null;
+  error: string | null;
+  createdAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+  renderMs: number | null;
+  decision: Decision;
+  supersededBy: string | null;
+}
+
+export interface ExportRow {
+  id: string;
+  renderId: string;
+  /** Relative to data/exports. */
+  dir: string;
+  createdAt: number;
+}
+
+export interface PostRow {
+  renderId: string;
+  platform: 'youtube' | 'tiktok' | 'x';
+  url: string;
+  postedAt: number;
+}
+
+export const db = new DatabaseSync(join(DATA_DIR, 'sqlite.db'));
+db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+
+const MIGRATIONS = [
+  `CREATE TABLE batches (
+     id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, finished_at INTEGER, status TEXT NOT NULL,
+     settings TEXT NOT NULL, warnings TEXT NOT NULL DEFAULT '[]', error TEXT, target INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE concepts (
+     id TEXT PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES batches(id), idx INTEGER NOT NULL, concept TEXT NOT NULL);
+   CREATE INDEX concepts_batch ON concepts(batch_id);
+   CREATE TABLE renders (
+     id TEXT PRIMARY KEY, batch_id TEXT REFERENCES batches(id), concept_id TEXT REFERENCES concepts(id),
+     kind TEXT NOT NULL, recipe TEXT NOT NULL, copy TEXT, score REAL, score_parts TEXT, alt_seeds TEXT NOT NULL DEFAULT '[]',
+     status TEXT NOT NULL, stage TEXT, progress REAL NOT NULL DEFAULT 0, dir TEXT, qc TEXT, duration_s REAL, rank_score REAL,
+     error TEXT, created_at INTEGER NOT NULL, started_at INTEGER, finished_at INTEGER, render_ms INTEGER,
+     decision TEXT NOT NULL DEFAULT 'pending', superseded_by TEXT);
+   CREATE INDEX renders_batch ON renders(batch_id);
+   CREATE INDEX renders_status ON renders(status);
+   CREATE TABLE exports (id TEXT PRIMARY KEY, render_id TEXT NOT NULL REFERENCES renders(id), dir TEXT NOT NULL, created_at INTEGER NOT NULL);
+   CREATE TABLE posts (render_id TEXT NOT NULL REFERENCES renders(id), platform TEXT NOT NULL, url TEXT NOT NULL, posted_at INTEGER NOT NULL,
+     PRIMARY KEY (render_id, platform));
+   CREATE TABLE arms (key TEXT PRIMARY KEY, alpha REAL NOT NULL, beta REAL NOT NULL, n INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+];
+
+{
+  const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  for (let v = version; v < MIGRATIONS.length; v++) {
+    db.exec('BEGIN');
+    db.exec(MIGRATIONS[v]);
+    db.exec(`PRAGMA user_version = ${v + 1}`);
+    db.exec('COMMIT');
+  }
+}
+
+const json = <T>(s: unknown, fallback: T): T => (typeof s === 'string' ? (JSON.parse(s) as T) : fallback);
+
+// ---- kv -----------------------------------------------------------------------------------
+
+export function getKv<T>(key: string, fallback: T): T {
+  const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | undefined;
+  return row ? (JSON.parse(row.value) as T) : fallback;
+}
+
+export function setKv(key: string, value: unknown) {
+  db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
+}
+
+// ---- batches ------------------------------------------------------------------------------
+
+const toBatch = (r: any): BatchRow => ({
+  id: r.id,
+  createdAt: r.created_at,
+  finishedAt: r.finished_at,
+  status: r.status,
+  settings: json(r.settings, DEFAULT_BATCH_SETTINGS),
+  warnings: json(r.warnings, []),
+  error: r.error,
+  target: r.target,
+});
+
+export function insertBatch(b: Pick<BatchRow, 'status' | 'settings' | 'target'>): BatchRow {
+  const id = newId();
+  db.prepare('INSERT INTO batches (id, created_at, status, settings, target) VALUES (?, ?, ?, ?, ?)').run(id, Date.now(), b.status, JSON.stringify(b.settings), b.target);
+  return getBatch(id)!;
+}
+
+export function getBatch(id: string): BatchRow | undefined {
+  const r = db.prepare('SELECT * FROM batches WHERE id = ?').get(id);
+  return r ? toBatch(r) : undefined;
+}
+
+export function listBatches(limit = 30): BatchRow[] {
+  return db.prepare('SELECT * FROM batches ORDER BY created_at DESC LIMIT ?').all(limit).map(toBatch);
+}
+
+export function activeBatches(): BatchRow[] {
+  return db.prepare("SELECT * FROM batches WHERE status IN ('planning','searching','rendering') ORDER BY created_at").all().map(toBatch);
+}
+
+export function updateBatch(id: string, patch: Partial<Pick<BatchRow, 'status' | 'finishedAt' | 'warnings' | 'error'>>) {
+  const cols: string[] = [];
+  const vals: (string | number | null)[] = [];
+  if (patch.status !== undefined) (cols.push('status = ?'), vals.push(patch.status));
+  if (patch.finishedAt !== undefined) (cols.push('finished_at = ?'), vals.push(patch.finishedAt));
+  if (patch.warnings !== undefined) (cols.push('warnings = ?'), vals.push(JSON.stringify(patch.warnings)));
+  if (patch.error !== undefined) (cols.push('error = ?'), vals.push(patch.error));
+  if (cols.length) db.prepare(`UPDATE batches SET ${cols.join(', ')} WHERE id = ?`).run(...vals, id);
+}
+
+/** Today's batch that collects one-off videos sent from the Playground. */
+export function manualBatchForToday(): BatchRow {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const r = db.prepare("SELECT * FROM batches WHERE status = 'manual' AND created_at >= ? ORDER BY created_at DESC LIMIT 1").get(start.getTime());
+  return r ? toBatch(r) : insertBatch({ status: 'manual', settings: DEFAULT_BATCH_SETTINGS, target: 0 });
+}
+
+// ---- concepts -----------------------------------------------------------------------------
+
+const toConcept = (r: any): ConceptRow => ({ id: r.id, batchId: r.batch_id, idx: r.idx, concept: json(r.concept, null as unknown as Concept) });
+
+export function insertConcept(batchId: string, idx: number, concept: Concept): ConceptRow {
+  const id = newId();
+  db.prepare('INSERT INTO concepts (id, batch_id, idx, concept) VALUES (?, ?, ?, ?)').run(id, batchId, idx, JSON.stringify(concept));
+  return { id, batchId, idx, concept };
+}
+
+export function updateConcept(id: string, concept: Concept) {
+  db.prepare('UPDATE concepts SET concept = ? WHERE id = ?').run(JSON.stringify(concept), id);
+}
+
+export function getConcept(id: string): ConceptRow | undefined {
+  const r = db.prepare('SELECT * FROM concepts WHERE id = ?').get(id);
+  return r ? toConcept(r) : undefined;
+}
+
+export function conceptsForBatch(batchId: string): ConceptRow[] {
+  return db.prepare('SELECT * FROM concepts WHERE batch_id = ? ORDER BY idx').all(batchId).map(toConcept);
+}
+
+// ---- renders ------------------------------------------------------------------------------
+
+const toRender = (r: any): RenderRow => ({
+  id: r.id,
+  batchId: r.batch_id,
+  conceptId: r.concept_id,
+  kind: r.kind,
+  recipe: json(r.recipe, null as unknown as Recipe),
+  copy: json(r.copy, null),
+  score: r.score,
+  scoreParts: json(r.score_parts, null),
+  altSeeds: json(r.alt_seeds, []),
+  status: r.status,
+  stage: r.stage,
+  progress: r.progress,
+  dir: r.dir,
+  qc: json(r.qc, null),
+  durationS: r.duration_s,
+  rankScore: r.rank_score,
+  error: r.error,
+  createdAt: r.created_at,
+  startedAt: r.started_at,
+  finishedAt: r.finished_at,
+  renderMs: r.render_ms,
+  decision: r.decision,
+  supersededBy: r.superseded_by,
+});
+
+export function insertRender(r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind' | 'recipe' | 'copy' | 'score' | 'scoreParts' | 'altSeeds' | 'rankScore'>): RenderRow {
+  const id = newId();
+  db.prepare(
+    `INSERT INTO renders (id, batch_id, concept_id, kind, recipe, copy, score, score_parts, alt_seeds, status, rank_score, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+  ).run(
+    id,
+    r.batchId,
+    r.conceptId,
+    r.kind,
+    JSON.stringify(r.recipe),
+    r.copy ? JSON.stringify(r.copy) : null,
+    r.score,
+    r.scoreParts ? JSON.stringify(r.scoreParts) : null,
+    JSON.stringify(r.altSeeds),
+    r.rankScore,
+    Date.now(),
+  );
+  return getRender(id)!;
+}
+
+export function getRender(id: string): RenderRow | undefined {
+  const r = db.prepare('SELECT * FROM renders WHERE id = ?').get(id);
+  return r ? toRender(r) : undefined;
+}
+
+export function rendersForBatch(batchId: string): RenderRow[] {
+  return db.prepare('SELECT * FROM renders WHERE batch_id = ? ORDER BY created_at').all(batchId).map(toRender);
+}
+
+export function rendersForConcept(conceptId: string): RenderRow[] {
+  return db.prepare('SELECT * FROM renders WHERE concept_id = ? ORDER BY created_at').all(conceptId).map(toRender);
+}
+
+/** Next render to work on: Playground exports first, then oldest. */
+export function nextQueuedRender(): RenderRow | undefined {
+  const r = db.prepare("SELECT * FROM renders WHERE status = 'queued' ORDER BY CASE kind WHEN 'export' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END, created_at LIMIT 1").get();
+  return r ? toRender(r) : undefined;
+}
+
+export function listExportJobs(limit = 20): RenderRow[] {
+  return db.prepare("SELECT * FROM renders WHERE kind = 'export' ORDER BY created_at DESC LIMIT ?").all(limit).map(toRender);
+}
+
+const RENDER_COLS: Record<string, string> = {
+  recipe: 'recipe', copy: 'copy', score: 'score', scoreParts: 'score_parts', altSeeds: 'alt_seeds', status: 'status', stage: 'stage',
+  progress: 'progress', dir: 'dir', qc: 'qc', durationS: 'duration_s', rankScore: 'rank_score', error: 'error', startedAt: 'started_at',
+  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by',
+};
+const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc']);
+
+export function updateRender(id: string, patch: Partial<RenderRow>) {
+  const cols: string[] = [];
+  const vals: (string | number | null)[] = [];
+  for (const [k, v] of Object.entries(patch)) {
+    const col = RENDER_COLS[k];
+    if (!col) continue;
+    cols.push(`${col} = ?`);
+    vals.push(v === null || v === undefined ? null : JSON_COLS.has(k) ? JSON.stringify(v) : (v as string | number));
+  }
+  if (cols.length) db.prepare(`UPDATE renders SET ${cols.join(', ')} WHERE id = ?`).run(...vals, id);
+}
+
+/** Server restarted mid-render: put interrupted renders back in the queue. */
+export function requeueInterrupted(): number {
+  return Number(db.prepare("UPDATE renders SET status = 'queued', stage = NULL, progress = 0 WHERE status = 'rendering'").run().changes);
+}
+
+/** Recent hooks across batches, so the planner avoids repeats. */
+export function recentHooks(limit = 30): string[] {
+  return db
+    .prepare("SELECT copy FROM renders WHERE copy IS NOT NULL AND kind != 'export' ORDER BY created_at DESC LIMIT ?")
+    .all(limit)
+    .map((r: any) => json<SocialCopy | null>(r.copy, null)?.hook)
+    .filter((h): h is string => Boolean(h));
+}
+
+// ---- exports & posts -----------------------------------------------------------------------
+
+export function insertExport(renderId: string, dir: string): ExportRow {
+  const id = newId();
+  const createdAt = Date.now();
+  db.prepare('INSERT INTO exports (id, render_id, dir, created_at) VALUES (?, ?, ?, ?)').run(id, renderId, dir, createdAt);
+  return { id, renderId, dir, createdAt };
+}
+
+export function exportForRender(renderId: string): ExportRow | undefined {
+  const r = db.prepare('SELECT * FROM exports WHERE render_id = ? ORDER BY created_at DESC LIMIT 1').get(renderId) as any;
+  return r ? { id: r.id, renderId: r.render_id, dir: r.dir, createdAt: r.created_at } : undefined;
+}
+
+export function getExport(id: string): ExportRow | undefined {
+  const r = db.prepare('SELECT * FROM exports WHERE id = ?').get(id) as any;
+  return r ? { id: r.id, renderId: r.render_id, dir: r.dir, createdAt: r.created_at } : undefined;
+}
+
+export function upsertPost(p: PostRow) {
+  db.prepare(
+    'INSERT INTO posts (render_id, platform, url, posted_at) VALUES (?, ?, ?, ?) ON CONFLICT(render_id, platform) DO UPDATE SET url = excluded.url, posted_at = excluded.posted_at',
+  ).run(p.renderId, p.platform, p.url, p.postedAt);
+}
+
+export function deletePost(renderId: string, platform: string) {
+  db.prepare('DELETE FROM posts WHERE render_id = ? AND platform = ?').run(renderId, platform);
+}
+
+export function postsForRender(renderId: string): PostRow[] {
+  return db
+    .prepare('SELECT * FROM posts WHERE render_id = ?')
+    .all(renderId)
+    .map((r: any) => ({ renderId: r.render_id, platform: r.platform, url: r.url, postedAt: r.posted_at }));
+}
+
+// ---- arms (bandit stats; Phase 5 writes these) ----------------------------------------------
+
+export function armStats(): Map<string, { alpha: number; beta: number }> {
+  return new Map(db.prepare('SELECT key, alpha, beta FROM arms').all().map((r: any) => [r.key, { alpha: r.alpha, beta: r.beta }]));
+}

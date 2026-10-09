@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./search": "./src/search.ts"
   },
   "dependencies": {
     "@fontsource/montserrat": "^5.3.0",
