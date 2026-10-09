@@ -1,0 +1,260 @@
+import type { AudioEvent, VoiceId } from '@sim/engine';
+
+/**
+ * Procedural voices + SFX built from Web Audio nodes. The same code drives the realtime
+ * preview (AudioContext) and the offline render (OfflineAudioContext), so they sound identical.
+ */
+export interface SynthBus {
+  ctx: BaseAudioContext;
+  input: GainNode;
+  noise: AudioBuffer;
+}
+
+const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
+
+function seededNoise(ctx: BaseAudioContext, seconds: number, channels: number, decay?: number): AudioBuffer {
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(channels, len, ctx.sampleRate);
+  let s = 0x12345678;
+  for (let c = 0; c < channels; c++) {
+    const data = buf.getChannelData(c);
+    for (let i = 0; i < len; i++) {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      const env = decay ? Math.pow(1 - i / len, decay) : 1;
+      data[i] = ((s / 4294967296) * 2 - 1) * env;
+    }
+  }
+  return buf;
+}
+
+export function createBus(ctx: BaseAudioContext, opts: { reverb: number; destination?: AudioNode }): SynthBus {
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -16;
+  comp.knee.value = 10;
+  comp.ratio.value = 8;
+  comp.attack.value = 0.002;
+  comp.release.value = 0.2;
+  const master = ctx.createGain();
+  master.gain.value = 0.9;
+  comp.connect(master).connect(opts.destination ?? ctx.destination);
+
+  const input = ctx.createGain();
+  input.connect(comp);
+  if (opts.reverb > 0) {
+    const verb = ctx.createConvolver();
+    verb.buffer = seededNoise(ctx, 2.4, 2, 3.2);
+    const wet = ctx.createGain();
+    wet.gain.value = opts.reverb;
+    input.connect(verb).connect(wet).connect(comp);
+  }
+  return { ctx, input, noise: seededNoise(ctx, 2, 1) };
+}
+
+function out(bus: SynthBus, pan = 0): AudioNode {
+  const p = bus.ctx.createStereoPanner();
+  p.pan.value = pan;
+  p.connect(bus.input);
+  return p;
+}
+
+function env(g: GainNode, when: number, peak: number, attack: number, decay: number) {
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(peak, when + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + attack + decay);
+}
+
+function osc(bus: SynthBus, type: OscillatorType, freq: number, when: number, stop: number, dest: AudioNode, peak: number, attack: number, decay: number) {
+  const o = bus.ctx.createOscillator();
+  o.type = type;
+  o.frequency.value = freq;
+  const g = bus.ctx.createGain();
+  env(g, when, peak, attack, decay);
+  o.connect(g).connect(dest);
+  o.start(when);
+  o.stop(stop);
+  return o;
+}
+
+function noiseBurst(bus: SynthBus, when: number, dur: number, dest: AudioNode, peak: number, filter: BiquadFilterType, freq: number, q = 1, freqEnd?: number) {
+  const src = bus.ctx.createBufferSource();
+  src.buffer = bus.noise;
+  const f = bus.ctx.createBiquadFilter();
+  f.type = filter;
+  f.frequency.setValueAtTime(freq, when);
+  if (freqEnd) f.frequency.exponentialRampToValueAtTime(freqEnd, when + dur);
+  f.Q.value = q;
+  const g = bus.ctx.createGain();
+  env(g, when, peak, Math.min(0.01, dur / 4), dur);
+  src.connect(f).connect(g).connect(dest);
+  src.start(when, (when * 0.37) % 1.5);
+  src.stop(when + dur + 0.05);
+}
+
+function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, when: number, dur: number, dest: AudioNode) {
+  const f = midiToHz(midi);
+  const a = vel * 0.32;
+  switch (voice) {
+    case 'marimba': {
+      const d = 0.7 * dur;
+      osc(bus, 'sine', f, when, when + d + 0.1, dest, a, 0.002, d);
+      osc(bus, 'sine', f * 3.93, when, when + 0.2, dest, a * 0.35, 0.001, 0.12);
+      osc(bus, 'sine', f * 9.2, when, when + 0.06, dest, a * 0.12, 0.001, 0.04);
+      break;
+    }
+    case 'bell': {
+      const d = 2 * dur;
+      const mod = bus.ctx.createOscillator();
+      mod.frequency.value = f * 3.5;
+      const modGain = bus.ctx.createGain();
+      modGain.gain.setValueAtTime(f * 2.2, when);
+      modGain.gain.exponentialRampToValueAtTime(f * 0.05, when + d);
+      mod.connect(modGain);
+      const car = osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.9, 0.002, d);
+      modGain.connect(car.frequency);
+      mod.start(when);
+      mod.stop(when + d + 0.1);
+      break;
+    }
+    case 'pluck': {
+      const d = 0.55 * dur;
+      const o = bus.ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      const lp = bus.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.Q.value = 2;
+      lp.frequency.setValueAtTime(Math.min(16000, f * 10), when);
+      lp.frequency.exponentialRampToValueAtTime(Math.max(80, f * 1.2), when + d);
+      const g = bus.ctx.createGain();
+      env(g, when, a * 0.7, 0.002, d);
+      o.connect(lp).connect(g).connect(dest);
+      o.start(when);
+      o.stop(when + d + 0.1);
+      break;
+    }
+    case 'glass': {
+      const d = 1.3 * dur;
+      osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.8, 0.004, d);
+      osc(bus, 'sine', f * 2.76, when, when + d * 0.6, dest, a * 0.3, 0.003, d * 0.5);
+      osc(bus, 'sine', f * 5.4, when, when + d * 0.3, dest, a * 0.12, 0.002, d * 0.25);
+      break;
+    }
+    case 'softsine': {
+      const d = 0.9 * dur;
+      osc(bus, 'triangle', f, when, when + d + 0.1, dest, a * 0.8, 0.012, d);
+      break;
+    }
+  }
+}
+
+export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
+  const dest = out(bus, ev.pan ?? 0);
+  if (ev.kind === 'note') {
+    playVoice(bus, ev.voice ?? 'marimba', ev.midi, ev.vel, when, ev.dur ?? 1, dest);
+    return;
+  }
+  const v = ev.vel;
+  switch (ev.name) {
+    case 'tick':
+      noiseBurst(bus, when, 0.025, dest, v * 0.5, 'highpass', 4000);
+      break;
+    case 'pop': {
+      const o = osc(bus, 'sine', 600, when, when + 0.15, dest, v * 0.5, 0.001, 0.1);
+      o.frequency.exponentialRampToValueAtTime(140, when + 0.09);
+      break;
+    }
+    case 'shatter': {
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.35, dest, v * 0.45, 'bandpass', 2500 + p * 3500, 0.8, 9000);
+      for (let k = 0; k < 4; k++) {
+        const f = 2200 + ((k * 977 + p * 3100) % 3800);
+        osc(bus, 'sine', f, when + k * 0.018, when + 0.5, dest, v * 0.06, 0.001, 0.25 + k * 0.05);
+      }
+      break;
+    }
+    case 'boom': {
+      const o = osc(bus, 'sine', 130, when, when + 1.2, dest, v * 0.9, 0.003, 1.0);
+      o.frequency.exponentialRampToValueAtTime(38, when + 0.7);
+      noiseBurst(bus, when, 0.6, dest, v * 0.35, 'lowpass', 900, 0.7, 120);
+      break;
+    }
+    case 'whoosh': {
+      const src = bus.ctx.createBufferSource();
+      src.buffer = bus.noise;
+      const f = bus.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = 1.2;
+      f.frequency.setValueAtTime(400, when);
+      f.frequency.exponentialRampToValueAtTime(4000, when + 0.9);
+      const g = bus.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(v * 0.35, when + 0.35);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + 1.0);
+      src.connect(f).connect(g).connect(dest);
+      src.start(when);
+      src.stop(when + 1.05);
+      break;
+    }
+    case 'sand': {
+      // Granular hiss: a short band of noise whose centre wanders with `pitch`.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.07, dest, v * 0.3, 'bandpass', 2500 + p * 4000, 1.4);
+      noiseBurst(bus, when + 0.02, 0.05, dest, v * 0.15, 'highpass', 7000);
+      break;
+    }
+    case 'bubble': {
+      // Liquid "bloop": a short sine sweeping upwards.
+      const f0 = 300 + (ev.pitch ?? 0.5) * 500;
+      const o = osc(bus, 'sine', f0, when, when + 0.12, dest, v * 0.35, 0.004, 0.08);
+      o.frequency.exponentialRampToValueAtTime(f0 * 2.2, when + 0.06);
+      break;
+    }
+    case 'chime':
+      playVoice(bus, 'bell', 84 + Math.round((ev.pitch ?? 0) * 12), v, when, 1, dest);
+      break;
+  }
+}
+
+/** Render a full event list offline. Tail adds room for reverb/decays after the last frame. */
+export async function renderAudio(
+  events: AudioEvent[],
+  durationS: number,
+  opts: { reverb: number; sampleRate?: number },
+): Promise<AudioBuffer> {
+  const sr = opts.sampleRate ?? 48000;
+  const ctx = new OfflineAudioContext(2, Math.ceil(durationS * sr), sr);
+  const bus = createBus(ctx, { reverb: opts.reverb });
+  for (const ev of events) if (ev.t < durationS) scheduleEvent(bus, ev, ev.t);
+  return ctx.startRendering();
+}
+
+/** 32-bit float stereo WAV, so nothing clips before loudness normalisation. */
+export function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
+  const ch = buffer.numberOfChannels;
+  const len = buffer.length;
+  const bytes = 44 + len * ch * 4;
+  const view = new DataView(new ArrayBuffer(bytes));
+  const str = (o: number, s: string) => [...s].forEach((c, i) => view.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF');
+  view.setUint32(4, bytes - 8, true);
+  str(8, 'WAVE');
+  str(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 3, true); // IEEE float
+  view.setUint16(22, ch, true);
+  view.setUint32(24, buffer.sampleRate, true);
+  view.setUint32(28, buffer.sampleRate * ch * 4, true);
+  view.setUint16(32, ch * 4, true);
+  view.setUint16(34, 32, true);
+  str(36, 'data');
+  view.setUint32(40, len * ch * 4, true);
+  const chans = Array.from({ length: ch }, (_, c) => buffer.getChannelData(c));
+  let o = 44;
+  for (let i = 0; i < len; i++) {
+    for (let c = 0; c < ch; c++) {
+      view.setFloat32(o, chans[c][i], true);
+      o += 4;
+    }
+  }
+  return view.buffer;
+}

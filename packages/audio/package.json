@@ -1,0 +1,12 @@
+{
+  "name": "@sim/audio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@tonejs/midi": "^2.0.28"
+  }
+}
