@@ -5,8 +5,10 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Recipe } from '@sim/engine';
 import type { Concept, SocialCopy } from '@sim/planner';
 import { ROOT, type QcReport } from '@sim/render';
+import type { PostFeatures } from '@sim/analytics';
 
-export const DATA_DIR = join(ROOT, 'data');
+/** SIM_DATA_DIR points the database (and tokens) elsewhere, e.g. for tests. */
+export const DATA_DIR = process.env.SIM_DATA_DIR ?? join(ROOT, 'data');
 export const EXPORTS_DIR = join(DATA_DIR, 'exports');
 mkdirSync(DATA_DIR, { recursive: true });
 
@@ -88,6 +90,8 @@ export interface RenderRow {
   renderMs: number | null;
   decision: Decision;
   supersededBy: string | null;
+  /** Learner's expected reward when the candidate was ranked (null before the model is ready). */
+  prediction: { mean: number; sd: number; modelVersion: number } | null;
 }
 
 export interface ExportRow {
@@ -98,11 +102,20 @@ export interface ExportRow {
   createdAt: number;
 }
 
+export type Platform = 'youtube' | 'tiktok' | 'x';
+
 export interface PostRow {
   renderId: string;
-  platform: 'youtube' | 'tiktok' | 'x';
+  platform: Platform;
   url: string;
   postedAt: number;
+  /** Platform's id for the post (YouTube video id), when known. */
+  externalId?: string | null;
+  /** When the platform says it went live (more accurate than postedAt). */
+  publishedAt?: number | null;
+  linkedBy?: 'paste' | 'auto';
+  /** Numbers typed in by hand, e.g. YouTube Studio's "Stayed to watch" %. */
+  manual?: Record<string, number>;
 }
 
 export const db = new DatabaseSync(join(DATA_DIR, 'sqlite.db'));
@@ -128,6 +141,25 @@ const MIGRATIONS = [
      PRIMARY KEY (render_id, platform));
    CREATE TABLE arms (key TEXT PRIMARY KEY, alpha REAL NOT NULL, beta REAL NOT NULL, n INTEGER NOT NULL DEFAULT 0);
    CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  // Phase 5: analytics. Snapshots hold raw metrics only, so rewards can be recomputed at any time.
+  `ALTER TABLE posts ADD COLUMN external_id TEXT;
+   ALTER TABLE posts ADD COLUMN published_at INTEGER;
+   ALTER TABLE posts ADD COLUMN linked_by TEXT NOT NULL DEFAULT 'paste';
+   ALTER TABLE posts ADD COLUMN manual TEXT NOT NULL DEFAULT '{}';
+   CREATE UNIQUE INDEX posts_external ON posts(platform, external_id);
+   CREATE TABLE metric_snapshots (
+     id INTEGER PRIMARY KEY AUTOINCREMENT, render_id TEXT NOT NULL REFERENCES renders(id), platform TEXT NOT NULL,
+     fetched_at INTEGER NOT NULL, age_h REAL NOT NULL, source TEXT NOT NULL, metrics TEXT NOT NULL);
+   CREATE INDEX snapshots_render ON metric_snapshots(render_id, platform, fetched_at);
+   CREATE TABLE retention_curves (
+     render_id TEXT NOT NULL REFERENCES renders(id), platform TEXT NOT NULL, fetched_at INTEGER NOT NULL, age_h REAL NOT NULL,
+     points TEXT NOT NULL, PRIMARY KEY (render_id, platform));
+   CREATE TABLE predictions (
+     render_id TEXT PRIMARY KEY REFERENCES renders(id), created_at INTEGER NOT NULL, model_version INTEGER,
+     mean REAL, sd REAL, experiment INTEGER NOT NULL DEFAULT 0, features TEXT NOT NULL);
+   CREATE TABLE insights (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, n_posts INTEGER NOT NULL, kind TEXT NOT NULL, report TEXT NOT NULL);`,
+  // What the learner expected of each candidate when it was ranked.
+  `ALTER TABLE renders ADD COLUMN prediction TEXT;`,
 ];
 
 {
@@ -252,13 +284,16 @@ const toRender = (r: any): RenderRow => ({
   renderMs: r.render_ms,
   decision: r.decision,
   supersededBy: r.superseded_by,
+  prediction: json(r.prediction, null),
 });
 
-export function insertRender(r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind' | 'recipe' | 'copy' | 'score' | 'scoreParts' | 'altSeeds' | 'rankScore'>): RenderRow {
+export function insertRender(
+  r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind' | 'recipe' | 'copy' | 'score' | 'scoreParts' | 'altSeeds' | 'rankScore'> & Partial<Pick<RenderRow, 'prediction'>>,
+): RenderRow {
   const id = newId();
   db.prepare(
-    `INSERT INTO renders (id, batch_id, concept_id, kind, recipe, copy, score, score_parts, alt_seeds, status, rank_score, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+    `INSERT INTO renders (id, batch_id, concept_id, kind, recipe, copy, score, score_parts, alt_seeds, status, rank_score, created_at, prediction)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
   ).run(
     id,
     r.batchId,
@@ -271,6 +306,7 @@ export function insertRender(r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind'
     JSON.stringify(r.altSeeds),
     r.rankScore,
     Date.now(),
+    r.prediction ? JSON.stringify(r.prediction) : null,
   );
   return getRender(id)!;
 }
@@ -301,9 +337,9 @@ export function listExportJobs(limit = 20): RenderRow[] {
 const RENDER_COLS: Record<string, string> = {
   recipe: 'recipe', copy: 'copy', score: 'score', scoreParts: 'score_parts', altSeeds: 'alt_seeds', status: 'status', stage: 'stage',
   progress: 'progress', dir: 'dir', qc: 'qc', durationS: 'duration_s', rankScore: 'rank_score', error: 'error', startedAt: 'started_at',
-  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by',
+  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', prediction: 'prediction',
 };
-const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc']);
+const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc', 'prediction']);
 
 export function updateRender(id: string, patch: Partial<RenderRow>) {
   const cols: string[] = [];
@@ -350,10 +386,28 @@ export function getExport(id: string): ExportRow | undefined {
   return r ? { id: r.id, renderId: r.render_id, dir: r.dir, createdAt: r.created_at } : undefined;
 }
 
+const toPost = (r: any): PostRow => ({
+  renderId: r.render_id,
+  platform: r.platform,
+  url: r.url,
+  postedAt: r.posted_at,
+  externalId: r.external_id,
+  publishedAt: r.published_at,
+  linkedBy: r.linked_by,
+  manual: json(r.manual, {}),
+});
+
 export function upsertPost(p: PostRow) {
   db.prepare(
-    'INSERT INTO posts (render_id, platform, url, posted_at) VALUES (?, ?, ?, ?) ON CONFLICT(render_id, platform) DO UPDATE SET url = excluded.url, posted_at = excluded.posted_at',
-  ).run(p.renderId, p.platform, p.url, p.postedAt);
+    `INSERT INTO posts (render_id, platform, url, posted_at, external_id, published_at, linked_by) VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(render_id, platform) DO UPDATE SET url = excluded.url, posted_at = excluded.posted_at,
+       external_id = excluded.external_id, published_at = COALESCE(excluded.published_at, posts.published_at), linked_by = excluded.linked_by`,
+  ).run(p.renderId, p.platform, p.url, p.postedAt, p.externalId ?? null, p.publishedAt ?? null, p.linkedBy ?? 'paste');
+}
+
+export function updatePostMeta(renderId: string, platform: Platform, patch: { publishedAt?: number; manual?: Record<string, number> }) {
+  if (patch.publishedAt !== undefined) db.prepare('UPDATE posts SET published_at = ? WHERE render_id = ? AND platform = ?').run(patch.publishedAt, renderId, platform);
+  if (patch.manual !== undefined) db.prepare('UPDATE posts SET manual = ? WHERE render_id = ? AND platform = ?').run(JSON.stringify(patch.manual), renderId, platform);
 }
 
 export function deletePost(renderId: string, platform: string) {
@@ -361,14 +415,107 @@ export function deletePost(renderId: string, platform: string) {
 }
 
 export function postsForRender(renderId: string): PostRow[] {
+  return db.prepare('SELECT * FROM posts WHERE render_id = ?').all(renderId).map(toPost);
+}
+
+export function allPosts(platform?: Platform): PostRow[] {
+  return (platform ? db.prepare('SELECT * FROM posts WHERE platform = ? ORDER BY posted_at').all(platform) : db.prepare('SELECT * FROM posts ORDER BY posted_at').all()).map(toPost);
+}
+
+export function postByExternalId(platform: Platform, externalId: string): PostRow | undefined {
+  const r = db.prepare('SELECT * FROM posts WHERE platform = ? AND external_id = ?').get(platform, externalId);
+  return r ? toPost(r) : undefined;
+}
+
+// ---- analytics -----------------------------------------------------------------------------
+
+export interface SnapshotRow {
+  renderId: string;
+  platform: Platform;
+  fetchedAt: number;
+  ageH: number;
+  source: 'youtube' | 'manual' | 'csv';
+  metrics: Record<string, number>;
+}
+
+export function insertSnapshot(s: SnapshotRow) {
+  db.prepare('INSERT INTO metric_snapshots (render_id, platform, fetched_at, age_h, source, metrics) VALUES (?, ?, ?, ?, ?, ?)').run(
+    s.renderId,
+    s.platform,
+    s.fetchedAt,
+    s.ageH,
+    s.source,
+    JSON.stringify(s.metrics),
+  );
+}
+
+export function snapshotsFor(renderId: string, platform: Platform): SnapshotRow[] {
   return db
-    .prepare('SELECT * FROM posts WHERE render_id = ?')
-    .all(renderId)
-    .map((r: any) => ({ renderId: r.render_id, platform: r.platform, url: r.url, postedAt: r.posted_at }));
+    .prepare('SELECT * FROM metric_snapshots WHERE render_id = ? AND platform = ? ORDER BY fetched_at')
+    .all(renderId, platform)
+    .map((r: any) => ({ renderId: r.render_id, platform: r.platform, fetchedAt: r.fetched_at, ageH: r.age_h, source: r.source, metrics: json(r.metrics, {}) }));
 }
 
-// ---- arms (bandit stats; Phase 5 writes these) ----------------------------------------------
-
-export function armStats(): Map<string, { alpha: number; beta: number }> {
-  return new Map(db.prepare('SELECT key, alpha, beta FROM arms').all().map((r: any) => [r.key, { alpha: r.alpha, beta: r.beta }]));
+export interface RetentionRow {
+  renderId: string;
+  platform: Platform;
+  fetchedAt: number;
+  ageH: number;
+  /** elapsed ratio 0..1, audienceWatchRatio, relativeRetentionPerformance */
+  points: { t: number; watch: number; relative: number | null }[];
 }
+
+export function upsertRetention(r: RetentionRow) {
+  db.prepare(
+    `INSERT INTO retention_curves (render_id, platform, fetched_at, age_h, points) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(render_id, platform) DO UPDATE SET fetched_at = excluded.fetched_at, age_h = excluded.age_h, points = excluded.points`,
+  ).run(r.renderId, r.platform, r.fetchedAt, r.ageH, JSON.stringify(r.points));
+}
+
+export function retentionFor(renderId: string, platform: Platform): RetentionRow | undefined {
+  const r = db.prepare('SELECT * FROM retention_curves WHERE render_id = ? AND platform = ?').get(renderId, platform) as any;
+  return r ? { renderId: r.render_id, platform: r.platform, fetchedAt: r.fetched_at, ageH: r.age_h, points: json(r.points, []) } : undefined;
+}
+
+export interface PredictionRow {
+  renderId: string;
+  createdAt: number;
+  modelVersion: number | null;
+  mean: number | null;
+  sd: number | null;
+  experiment: boolean;
+  features: PostFeatures;
+}
+
+/** Written once, at first export: what the model expected before any results existed. */
+export function insertPredictionOnce(p: PredictionRow) {
+  db.prepare('INSERT OR IGNORE INTO predictions (render_id, created_at, model_version, mean, sd, experiment, features) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    p.renderId,
+    p.createdAt,
+    p.modelVersion,
+    p.mean,
+    p.sd,
+    p.experiment ? 1 : 0,
+    JSON.stringify(p.features),
+  );
+}
+
+const toPrediction = (r: any): PredictionRow => ({
+  renderId: r.render_id,
+  createdAt: r.created_at,
+  modelVersion: r.model_version,
+  mean: r.mean,
+  sd: r.sd,
+  experiment: Boolean(r.experiment),
+  features: json(r.features, null as unknown as PostFeatures),
+});
+
+export function predictionFor(renderId: string): PredictionRow | undefined {
+  const r = db.prepare('SELECT * FROM predictions WHERE render_id = ?').get(renderId);
+  return r ? toPrediction(r) : undefined;
+}
+
+export function allPredictions(): PredictionRow[] {
+  return db.prepare('SELECT * FROM predictions ORDER BY created_at').all().map(toPrediction);
+}
+

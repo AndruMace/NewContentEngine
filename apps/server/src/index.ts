@@ -6,6 +6,7 @@ import fastifyStatic from '@fastify/static';
 import type { Recipe } from '@sim/engine';
 import { RENDERS_DIR, ROOT } from '@sim/render';
 import { claudeAvailable, type SocialCopy } from '@sim/planner';
+import { REWARD_PRESETS, parsePostUrl } from '@sim/analytics';
 
 // Load .env (ANTHROPIC_API_KEY etc.) before anything reads the environment.
 try {
@@ -26,6 +27,8 @@ const {
   setKv,
   upsertPost,
   deletePost,
+  postByExternalId,
+  updatePostMeta,
 } = await import('./db');
 const { RenderScheduler } = await import('./scheduler');
 const { SearchPool } = await import('./searchPool');
@@ -33,6 +36,8 @@ const { BatchRunner } = await import('./batch');
 const { ReviewActions, dirSize } = await import('./review');
 const { batchSnapshot, batchSummary, jobView, reviewItem } = await import('./views');
 const { scanLibrary, deleteLibraryEntry } = await import('./library');
+const youtube = await import('./youtube');
+const { listPostViews, postDetail, refitLearner, learningStatus, analyticsSettings, setAnalyticsSettings } = await import('./analytics');
 type BatchSettings = import('./db').BatchSettings;
 
 const PORT = Number(process.env.SIM_SERVER_PORT ?? 5174);
@@ -174,8 +179,13 @@ app.put<{ Params: { id: string }; Body: { platform: 'youtube' | 'tiktok' | 'x'; 
   if (!['youtube', 'tiktok', 'x'].includes(platform)) return reply.code(400).send({ error: 'bad platform' });
   if (url?.trim()) {
     if (!/^https?:\/\//.test(url.trim())) return reply.code(400).send({ error: 'URL must start with http(s)://' });
-    upsertPost({ renderId: req.params.id, platform, url: url.trim(), postedAt: Date.now() });
+    const externalId = parsePostUrl(platform, url);
+    if (platform === 'youtube' && !externalId) return reply.code(400).send({ error: "That doesn't look like a YouTube video link" });
+    const other = externalId ? postByExternalId(platform, externalId) : undefined;
+    if (other && other.renderId !== req.params.id) return reply.code(409).send({ error: 'That post is already linked to another video' });
+    upsertPost({ renderId: req.params.id, platform, url: url.trim(), postedAt: Date.now(), externalId, linkedBy: 'paste' });
   } else deletePost(req.params.id, platform);
+  refitLearner();
   const r = getRender(req.params.id)!;
   changed(r);
   return reviewItem(r);
@@ -187,14 +197,14 @@ app.post<{ Body: { recipe: Recipe } }>('/api/manual', async (req) => {
   return reviewItem(r);
 });
 
-app.get<{ Params: { id: string }; Querystring: { name: string } }>('/api/exports/:id/file', (req, reply) => {
+app.get<{ Params: { id: string }; Querystring: { name: string; inline?: string } }>('/api/exports/:id/file', (req, reply) => {
   const ex = getExport(req.params.id);
   const name = req.query.name;
   if (!ex || !['bundle.zip', 'video.mp4', 'cover.jpg', 'youtube.txt', 'tiktok.txt', 'x.txt'].includes(name)) return reply.code(404).send({ error: 'not found' });
   const abs = safePath(EXPORTS_DIR, join(ex.dir, name));
   if (!abs || !existsSync(abs)) return reply.code(404).send({ error: 'missing' });
   const base = ex.dir.split(sep).pop();
-  reply.header('content-disposition', `attachment; filename="${base}-${name}"`);
+  if (!(req.query as { inline?: string }).inline) reply.header('content-disposition', `attachment; filename="${base}-${name}"`);
   return reply.type(name.endsWith('.zip') ? 'application/zip' : name.endsWith('.mp4') ? 'video/mp4' : name.endsWith('.jpg') ? 'image/jpeg' : 'text/plain').send(createReadStream(abs));
 });
 
@@ -251,6 +261,102 @@ app.get<{ Querystring: { path: string } }>('/api/download', (req, reply) => {
   const rel = abs.slice(RENDERS_DIR.length + 1);
   return reply.download(rel, rel.split(sep).slice(-2).join('-'));
 });
+
+// ---- YouTube & analytics ----------------------------------------------------------------------
+
+const isLocalOrigin = (s: string) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+$/.test(s);
+
+app.get('/api/youtube/status', async () => youtube.youtubeStatus());
+
+app.get<{ Querystring: { returnTo?: string } }>('/api/youtube/connect', async (req, reply) => {
+  const returnTo = req.query.returnTo && isLocalOrigin(req.query.returnTo) ? req.query.returnTo : `http://127.0.0.1:${PORT}`;
+  try {
+    return reply.redirect(youtube.authUrl(`http://127.0.0.1:${PORT}/api/youtube/callback`, returnTo));
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.get<{ Querystring: { code?: string; state?: string; error?: string } }>('/api/youtube/callback', async (req, reply) => {
+  try {
+    return reply.redirect(await youtube.handleCallback(req.query));
+  } catch (e) {
+    return reply.code(400).type('text/plain').send(`YouTube connection failed: ${(e as Error).message}`);
+  }
+});
+
+app.post('/api/youtube/disconnect', async () => {
+  await youtube.disconnect();
+  return youtube.youtubeStatus();
+});
+
+let refreshing: Promise<unknown> | null = null;
+app.post('/api/analytics/refresh', async (req, reply) => {
+  if (!youtube.youtubeStatus().connected) return reply.code(409).send({ error: 'Connect YouTube first' });
+  refreshing ??= youtube
+    .refreshYouTube()
+    .then((r) => (refitLearner(), r))
+    .finally(() => (refreshing = null));
+  try {
+    return await refreshing;
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.get('/api/analytics/posts', async () => ({ posts: listPostViews('youtube'), uploads: youtube.unlinkedUploads() }));
+
+app.get<{ Params: { id: string } }>('/api/analytics/posts/:id', async (req, reply) => postDetail(req.params.id) ?? reply.code(404).send({ error: 'not found' }));
+
+app.patch<{ Params: { id: string }; Body: { manual: Record<string, number | null> } }>('/api/analytics/posts/:id', async (req, reply) => {
+  const d = postDetail(req.params.id);
+  if (!d) return reply.code(404).send({ error: 'not found' });
+  const manual: Record<string, number> = { ...d.manual };
+  for (const [k, v] of Object.entries(req.body.manual ?? {})) {
+    if (k !== 'stayedPct') continue;
+    if (v === null || v === undefined || Number.isNaN(Number(v))) delete manual[k];
+    else manual[k] = Math.max(0, Math.min(100, Number(v)));
+  }
+  updatePostMeta(req.params.id, 'youtube', { manual });
+  refitLearner();
+  return postDetail(req.params.id);
+});
+
+app.post<{ Body: { videoId: string; publishedAt: number; renderId: string } }>('/api/analytics/links', async (req, reply) => {
+  try {
+    youtube.linkUpload({ videoId: req.body.videoId, publishedAt: req.body.publishedAt }, req.body.renderId, 'paste');
+    refitLearner();
+    const r = getRender(req.body.renderId);
+    if (r) changed(r);
+    return { posts: listPostViews('youtube'), uploads: youtube.unlinkedUploads() };
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.post<{ Body: { videoId: string } }>('/api/analytics/ignore', async (req) => {
+  youtube.ignoreUpload(req.body.videoId);
+  return { posts: listPostViews('youtube'), uploads: youtube.unlinkedUploads() };
+});
+
+app.get('/api/analytics/learning', async () => learningStatus());
+
+app.get('/api/analytics/settings', async () => ({ ...analyticsSettings(), presets: REWARD_PRESETS }));
+
+app.put<{ Body: { preset?: string; weights?: Record<string, number> } }>('/api/analytics/settings', async (req, reply) => {
+  const preset = req.body.preset && REWARD_PRESETS[req.body.preset] ? req.body.preset : 'custom';
+  const raw = preset !== 'custom' ? REWARD_PRESETS[preset].weights : req.body.weights;
+  const keys = ['retention', 'reach', 'engagement', 'followers'] as const;
+  if (!raw || keys.some((k) => !(Number(raw[k]) >= 0))) return reply.code(400).send({ error: 'weights must be non-negative numbers' });
+  const total = keys.reduce((s, k) => s + Number(raw[k]), 0);
+  if (total <= 0) return reply.code(400).send({ error: 'at least one weight must be positive' });
+  const weights = Object.fromEntries(keys.map((k) => [k, Number(raw[k]) / total])) as Record<(typeof keys)[number], number>;
+  setAnalyticsSettings({ preset, weights });
+  return { ...analyticsSettings(), presets: REWARD_PRESETS };
+});
+
+/** Exported videos not yet linked to a YouTube upload (for manual linking). */
+app.get('/api/analytics/linkable', async () => youtube.linkableRendersView());
 
 // Local-only convenience: reveal a render in Finder.
 app.post<{ Body: { path: string; root?: 'renders' | 'exports' } }>('/api/reveal', async (req, reply) => {

@@ -21,6 +21,8 @@ const EMPTY = 0;
 const WALL = 1;
 const OUTRO_S = 1.6;
 const MAX_FALL = 4;
+/** Heart opening as a share of the distance between its lobe peaks. */
+const HEART_SLOT = 0.28;
 
 interface State {
   p: SandPourParams;
@@ -137,19 +139,24 @@ function build(p: SandPourParams, gw: number, gh: number): Built {
   const cx = Math.floor(gw / 2);
   const inside = full.slice();
   let stopCells: number[] = [];
-  // Open the top: no rim above the first inside cell of each column. The heart only opens
-  // between its two lobe peaks (a visible gap); its outer lobe curves stay solid so sand fills
-  // underneath them instead of sliding out.
+  // Open the top: no rim above the first inside cell of each column. The heart only opens in a
+  // narrow slot at the dip between its lobes, so it still reads as a heart; the lobe tops above
+  // the slot can't be reached and stay empty.
   let openX0 = 0;
   let openX1 = gw - 1;
   if (p.container === 'heart') {
+    let peakL = cx;
+    let peakR = cx;
     let bestL = Infinity;
     let bestR = Infinity;
     for (let x = 0; x < gw; x++) {
       if (top[x] < 0) continue;
-      if (x < cx && top[x] < bestL) [bestL, openX0] = [top[x], x];
-      if (x > cx && top[x] <= bestR) [bestR, openX1] = [top[x], x];
+      if (x < cx && top[x] < bestL) [bestL, peakL] = [top[x], x];
+      if (x > cx && top[x] <= bestR) [bestR, peakR] = [top[x], x];
     }
+    const half = Math.max(Math.ceil(p.emitterWidth / 2) + 5, Math.round((peakR - peakL) * HEART_SLOT / 2));
+    openX0 = cx - half;
+    openX1 = cx + half;
   }
   for (let x = openX0; x <= openX1; x++) {
     if (top[x] < 0) continue;
@@ -199,8 +206,12 @@ function build(p: SandPourParams, gw: number, gh: number): Built {
     // Stop when the centre bin is full to its top.
     stopCells = [(binTop + 1) * gw + Math.round(cx + S / 2)];
   }
+  // Capacity counts only what sand can reach: nothing above the opening's highest point
+  // (matters for the heart, whose lobe tops rise above its slot).
+  let openTop = gh;
+  for (let x = mouthX0; x <= mouthX1; x++) if (top[x] >= 0) openTop = Math.min(openTop, top[x]);
   let capacity = 0;
-  for (let i = 0; i < inside.length; i++) if (inside[i] && grid[i] === EMPTY) capacity++;
+  for (let i = 0; i < inside.length; i++) if (inside[i] && grid[i] === EMPTY && (p.container !== 'heart' || ((i / gw) | 0) >= openTop)) capacity++;
   // Floor under the container: overflow lands here and piles up.
   const floorY = Math.min(gh - 2, Math.floor(gh * 0.955));
   for (let x = 0; x < gw; x++) for (let y = floorY; y < floorY + 2; y++) grid[y * gw + x] = WALL;
@@ -497,7 +508,9 @@ export const sandPour: Template<SandPourParams, State> = {
     } else {
       // Full when the target is reached, or every column is filled to its top with settled sand.
       // (98.5% counts as full: levelling the last few grains takes disproportionately long.)
-      done = frac >= Math.min(p.fillTarget, 0.985) || (frac > 0.2 && s.maxDeficit <= 1);
+      // The heart's slot plugs early with a cone while sand can still run down the inside slopes
+      // into the shoulders, so it keeps pouring until it overflows or stops taking sand.
+      done = frac >= Math.min(p.fillTarget, 0.985) || (p.container !== 'heart' && frac > 0.2 && s.maxDeficit <= 1);
       // Overflow: once sand has been spilling steadily for overflowSeconds, stop.
       s.spillRate = s.spillRate * dm.exp(-dt / 0.25) + spilledNow;
       const overflowing = s.spillRate > 6;

@@ -27,10 +27,33 @@ export const HOOK_STYLES: Record<HookStyle, string> = {
 
 export const armKey = (a: Arm) => `${a.templateId}|${a.themeId}|${a.lengthBucket}|${a.hookStyle}`;
 
-export interface ArmStats {
-  alpha: number;
-  beta: number;
+/** What the planner needs from the learner. The flat model (no data yet) explores evenly. */
+export interface ArmModel {
+  /** False until enough posts have matured; the chooser then explores evenly and runs no experiments. */
+  ready: boolean;
+  /** One posterior draw for the whole batch (Thompson sampling): arm → sampled reward. */
+  sample(rng: Rng): (arm: Arm) => number;
+  /** Expected reward and its uncertainty. */
+  mean(arm: Arm): number;
+  sd(arm: Arm): number;
+  /** Least-tested aspect of this arm, shown on the Experiment badge. */
+  experimentReason(arm: Arm): string;
 }
+
+export const flatArmModel: ArmModel = {
+  ready: false,
+  sample: (rng) => {
+    const draws = new Map<string, number>();
+    return (arm) => {
+      const k = armKey(arm);
+      if (!draws.has(k)) draws.set(k, rng.next());
+      return draws.get(k)!;
+    };
+  },
+  mean: () => 0,
+  sd: () => 1,
+  experimentReason: () => 'Exploring',
+};
 
 export interface ArmChoiceSettings {
   count: number;
@@ -38,31 +61,25 @@ export interface ArmChoiceSettings {
   themeIds: string[];
   minLengthS: number;
   maxLengthS: number;
+  /** Last time each template was posted, so none is starved (ms since epoch). */
+  lastPostedAt?: Record<string, number>;
+  now?: number;
 }
 
-/** Gamma(k,1) sampler (Marsaglia–Tsang), for Beta sampling. */
-function gamma(rng: Rng, k: number): number {
-  if (k < 1) return gamma(rng, k + 1) * Math.pow(rng.next() || 1e-12, 1 / k);
-  const d = k - 1 / 3;
-  const c = 1 / Math.sqrt(9 * d);
-  for (;;) {
-    let x: number;
-    let v: number;
-    do {
-      // Box-Muller normal.
-      x = Math.sqrt(-2 * Math.log(rng.next() || 1e-12)) * Math.cos(2 * Math.PI * rng.next());
-      v = 1 + c * x;
-    } while (v <= 0);
-    v = v * v * v;
-    const u = rng.next();
-    if (u < 1 - 0.0331 * x ** 4 || Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
-  }
+export interface ChosenArm {
+  arm: Arm;
+  /** Set for exploration picks: chosen to learn, not because they are expected to win. */
+  experiment?: { reason: string };
 }
 
-const sampleBeta = (rng: Rng, a: number, b: number) => {
-  const x = gamma(rng, a);
-  return x / (x + gamma(rng, b));
-};
+/** Share of each batch reserved for experiments once the model is steering. */
+export const EXPERIMENT_SHARE = 0.2;
+/** Templates not posted for this long get a boost so nothing silently starves. */
+const STALE_MS = 14 * 86_400_000;
+const STALE_BONUS = 0.3;
+/** Experiments must still be plausible: expected reward within this of the best arm. */
+const PLAUSIBLE_GAP = 1;
+const UCB_Z = 1.5;
 
 /** Length buckets that overlap the requested range. */
 export function allowedBuckets(minS: number, maxS: number): LengthBucket[] {
@@ -83,9 +100,11 @@ export function targetLength(bucket: LengthBucket, minS: number, maxS: number, r
 
 /**
  * Thompson sampling over arms with diversity constraints: no template more than
- * ceil(count / 2) times (and spread across templates when possible), no exact repeats.
+ * ceil(count / templates) times, no exact repeats. Once the model is steering, about a fifth of
+ * the slots go to plausible arms with the highest upside (experiments), and long-unposted templates
+ * get a boost.
  */
-export function chooseArms(settings: ArmChoiceSettings, stats: Map<string, ArmStats>, rng: Rng): Arm[] {
+export function chooseArms(settings: ArmChoiceSettings, model: ArmModel, rng: Rng): ChosenArm[] {
   const templates = settings.templateIds.length ? settings.templateIds : TEMPLATES.map((t) => t.id);
   const themes = settings.themeIds.length ? settings.themeIds : THEMES.map((t) => t.id);
   const buckets = allowedBuckets(settings.minLengthS, settings.maxLengthS);
@@ -95,27 +114,45 @@ export function chooseArms(settings: ArmChoiceSettings, stats: Map<string, ArmSt
     for (const themeId of themes)
       for (const lengthBucket of buckets) for (const hookStyle of styles) candidates.push({ templateId, themeId, lengthBucket, hookStyle });
 
-  const scored = candidates
-    .map((arm) => {
-      const s = stats.get(armKey(arm)) ?? { alpha: 1, beta: 1 };
-      return { arm, draw: sampleBeta(rng, s.alpha, s.beta) };
-    })
-    .sort((a, b) => b.draw - a.draw);
+  const now = settings.now ?? Date.now();
+  const stale = (t: string) => (model.ready && settings.lastPostedAt && now - (settings.lastPostedAt[t] ?? 0) > STALE_MS ? STALE_BONUS : 0);
+  const draw = model.sample(rng);
+  const scored = candidates.map((arm) => ({ arm, score: draw(arm) + stale(arm.templateId) })).sort((a, b) => b.score - a.score);
 
+  const nExperiments = model.ready && settings.count >= 2 ? Math.max(1, Math.round(settings.count * EXPERIMENT_SHARE)) : 0;
   const maxPerTemplate = Math.max(1, Math.ceil(settings.count / Math.min(templates.length, settings.count)));
   const perTemplate = new Map<string, number>();
-  const chosen: Arm[] = [];
+  const chosen: ChosenArm[] = [];
+  const taken = new Set<string>();
+  const take = (arm: Arm, experiment?: { reason: string }) => {
+    perTemplate.set(arm.templateId, (perTemplate.get(arm.templateId) ?? 0) + 1);
+    taken.add(armKey(arm));
+    chosen.push(experiment ? { arm, experiment } : { arm });
+  };
+  const fits = (arm: Arm) => !taken.has(armKey(arm)) && (perTemplate.get(arm.templateId) ?? 0) < maxPerTemplate;
+
   for (const { arm } of scored) {
-    if (chosen.length >= settings.count) break;
-    const n = perTemplate.get(arm.templateId) ?? 0;
-    if (n >= maxPerTemplate) continue;
-    perTemplate.set(arm.templateId, n + 1);
-    chosen.push(arm);
+    if (chosen.length >= settings.count - nExperiments) break;
+    if (fits(arm)) take(arm);
+  }
+  if (nExperiments) {
+    const means = candidates.map((arm) => ({ arm, mean: model.mean(arm) }));
+    const best = Math.max(...means.map((m) => m.mean));
+    // Optimistic exploration: the arm that could plausibly be best (mean + 1.5 sd), not merely the
+    // most uncertain one. Pure-uncertainty picks spent experiments on arms that were rarely worth it.
+    const exploratory = means
+      .filter((m) => m.mean >= best - PLAUSIBLE_GAP)
+      .map((m) => ({ arm: m.arm, upper: m.mean + UCB_Z * model.sd(m.arm) }))
+      .sort((a, b) => b.upper - a.upper);
+    for (const { arm } of exploratory) {
+      if (chosen.length >= settings.count) break;
+      if (fits(arm)) take(arm, { reason: model.experimentReason(arm) });
+    }
   }
   // If constraints left us short (tiny template list), fill with the best remaining arms.
   for (const { arm } of scored) {
     if (chosen.length >= settings.count) break;
-    if (!chosen.includes(arm)) chosen.push(arm);
+    if (!taken.has(armKey(arm))) take(arm);
   }
   return chosen;
 }

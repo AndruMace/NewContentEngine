@@ -105,7 +105,7 @@ export function pickTeams(pool: Team[], n: number, rng: Rng): Team[] {
 }
 
 /** Draw a team ball: flag filling the ball (or colour + initial), team-colour rim, glossy highlight. */
-export function drawTeamBall(ctx: Ctx2D, x: number, y: number, r: number, team: Team, fontFamily: string) {
+export function drawTeamBall(ctx: Ctx2D, x: number, y: number, r: number, team: Team, fontFamily: string, opts: { initial?: boolean } = {}) {
   ctx.save();
   ctx.fillStyle = team.color;
   ctx.beginPath();
@@ -119,7 +119,7 @@ export function drawTeamBall(ctx: Ctx2D, x: number, y: number, r: number, team: 
     ctx.font = `${Math.round(r * 2.9)}px ${fontFamily}`;
     ctx.fillText(team.icon, x, y + r * 0.12);
     ctx.restore();
-  } else {
+  } else if (opts.initial !== false) {
     ctx.font = `900 ${Math.round(r * 0.95)}px ${fontFamily}`;
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillText(team.label[0], x, y + r * 0.05);
@@ -139,4 +139,101 @@ export function drawTeamBall(ctx: Ctx2D, x: number, y: number, r: number, team: 
   ctx.arc(x - r * 0.35, y - r * 0.38, r * 0.2, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+}
+
+/** A broken-off piece of a team ball (visual only). */
+export interface Shard {
+  /** Polygon around the shard's pivot (flat x,y pairs). */
+  pts: number[];
+  /** Where the ball's centre sits relative to the pivot, so the flag/colour lines up. */
+  bx: number;
+  by: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  rot: number;
+  vr: number;
+  life: number;
+  maxLife: number;
+  r: number;
+  team: Team;
+}
+
+/** Break a team ball into n jagged wedges flying outward. */
+export function shatter(list: Shard[], rng: Rng, x: number, y: number, r: number, team: Team, n = 12, power = 560) {
+  const cuts = Array.from({ length: n }, (_, k) => ((k + rng.range(-0.35, 0.35)) / n) * Math.PI * 2).sort((a, b) => a - b);
+  const cx = rng.range(-0.22, 0.22) * r;
+  const cy = rng.range(-0.22, 0.22) * r;
+  for (let k = 0; k < n; k++) {
+    const a0 = cuts[k];
+    const a1 = k + 1 < n ? cuts[k + 1] : cuts[0] + Math.PI * 2;
+    const poly: number[] = [cx, cy];
+    const steps = 3;
+    for (let j = 0; j <= steps; j++) {
+      const a = a0 + ((a1 - a0) * j) / steps;
+      const rr = r * (j === 0 || j === steps ? 1 : rng.range(0.97, 1.02));
+      poly.push(dm.cos(a) * rr, dm.sin(a) * rr);
+    }
+    let gx = 0;
+    let gy = 0;
+    for (let i = 0; i < poly.length; i += 2) {
+      gx += poly[i];
+      gy += poly[i + 1];
+    }
+    gx /= poly.length / 2;
+    gy /= poly.length / 2;
+    const d = Math.sqrt(gx * gx + gy * gy) || 1;
+    const v = power * rng.range(0.5, 1.15);
+    const life = rng.range(1.1, 1.7);
+    list.push({
+      pts: poly.map((p, i) => p - (i % 2 ? gy : gx)),
+      bx: -gx,
+      by: -gy,
+      x: x + gx,
+      y: y + gy,
+      vx: (gx / d) * v + rng.range(-80, 80),
+      vy: (gy / d) * v + rng.range(-80, 80) - 120,
+      rot: 0,
+      vr: rng.range(-9, 9),
+      life,
+      maxLife: life,
+      r,
+      team,
+    });
+  }
+}
+
+export function updateShards(list: Shard[], dt: number, gravity: number): Shard[] {
+  for (const s of list) {
+    s.vy += gravity * dt;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    s.vx *= 1 - 0.6 * dt;
+    s.rot += s.vr * dt;
+    s.life -= dt;
+  }
+  return list.some((s) => s.life <= 0) ? list.filter((s) => s.life > 0) : list;
+}
+
+export function drawShards(ctx: Ctx2D, list: Shard[], fontFamily: string) {
+  for (const s of list) {
+    const a = Math.min(1, s.life / (s.maxLife * 0.45));
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.rot);
+    ctx.beginPath();
+    ctx.moveTo(s.pts[0], s.pts[1]);
+    for (let i = 2; i < s.pts.length; i += 2) ctx.lineTo(s.pts[i], s.pts[i + 1]);
+    ctx.closePath();
+    ctx.save();
+    ctx.clip();
+    drawTeamBall(ctx, s.bx, s.by, s.r, s.team, fontFamily, { initial: false });
+    ctx.restore();
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.stroke();
+    ctx.restore();
+  }
 }

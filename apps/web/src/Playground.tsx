@@ -48,6 +48,7 @@ export function Playground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const template = getTemplate(recipe.templateId);
   const schema = useMemo(() => paramsJsonSchema(template) as { properties: Record<string, any> }, [template]);
+  const changedParams = Object.entries(recipe.params).filter(([k, v]) => k in schema.properties && v !== schema.properties[k].default).length;
   const player = usePlayer(canvasRef, recipe, muted, volume);
   const searchBudget = template.searchBudget ?? 400;
   const update = (patch: Partial<Recipe>) => setRecipe((r) => ({ ...r, ...patch }));
@@ -181,8 +182,16 @@ export function Playground() {
         </section>
 
         <section>
-          <h3>
-            Parameters <button className="link" onClick={() => update({ params: {} })}>reset</button>
+          <h3 className="params-head">
+            Parameters
+            <button
+              className="small reset-params"
+              disabled={changedParams === 0}
+              title={changedParams ? `Put ${changedParams === 1 ? 'the changed parameter' : `all ${changedParams} changed parameters`} back to the template's defaults` : 'All parameters are at their defaults'}
+              onClick={() => update({ params: {} })}
+            >
+              ↺ Reset to defaults{changedParams ? ` (${changedParams})` : ''}
+            </button>
           </h3>
           <ParamControls schema={schema} values={recipe.params} onChange={(params) => update({ params })} />
         </section>

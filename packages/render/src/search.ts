@@ -5,6 +5,8 @@ import { getTemplate } from '@sim/templates';
 export interface SeedResult {
   seed: number;
   total: number;
+  /** Drama sub-scores (template-specific keys). */
+  parts: Record<string, number>;
   durationS: number;
   timedOut: boolean;
   notes: string[];
@@ -20,7 +22,15 @@ export function searchSeeds(recipe: Recipe, opts: { count: number; targetS: numb
   for (let seed = start; seed < start + opts.count; seed++) {
     const r = new Runner(template, { seed, params: recipe.params, theme, melody, visual: false }).runToEnd();
     const score = r.score(opts.targetS);
-    results.push({ seed, total: score.total, durationS: r.durationS, timedOut: r.timedOut, notes: score.notes ?? [] });
+    results.push({ seed, total: score.total, parts: score.parts, durationS: r.durationS, timedOut: r.timedOut, notes: score.notes ?? [] });
   }
   return results.sort((a, b) => b.total - a.total);
+}
+
+/** Re-simulate one recipe headlessly and score it (deterministic, so this matches the rendered video). */
+export function scoreRecipe(recipe: Recipe, targetS: number): { total: number; parts: Record<string, number>; durationS: number; timedOut: boolean } {
+  const template = getTemplate(recipe.templateId);
+  const r = new Runner(template, { seed: recipe.seed, params: recipe.params, theme: getTheme(recipe.themeId), melody: getMelody(recipe.melodyId), visual: false }).runToEnd();
+  const score = r.score(targetS);
+  return { total: score.total, parts: score.parts, durationS: r.durationS, timedOut: r.timedOut };
 }

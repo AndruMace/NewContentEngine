@@ -32,9 +32,19 @@ export interface RenderPageResult {
   audioMs: number;
 }
 
+/**
+ * Send a file to the harness in 4 MB pieces. Playwright sees request bodies through the DevTools
+ * protocol, where binary bytes are escaped (up to 6 characters each); a single ~90 MB video upload
+ * produced a message longer than Node's maximum string length and crashed the render process.
+ */
+const UPLOAD_CHUNK = 4 * 1024 * 1024;
+
 async function upload(name: string, data: ArrayBuffer | string) {
-  const res = await fetch(`upload?name=${encodeURIComponent(name)}`, { method: 'POST', body: data });
-  if (!res.ok) throw new Error(`upload ${name} failed: ${res.status}`);
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
+  for (let off = 0; off === 0 || off < bytes.length; off += UPLOAD_CHUNK) {
+    const res = await fetch(`upload?name=${encodeURIComponent(name)}${off ? '&append=1' : ''}`, { method: 'POST', body: bytes.subarray(off, off + UPLOAD_CHUNK) });
+    if (!res.ok) throw new Error(`upload ${name} failed: ${res.status}`);
+  }
 }
 
 async function loadFonts() {

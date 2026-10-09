@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Playground } from './Playground';
 import { ReviewPage } from './ReviewPage';
+import { AnalyticsPage } from './AnalyticsPage';
 
-type Route = 'playground' | 'review';
-const routeFromHash = (): Route => (location.hash === '#/review' ? 'review' : 'playground');
+type Route = 'playground' | 'review' | 'analytics';
+const routeFromHash = (): Route => (location.hash.startsWith('#/review') ? 'review' : location.hash.startsWith('#/analytics') ? 'analytics' : 'playground');
 
 export function App() {
   const [route, setRoute] = useState<Route>(routeFromHash);
@@ -23,12 +24,12 @@ export function App() {
           <a className={`tab${route === 'review' ? ' active' : ''}`} href="#/review">
             Batches &amp; Review
           </a>
-          <span className="tab disabled" title="Phase 5">
+          <a className={`tab${route === 'analytics' ? ' active' : ''}`} href="#/analytics">
             Analytics
-          </span>
+          </a>
         </nav>
       </header>
-      {route === 'playground' ? <Playground /> : <ReviewPage />}
+      {route === 'playground' ? <Playground /> : route === 'review' ? <ReviewPage /> : <AnalyticsPage />}
     </div>
   );
 }

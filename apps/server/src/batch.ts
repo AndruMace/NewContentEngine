@@ -3,10 +3,10 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { Rng, type Recipe } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
-import { armKey, claudeAvailable, coerceParams, planConcepts, type Concept } from '@sim/planner';
+import { claudeAvailable, coerceParams, planConcepts, type Concept } from '@sim/planner';
+import { copyFeatures } from '@sim/analytics';
 import {
   activeBatches,
-  armStats,
   conceptsForBatch,
   getBatch,
   insertBatch,
@@ -23,6 +23,8 @@ import {
 } from './db';
 import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
+import { refreshYouTube, youtubeStatus } from './youtube';
+import { lastPostedAt, planningModel, predictInput, refitLearner } from './analytics';
 
 const TERMINAL = new Set(['ready', 'failed', 'cancelled', 'deleted']);
 
@@ -123,6 +125,16 @@ export class BatchRunner extends EventEmitter {
     if (missing <= 0) return;
     this.setStatus(batchId, 'planning');
     const s = batch.settings;
+    // Learn from the latest numbers before planning (fresh batches only; bounded so it never stalls the morning run).
+    if (!existing.length && youtubeStatus().connected) {
+      try {
+        const r = await refreshYouTube({ deadline: Date.now() + 20_000 });
+        refitLearner();
+        if (r.errors.length) this.warn(batchId, `Some YouTube stats didn't refresh: ${r.errors[0]}${r.errors.length > 1 ? ` (+${r.errors.length - 1} more)` : ''}`);
+      } catch (e) {
+        this.warn(batchId, `YouTube stats not refreshed: ${(e as Error).message}`);
+      }
+    }
     let generator: 'claude' | 'fallback' | 'mock' = s.useClaude ? 'claude' : 'fallback';
     if (process.env.SIM_PLANNER === 'mock') generator = 'mock';
     if (generator === 'claude' && !claudeAvailable()) {
@@ -131,8 +143,17 @@ export class BatchRunner extends EventEmitter {
     }
     let idx = existing.length;
     await planConcepts(
-      { count: missing, templateIds: s.templateIds, themeIds: s.themeIds, minLengthS: s.minLengthS, maxLengthS: s.maxLengthS, generator, seed: hashSeed(batchId) + existing.length },
-      armStats(),
+      {
+        count: missing,
+        templateIds: s.templateIds,
+        themeIds: s.themeIds,
+        minLengthS: s.minLengthS,
+        maxLengthS: s.maxLengthS,
+        lastPostedAt: lastPostedAt(),
+        generator,
+        seed: hashSeed(batchId) + existing.length,
+      },
+      planningModel(),
       { recentHooks: recentHooks(), notes: s.notes || undefined },
       (planned) => {
         if (this.cancelled.has(batchId)) return;
@@ -175,7 +196,9 @@ export class BatchRunner extends EventEmitter {
       } else concept = c.concept;
     }
     const best = results[0];
-    const prior = armPrior(concept);
+    // Rank by what the learner expects of this exact candidate (its real length, drama and copy);
+    // until the model is steering, by drama score alone.
+    const prediction = predictInput({ arm: concept.arm, melodyId: concept.melodyId, durationS: best.durationS, drama: best.total, copy: copyFeatures(concept.copy) });
     const row = insertRender({
       batchId,
       conceptId: c.id,
@@ -183,9 +206,10 @@ export class BatchRunner extends EventEmitter {
       recipe: recipeFor(concept, best.seed),
       copy: concept.copy,
       score: best.total,
-      scoreParts: null,
+      scoreParts: best.parts ?? null,
       altSeeds: results.slice(1, 8).filter((r) => !r.timedOut).map((r) => r.seed),
-      rankScore: best.total * prior,
+      rankScore: prediction ? prediction.mean : best.total,
+      prediction,
     });
     // Cancelled while this search was running: keep the result for reference, don't render it.
     if (this.cancelled.has(batchId)) updateRender(row.id, { status: 'cancelled' });
@@ -251,12 +275,6 @@ export class BatchRunner extends EventEmitter {
     s += unsearched * (avgLen * k + 3);
     return Math.round(s);
   }
-}
-
-function armPrior(concept: Concept): number {
-  const s = armStats().get(armKey(concept.arm));
-  // Mean of the Beta posterior, scaled so the flat prior is 1.
-  return s ? (2 * s.alpha) / (s.alpha + s.beta) : 1;
 }
 
 export function hashSeed(s: string): number {

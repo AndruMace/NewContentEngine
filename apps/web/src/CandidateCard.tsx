@@ -119,6 +119,8 @@ function Posts({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewItem) =
   );
 }
 
+const fmtSigned = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
+
 export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; rank: number; onChanged: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -170,8 +172,23 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
           <span className="tname">{template.name}</span>
           {item.score !== null && <span className="badge score-badge">drama {Math.round(item.score * 100)}</span>}
           {item.qc && <span className={`badge ${item.qc.pass ? 'ok-badge' : 'warn-badge'}`} title={item.qc.problems.join('; ')}>{item.qc.pass ? 'QC ✓' : 'QC ✗'}</span>}
+          {item.concept?.experiment && (
+            <span className="badge exp-badge" title={`${item.concept.experiment.reason}. Experiments test choices the channel has little data on, so approving some of them keeps the learning honest.`}>
+              Experiment
+            </span>
+          )}
           {item.decision !== 'pending' && <span className={`badge decision ${item.decision}`}>{item.decision}</span>}
         </div>
+        {(item.prediction || item.concept?.experiment) && (
+          <p className="prediction">
+            {item.prediction && (
+              <span title="What the learner expects from this video, in typical post-to-post swings relative to your channel's average. ± is its uncertainty.">
+                Predicted <b className={item.prediction.mean >= 0 ? 'pos' : 'neg'}>{fmtSigned(item.prediction.mean)}</b> ± {item.prediction.sd.toFixed(1)} vs your average
+              </span>
+            )}
+            {item.concept?.experiment && <span className="hint"> {item.prediction ? '· ' : ''}{item.concept.experiment.reason}</span>}
+          </p>
+        )}
         <p className="hook">“{item.copy?.hook ?? item.recipe.copy?.hook ?? template.defaultCopy.hook}”</p>
         {item.copy && (
           <div className="post-preview" title="What gets published">

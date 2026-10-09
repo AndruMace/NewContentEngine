@@ -19,7 +19,7 @@ export function reviewItem(r: RenderRow) {
   return {
     ...r,
     files: r.dir ? { final: join(r.dir, 'final.mp4'), cover: join(r.dir, 'cover.jpg'), contact: join(r.dir, 'contact.jpg') } : null,
-    concept: c ? { arm: c.arm, source: c.source, rationale: c.rationale ?? null, targetS: c.targetS } : null,
+    concept: c ? { arm: c.arm, source: c.source, rationale: c.rationale ?? null, targetS: c.targetS, experiment: c.experiment ?? null } : null,
     platformText: r.copy ? platformText(r.copy) : null,
     export: ex ? { id: ex.id, dir: ex.dir, createdAt: ex.createdAt } : null,
     posts: postsForRender(r.id),

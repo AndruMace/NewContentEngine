@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Rng } from '@sim/engine';
-import { chooseArms, targetLength, type Arm, type ArmChoiceSettings, type ArmStats } from './arms';
+import { chooseArms, targetLength, type Arm, type ArmChoiceSettings, type ArmModel } from './arms';
 import { conceptFromClaude, conceptFromMock, PlannerRefusal, type PlanContext } from './claude';
-import { fallbackConcept, type Concept } from './concept';
+import { TITLE_EMOJI_SHARE, fallbackConcept, type Concept } from './concept';
 
 export * from './arms';
 export * from './concept';
@@ -30,10 +30,12 @@ export async function planOne(
   rng: Rng,
   client?: Anthropic,
 ): Promise<PlannedConcept> {
-  if (generator === 'mock') return { concept: conceptFromMock(arm, targetS, rng) };
+  // Decided up front (seeded) so most titles lead with an emoji and the rest form a comparison group.
+  const titleEmoji = rng.chance(TITLE_EMOJI_SHARE);
+  if (generator === 'mock') return { concept: conceptFromMock(arm, targetS, rng, { titleEmoji }) };
   if (generator === 'claude' && client) {
     try {
-      return { concept: await conceptFromClaude(client, arm, targetS, ctx) };
+      return { concept: await conceptFromClaude(client, arm, targetS, ctx, { titleEmoji, rng }) };
     } catch (e) {
       const reason =
         e instanceof PlannerRefusal
@@ -45,22 +47,22 @@ export async function planOne(
               : e instanceof Anthropic.APIError
                 ? `API error ${e.status}`
                 : (e as Error).message;
-      return { concept: fallbackConcept(arm, targetS, rng), warning: `Claude unavailable for this concept (${reason}); used template copy.` };
+      return { concept: fallbackConcept(arm, targetS, rng, { titleEmoji }), warning: `Claude unavailable for this concept (${reason}); used template copy.` };
     }
   }
-  return { concept: fallbackConcept(arm, targetS, rng) };
+  return { concept: fallbackConcept(arm, targetS, rng, { titleEmoji }) };
 }
 
 /** Choose arms and plan their concepts, at most `concurrency` API calls at a time. */
 export async function planConcepts(
   settings: ArmChoiceSettings & { generator: Generator; seed: number },
-  stats: Map<string, ArmStats>,
+  model: ArmModel,
   ctx: PlanContext,
   onConcept?: (p: PlannedConcept, index: number) => void | Promise<void>,
   concurrency = 4,
 ): Promise<PlannedConcept[]> {
   const rng = new Rng(settings.seed);
-  const arms = chooseArms(settings, stats, rng);
+  const arms = chooseArms(settings, model, rng);
   const client = settings.generator === 'claude' && claudeAvailable() ? new Anthropic() : undefined;
   const results: PlannedConcept[] = new Array(arms.length);
   let next = 0;
@@ -68,8 +70,10 @@ export async function planConcepts(
     while (next < arms.length) {
       const i = next++;
       const armRng = new Rng(settings.seed + 1000 + i);
-      const target = targetLength(arms[i].lengthBucket, settings.minLengthS, settings.maxLengthS, armRng);
-      results[i] = await planOne(arms[i], target, settings.generator, ctx, armRng, client);
+      const { arm, experiment } = arms[i];
+      const target = targetLength(arm.lengthBucket, settings.minLengthS, settings.maxLengthS, armRng);
+      results[i] = await planOne(arm, target, settings.generator, ctx, armRng, client);
+      if (experiment) results[i].concept.experiment = experiment;
       await onConcept?.(results[i], i);
     }
   };

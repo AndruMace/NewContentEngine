@@ -7,3 +7,4 @@ data/exports/
 *.log
 .DS_Store
 data/sqlite.db*
+data/youtube-token.json

@@ -4,7 +4,7 @@ import type { Rng } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 import type { Arm } from './arms';
-import { coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, normalizeCopy, type Concept } from './concept';
+import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, normalizeCopy, type Concept } from './concept';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
 
@@ -44,13 +44,24 @@ const ResponseShape = z.object({
   rationale: z.string().default(''),
 });
 
-function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, previousError?: string): string {
+export interface ConceptOptions {
+  /** Lead the title with an emoji (true) or not (false). */
+  titleEmoji: boolean;
+}
+
+const titleEmojiGuide = (lead: boolean) =>
+  lead
+    ? 'Title: start it with one attention-grabbing emoji that fits this video\'s moment (e.g. 🤯 for a satisfying fill, 😱 for a close finish, 🏁 for a race). Pick what fits; don\'t default to the same one every time.'
+    : 'Title: do not start it with an emoji this time (emoji later in the title are fine).';
+
+function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOptions, previousError?: string): string {
   const template = getTemplate(arm.templateId);
   return [
     describeTemplate(template),
     '',
     `Theme: ${arm.themeId}. Target length: about ${targetS} seconds.`,
     `Hook style: ${arm.hookStyle}. ${hookStyleGuide(arm)}`,
+    titleEmojiGuide(opts.titleEmoji),
     `Available melodies (public domain): ${MELODIES.map((m) => `${m.id} (${m.title})`).join(', ')}.`,
     ctx.recentHooks.length ? `Recent hooks to avoid repeating:\n${ctx.recentHooks.slice(0, 20).map((h) => `- ${h}`).join('\n')}` : '',
     ctx.performanceSummary ? `What has been performing:\n${ctx.performanceSummary}` : '',
@@ -62,8 +73,10 @@ function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, previousError?:
 }
 
 /** Turn a raw structured-output object into a validated Concept (throws with a readable reason). */
-export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, source: Concept['source']): Concept {
+export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, source: Concept['source'], opts?: ConceptOptions & { rng: Rng }): Concept {
   const r = ResponseShape.parse(raw);
+  // Enforce the planned title style even if the model didn't follow it, so the analytics compare cleanly.
+  if (opts) r.title = applyTitleEmoji(r.title, opts.titleEmoji, arm.templateId, opts.rng);
   const template = getTemplate(arm.templateId);
   const melodyId = MELODIES.some((m) => m.id === r.melodyId) ? r.melodyId : MELODIES[0].id;
   return {
@@ -75,6 +88,7 @@ export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, sou
     targetS,
     source,
     rationale: r.rationale,
+    ...(opts ? { titleEmoji: opts.titleEmoji } : {}),
     copy: normalizeCopy(r),
   };
 }
@@ -82,7 +96,7 @@ export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, sou
 export class PlannerRefusal extends Error {}
 
 /** One concept from Claude (structured output), validated, with up to 2 corrective retries. */
-export async function conceptFromClaude(client: Anthropic, arm: Arm, targetS: number, ctx: PlanContext): Promise<Concept> {
+export async function conceptFromClaude(client: Anthropic, arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOptions & { rng: Rng }): Promise<Concept> {
   const template = getTemplate(arm.templateId);
   const schema = conceptOutputSchema(template);
   let lastError: string | undefined;
@@ -94,7 +108,7 @@ export async function conceptFromClaude(client: Anthropic, arm: Arm, targetS: nu
       fallbacks: 'default',
       system: SYSTEM,
       output_config: { effort: 'medium', format: { type: 'json_schema', schema } },
-      messages: [{ role: 'user', content: userPrompt(arm, targetS, ctx, lastError) }],
+      messages: [{ role: 'user', content: userPrompt(arm, targetS, ctx, opts, lastError) }],
     });
     if (response.stop_reason === 'refusal') throw new PlannerRefusal(`declined (${response.stop_details?.category ?? 'unknown'})`);
     if (response.stop_reason === 'max_tokens') {
@@ -103,7 +117,7 @@ export async function conceptFromClaude(client: Anthropic, arm: Arm, targetS: nu
     }
     const text = response.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
     try {
-      return conceptFromResponse(JSON.parse(text), arm, targetS, 'claude');
+      return conceptFromResponse(JSON.parse(text), arm, targetS, 'claude', opts);
     } catch (e) {
       lastError = e instanceof z.ZodError ? e.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') : (e as Error).message;
     }
@@ -115,8 +129,8 @@ export async function conceptFromClaude(client: Anthropic, arm: Arm, targetS: nu
  * Offline stand-in for Claude used by dry runs and tests: builds a plausible structured-output
  * object (including out-of-range values) and sends it through the same validation path.
  */
-export function conceptFromMock(arm: Arm, targetS: number, rng: Rng): Concept {
-  const base = fallbackConcept(arm, targetS, rng);
+export function conceptFromMock(arm: Arm, targetS: number, rng: Rng, opts: ConceptOptions = { titleEmoji: true }): Concept {
+  const base = fallbackConcept(arm, targetS, rng, opts);
   const raw = {
     params: { ...base.params, __unknown: 1, ...firstNumericOutOfRange(arm.templateId) },
     melodyId: base.melodyId,
@@ -129,7 +143,7 @@ export function conceptFromMock(arm: Arm, targetS: number, rng: Rng): Concept {
     hashtags: ['#satisfying', 'oddly satisfying', 'mock'],
     rationale: 'mock response',
   };
-  return conceptFromResponse(raw, arm, targetS, 'mock');
+  return conceptFromResponse(raw, arm, targetS, 'mock', { ...opts, rng });
 }
 
 /** Exercise clamping: push the first numeric param far out of range. */

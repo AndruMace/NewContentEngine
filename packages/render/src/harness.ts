@@ -73,7 +73,8 @@ export class RenderHarness {
         }
         const chunks: Buffer[] = [];
         for await (const chunk of req) chunks.push(chunk as Buffer);
-        await writeFile(join(job.outDir, name), Buffer.concat(chunks));
+        // Uploads arrive in pieces (see page/main.ts): the first piece creates the file, the rest append.
+        await writeFile(join(job.outDir, name), Buffer.concat(chunks), { flag: url.searchParams.get('append') ? 'a' : 'w' });
         res.writeHead(200).end('ok');
       } else res.writeHead(404).end();
     });

@@ -1,15 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, paramsJsonSchema } from '@sim/engine';
 import { TEMPLATES, getTemplate } from '@sim/templates';
-import { LIMITS, chooseArms, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText } from './index';
+import { LIMITS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText } from './index';
 
 describe('arm selection', () => {
   it('spreads arms across templates and respects the filters', () => {
-    const arms = chooseArms({ count: 9, templateIds: [], themeIds: ['neon-dark', 'sunset'], minLengthS: 20, maxLengthS: 45 }, new Map(), new Rng(1));
+    const arms = chooseArms({ count: 9, templateIds: [], themeIds: ['neon-dark', 'sunset'], minLengthS: 20, maxLengthS: 45 }, flatArmModel, new Rng(1)).map((c) => c.arm);
     expect(arms).toHaveLength(9);
     expect(new Set(arms.map((a) => a.templateId)).size).toBeGreaterThanOrEqual(5);
     expect(arms.every((a) => ['neon-dark', 'sunset'].includes(a.themeId))).toBe(true);
-    expect(chooseArms({ count: 4, templateIds: [], themeIds: [], minLengthS: 15, maxLengthS: 24 }, new Map(), new Rng(2)).every((a) => a.lengthBucket === 'short')).toBe(true);
+    expect(chooseArms({ count: 4, templateIds: [], themeIds: [], minLengthS: 15, maxLengthS: 24 }, flatArmModel, new Rng(2)).every((c) => c.arm.lengthBucket === 'short')).toBe(true);
+  });
+
+  it('runs no experiments until the model is ready', () => {
+    expect(chooseArms({ count: 9, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45 }, flatArmModel, new Rng(3)).some((c) => c.experiment)).toBe(false);
+  });
+
+  it('reserves experiment slots for uncertain arms and boosts stale templates once ready', () => {
+    // A confident model that loves ring-escape and knows nothing about sand-pour.
+    const model: ArmModel = {
+      ready: true,
+      sample: () => (arm) => (arm.templateId === 'ring-escape' ? 1 : 0),
+      mean: (arm) => (arm.templateId === 'ring-escape' ? 1 : 0.2),
+      sd: (arm) => (arm.templateId === 'sand-pour' ? 0.9 : 0.1),
+      experimentReason: (arm) => `Testing ${arm.templateId}`,
+    };
+    const chosen = chooseArms({ count: 9, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45 }, model, new Rng(4));
+    const exps = chosen.filter((c) => c.experiment);
+    expect(chosen).toHaveLength(9);
+    expect(exps.length).toBe(2);
+    expect(exps.every((c) => c.arm.templateId === 'sand-pour' && c.experiment!.reason === 'Testing sand-pour')).toBe(true);
+    // Diversity still holds: ring-escape can't take every exploit slot.
+    expect(chosen.filter((c) => c.arm.templateId === 'ring-escape').length).toBeLessThanOrEqual(2);
+
+    const now = Date.now();
+    const lastPostedAt = Object.fromEntries(TEMPLATES.map((t) => [t.id, now]));
+    lastPostedAt['marble-race'] = now - 30 * 86_400_000;
+    const flatish: ArmModel = { ...model, sample: () => () => 0, mean: () => 0, sd: () => 0.1 };
+    const withStale = chooseArms({ count: 3, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45, lastPostedAt, now }, flatish, new Rng(5));
+    expect(withStale[0].arm.templateId).toBe('marble-race');
   });
 });
 
@@ -51,7 +80,7 @@ describe('concepts', () => {
   it('plans a full batch offline with the mock generator', async () => {
     const planned = await planConcepts(
       { count: 6, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45, generator: 'mock', seed: 11 },
-      new Map(),
+      flatArmModel,
       { recentHooks: [] },
     );
     expect(planned).toHaveLength(6);
@@ -82,5 +111,36 @@ describe('copy hygiene', () => {
     expect(c.youtubeDescription).toBe('Eight marbles race to the bottom');
     // Normal words containing "ai" are untouched.
     expect(normalizeCopy({ ...c, tiktokCaption: 'raining sand #rain' }).tiktokCaption).toBe('raining sand #rain');
+  });
+});
+
+describe('title emoji', () => {
+  const arm = { templateId: 'sand-pour', themeId: 'sunset', lengthBucket: 'medium' as const, hookStyle: 'question' as const };
+
+  it('adds, keeps or strips a leading emoji', () => {
+    const rng = new Rng(1);
+    expect(startsWithEmoji(applyTitleEmoji('How many grains will it take?!', true, 'sand-pour', rng))).toBe(true);
+    expect(applyTitleEmoji('🤯 How many grains will it take?!', true, 'sand-pour', rng)).toBe('🤯 How many grains will it take?!');
+    expect(applyTitleEmoji('🤯😱 How many grains?', false, 'sand-pour', rng)).toBe('How many grains?');
+    expect(applyTitleEmoji('⚔️ Sword fight', false, 'ball-battle', rng)).toBe('Sword fight');
+    expect(applyTitleEmoji('🇧🇷 Brazil wins?', false, 'marble-race', rng)).toBe('Brazil wins?');
+    expect(applyTitleEmoji('Grains 🤯', false, 'sand-pour', rng)).toBe('Grains 🤯');
+  });
+
+  it('leads most titles with an emoji and keeps a comparison group', async () => {
+    let withEmoji = 0;
+    for (let i = 0; i < 200; i++) {
+      const { concept } = await planOne(arm, 30, 'fallback', { recentHooks: [] }, new Rng(i));
+      expect(startsWithEmoji(concept.copy.title)).toBe(concept.titleEmoji);
+      if (concept.titleEmoji) withEmoji++;
+    }
+    expect(withEmoji).toBeGreaterThan(130);
+    expect(withEmoji).toBeLessThan(170);
+  });
+
+  it("enforces the plan when the model doesn't follow it", () => {
+    const raw = { params: {}, melodyId: 'ode-to-joy', hook: 'Wait for it', cta: 'Which color?', title: 'How many grains will it take?!', youtubeDescription: '', tiktokCaption: 'Watch the sand', xPost: 'Watch the sand', hashtags: ['#sand'], rationale: '' };
+    expect(startsWithEmoji(conceptFromResponse(raw, arm, 30, 'claude', { titleEmoji: true, rng: new Rng(2) }).copy.title)).toBe(true);
+    expect(conceptFromResponse({ ...raw, title: '🤯 How many grains will it take?!' }, arm, 30, 'claude', { titleEmoji: false, rng: new Rng(2) }).copy.title).toBe('How many grains will it take?!');
   });
 });

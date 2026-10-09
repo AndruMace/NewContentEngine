@@ -25,6 +25,10 @@ export interface Concept {
   copy: SocialCopy;
   source: 'claude' | 'fallback' | 'mock' | 'manual';
   rationale?: string;
+  /** Set when the learner chose this arm to test it rather than because it is expected to win. */
+  experiment?: { reason: string };
+  /** Whether the title was planned to lead with an emoji (most do; the rest are a comparison group). */
+  titleEmoji?: boolean;
 }
 
 export const LIMITS = { hook: 60, cta: 48, title: 90, tiktok: 300, x: 270, hashtags: 6 };
@@ -66,6 +70,34 @@ export function normalizeCopy(c: SocialCopy): SocialCopy {
     xPost: clip(stripBlockedTags(c.xPost), LIMITS.x),
     hashtags: tags,
   };
+}
+
+/** Share of titles that lead with an emoji. The rest keep a comparison group for the analytics. */
+export const TITLE_EMOJI_SHARE = 0.75;
+
+/** Fallback lead emoji per template, used when a title should lead with one but doesn't. */
+const TITLE_EMOJI: Record<string, string[]> = {
+  'ring-escape': ['😱', '🤯', '👀'],
+  'marble-race': ['🏁', '🔥', '😱'],
+  'ball-battle': ['⚔️', '🔥', '😤'],
+  'sand-pour': ['🤯', '😍', '✨'],
+  'liquid-mix': ['🌈', '🤯', '😍'],
+  polyrhythm: ['🎶', '🤯', '✨'],
+  'sorting-race': ['🏁', '🤓', '👀'],
+  'grow-until-full': ['😱', '🫧', '👀'],
+};
+const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
+
+const LEADING_EMOJI = /^(?:[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}\u200d\ufe0f]+\s*)+/u;
+
+export const startsWithEmoji = (s: string) => /^[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(s.trim());
+
+/** Make a title lead with an emoji (keeping one that is already there) or not lead with one. */
+export function applyTitleEmoji(title: string, lead: boolean, templateId: string, rng: Rng): string {
+  const t = title.trim();
+  if (!lead) return t.replace(LEADING_EMOJI, '').trim() || t;
+  if (startsWithEmoji(t)) return t;
+  return clip(`${rng.pick(TITLE_EMOJI[templateId] ?? DEFAULT_TITLE_EMOJI)} ${t}`, LIMITS.title);
 }
 
 /** Final per-platform text files, ready to paste. */
@@ -134,7 +166,7 @@ const STYLE_HOOKS: Record<Arm['hookStyle'], (t: Template) => string> = {
  * Concept without an LLM: template defaults with gentle seeded variation, and copy from
  * fill-in templates. Used when there is no API key or the API fails.
  */
-export function fallbackConcept(arm: Arm, targetS: number, rng: Rng): Concept {
+export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { titleEmoji?: boolean } = {}): Concept {
   const template = getTemplate(arm.templateId);
   const schema = paramsJsonSchema(template) as { properties: Record<string, any> };
   const raw: Record<string, unknown> = {};
@@ -148,6 +180,7 @@ export function fallbackConcept(arm: Arm, targetS: number, rng: Rng): Concept {
   const melodyId = rng.pick(MELODIES).id;
   const name = template.name;
   const tags = ['satisfying', 'oddlysatisfying', 'asmr', 'physics', name.toLowerCase().replace(/\s+/g, '')];
+  const titleEmoji = opts.titleEmoji ?? rng.chance(TITLE_EMOJI_SHARE);
   return {
     arm,
     templateId: arm.templateId,
@@ -156,10 +189,11 @@ export function fallbackConcept(arm: Arm, targetS: number, rng: Rng): Concept {
     params,
     targetS,
     source: 'fallback',
+    titleEmoji,
     copy: normalizeCopy({
       hook: STYLE_HOOKS[arm.hookStyle](template),
       cta: template.defaultCopy.cta,
-      title: `${name} — oddly satisfying`,
+      title: applyTitleEmoji(`${name} — oddly satisfying`, titleEmoji, arm.templateId, rng),
       youtubeDescription: `${template.description}\nWatch till the end.`,
       tiktokCaption: `Wait for it… ${name.toLowerCase()} edition`,
       xPost: `${name} — watch till the end 👀`,
@@ -186,7 +220,7 @@ export function conceptOutputSchema(template: Template) {
       melodyId: { type: 'string', enum: MELODIES.map((m) => m.id) },
       hook: str(`On-screen hook shown in the first 2 seconds. Max ${LIMITS.hook} characters.`),
       cta: str(`On-screen call to action at the end. Max ${LIMITS.cta} characters.`),
-      title: str(`YouTube Shorts title without #Shorts. Max ${LIMITS.title} characters.`),
+      title: str(`YouTube Shorts title without #Shorts, following the request's instruction about a leading emoji. Max ${LIMITS.title} characters.`),
       youtubeDescription: str(
         'Published YouTube description, written to the viewer: 1-3 short lines saying what happens in this video, using words people search for (e.g. "marble race", "satisfying sand art"). No hashtags. Never mention retention, hooks, strategy or how it was made.',
       ),
