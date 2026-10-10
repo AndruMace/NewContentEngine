@@ -4,6 +4,7 @@
  */
 import { join } from 'node:path';
 import { scoreRecipe } from '@sim/render/search';
+import { findTemplate } from '@sim/templates';
 import { flatArmModel, type ArmModel } from '@sim/planner';
 import {
   DEFAULT_REWARD_WEIGHTS,
@@ -54,7 +55,8 @@ export function latestMetrics(renderId: string, platform: Platform): { metrics: 
 export function postFeatures(r: RenderRow): PostFeatures {
   const c = r.conceptId ? getConcept(r.conceptId)?.concept : undefined;
   const targetS = r.recipe.targetS ?? c?.targetS ?? 30;
-  const drama = scoreRecipe(r.recipe, targetS);
+  // Renders of a removed template can't be re-simulated; fall back to the score stored at render time.
+  const drama = findTemplate(r.recipe.templateId) ? scoreRecipe(r.recipe, targetS) : { total: r.score ?? 0.5, parts: r.scoreParts ?? {}, durationS: r.durationS ?? targetS };
   const arm = c?.arm ?? { templateId: r.recipe.templateId, themeId: r.recipe.themeId, lengthBucket: bucketFor(drama.durationS), hookStyle: 'question' as const };
   return {
     version: 1,

@@ -158,6 +158,16 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
     case 'tick':
       noiseBurst(bus, when, 0.025, dest, v * 0.5, 'highpass', 4000);
       break;
+    case 'clack': {
+      // Glass marbles knocking: a bright click, two inharmonic glassy pings and a little body knock.
+      // pitch 0..1 shifts it (smaller/harder hits sound higher).
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.018, dest, v * 0.9, 'bandpass', 5200 + p * 2500, 1.4);
+      osc(bus, 'sine', 2600 + p * 1400, when, when + 0.12, dest, v * 0.42, 0.0006, 0.07);
+      osc(bus, 'sine', 4100 + p * 1900, when, when + 0.08, dest, v * 0.26, 0.0006, 0.045);
+      osc(bus, 'triangle', 520 + p * 260, when, when + 0.08, dest, v * 0.3, 0.001, 0.04);
+      break;
+    }
     case 'pop': {
       const o = osc(bus, 'sine', 600, when, when + 0.15, dest, v * 0.5, 0.001, 0.1);
       o.frequency.exponentialRampToValueAtTime(140, when + 0.09);

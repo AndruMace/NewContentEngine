@@ -8,7 +8,6 @@ const melody = getMelody('ode-to-joy');
 
 /** Lighter settings for the heavy sims so the suite stays fast; determinism doesn't depend on size. */
 const TEST_PARAMS: Record<string, Record<string, unknown>> = {
-  'liquid-mix': { particles: 300, pourSeconds: 6, settleSeconds: 2 },
   'sand-pour': { fillSeconds: 10, cellSize: 8 },
 };
 

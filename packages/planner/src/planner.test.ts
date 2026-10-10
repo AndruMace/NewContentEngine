@@ -25,7 +25,10 @@ describe('arm selection', () => {
       sd: (arm) => (arm.templateId === 'sand-pour' ? 0.9 : 0.1),
       experimentReason: (arm) => `Testing ${arm.templateId}`,
     };
-    const chosen = chooseArms({ count: 9, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45 }, model, new Rng(4));
+    // A fixed template set so the per-template cap (ceil(9 / 5) = 2) doesn't depend on the catalog
+    // size; sand-pour last so the tied exploit slots don't use up its cap first.
+    const templateIds = ['ring-escape', 'marble-race', 'ball-battle', 'polyrhythm', 'sand-pour'];
+    const chosen = chooseArms({ count: 9, templateIds, themeIds: [], minLengthS: 20, maxLengthS: 45 }, model, new Rng(4));
     const exps = chosen.filter((c) => c.experiment);
     expect(chosen).toHaveLength(9);
     expect(exps.length).toBe(2);

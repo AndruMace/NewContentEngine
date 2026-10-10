@@ -105,7 +105,9 @@ export function targetLength(bucket: LengthBucket, minS: number, maxS: number, r
  * get a boost.
  */
 export function chooseArms(settings: ArmChoiceSettings, model: ArmModel, rng: Rng): ChosenArm[] {
-  const templates = settings.templateIds.length ? settings.templateIds : TEMPLATES.map((t) => t.id);
+  // Saved settings may name templates that have since been removed.
+  const known = settings.templateIds.filter((id) => TEMPLATES.some((t) => t.id === id));
+  const templates = known.length ? known : TEMPLATES.map((t) => t.id);
   const themes = settings.themeIds.length ? settings.themeIds : THEMES.map((t) => t.id);
   const buckets = allowedBuckets(settings.minLengthS, settings.maxLengthS);
   const styles = Object.keys(HOOK_STYLES) as HookStyle[];

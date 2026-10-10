@@ -95,6 +95,40 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  'territory-war': [
+    {
+      param: 'teams',
+      values: ['colors', 'countries'],
+      guide: {
+        colors: 'Teams: colors (fixed for this video). Territories and balls are named by colour (Red, Blue, Green…); don\'t mention countries or flags.',
+        countries:
+          'Teams: countries (fixed for this video). Each territory is a country with its flag showing across its tiles and on its balls (USA, Brazil, Japan, Germany…), and {winner} is a country name. Lean into friendly national rivalry: invite viewers to back their country. Keep it light, no politics.',
+      },
+    },
+  ],
+  'gravity-funnel': [
+    {
+      param: 'teams',
+      values: ['colors', 'countries'],
+      guide: {
+        colors: 'Teams: colors (fixed for this video). Marbles are named by colour (Red, Blue, Green…); don\'t mention countries or flags.',
+        countries:
+          'Teams: countries (fixed for this video). Every marble carries a national flag (USA, Brazil, Japan, Germany…), and {winner} is a country name. Lean into friendly national rivalry: invite viewers to back their country. Keep it light, no politics.',
+      },
+    },
+  ],
+  'snake-ai': [
+    {
+      param: 'ending',
+      values: ['filled', 'trapped'],
+      guide: {
+        filled:
+          'Ending: fixed for this video (the seed search picks a game that ends this way). Never hint at how it ends in the hook, title or captions; keep "will it make it?" open. The CTA may use {result}.',
+        trapped:
+          'Ending: fixed for this video (the seed search picks a game that ends this way). Never hint at how it ends in the hook, title or captions; keep "will it make it?" open. The CTA may use {result}.',
+      },
+    },
+  ],
 };
 
 /** Seeded choice of every planned variant for a template ({} when it has none, consuming no randomness). */
@@ -115,9 +149,12 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'marble-race': ['🏁', '🔥', '😱'],
   'ball-battle': ['⚔️', '🔥', '😤'],
   'sand-pour': ['🤯', '😍', '✨'],
-  'liquid-mix': ['🌈', '🤯', '😍'],
   polyrhythm: ['🎶', '🤯', '✨'],
   'sorting-race': ['🏁', '🤓', '👀'],
+  'territory-war': ['⚔️', '🗺️', '😱'],
+  'snake-ai': ['🐍', '😱', '🤯'],
+  'shell-escape': ['🤯', '💎', '😱'],
+  'gravity-funnel': ['🌀', '😱', '🔥'],
   'grow-until-full': ['😱', '🫧', '👀'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];

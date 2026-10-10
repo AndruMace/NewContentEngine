@@ -50,11 +50,14 @@ aren't approved or exported.
 | `ring-escape` | bounce | Ball escapes rotating rings with gaps; rings shatter; melody note per bounce |
 | `grow-until-full` | bounce | Ball grows on every bounce until it fills the circle; paint trail |
 | `marble-race` | race | Elimination (or finish-line) marble race on a procedural course; flags or colours |
-| `ball-battle` | race | Balls with spinning swords that grow on every hit; HP bars; last one standing |
+| `ball-battle` | race | Weapon balls (sword, daggers, hammer, bow) in a shrinking arena; FFA, teams, giant or bracket |
 | `polyrhythm` | kinetic | Arcs or pendulum wave; perfectly looping, all elements re-sync at the end |
 | `sorting-race` | kinetic | 2-4 sorting algorithms race on the same data with pitch-mapped tones |
 | `sand-pour` | particles | Falling-sand layers into a jar, heart, hourglass or Galton board (bell curve) |
-| `liquid-mix` | particles | Two or three coloured liquids pour into a glass/bowl and blend |
+| `territory-war` | race | 2-4 teams (colours or country flags) flip tiles with bouncing balls; live share bar; biggest territory wins |
+| `snake-ai` | kinetic | AI snake tries to fill the whole board; ends full or trapped a few cells short |
+| `shell-escape` | bounce | 3D: ball bounces inside nested spinning glass polyhedra; each shell shatters when it finds the window |
+| `gravity-funnel` | race | 3D: marbles (colours or flags) spiral down a coin-funnel; last one still spinning wins |
 
 Themes: Neon Dark, Pastel Minimal, Retro CRT, Monochrome Gold, Sunset, Deep Ocean.
 Melodies: 15 public-domain tunes (Beethoven, Mozart, Grieg, Bach, Pachelbel, Joplin, traditional).

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { THEMES, paramsJsonSchema, type Recipe } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
-import { TEMPLATES, getTemplate } from '@sim/templates';
+import { TEMPLATES, findTemplate, getTemplate } from '@sim/templates';
 import { ParamControls } from './ParamControls';
 import { usePlayer } from './usePlayer';
 import { useAnalysis } from './useAnalysis';
@@ -21,7 +21,9 @@ const DEFAULT_RECIPE: Recipe = {
 function loadSaved(): Recipe {
   try {
     const raw = localStorage.getItem('playground.recipe');
-    if (raw) return { ...DEFAULT_RECIPE, ...JSON.parse(raw) };
+    const saved = raw ? { ...DEFAULT_RECIPE, ...JSON.parse(raw) } : null;
+    // A saved recipe for a removed template falls back to the default.
+    if (saved && findTemplate(saved.templateId)) return saved;
   } catch {
     /* ignore */
   }

@@ -104,6 +104,38 @@ export function pickTeams(pool: Team[], n: number, rng: Rng): Team[] {
   return idx.slice(0, n).map((i) => pool[i]);
 }
 
+const rgbOf = (hex: string) => {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+
+/**
+ * Pick n teams whose colours are clearly different (for templates where team colour fills large
+ * areas, e.g. Territory War). Falls back to the closest-spaced remaining teams if the pool runs out.
+ */
+export function pickDistinctTeams(pool: Team[], n: number, rng: Rng, minDistance = 120): Team[] {
+  const order = pool.map((_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = rng.int(0, i);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  const dist = (a: Team, b: Team) => {
+    const [r1, g1, b1] = rgbOf(a.color);
+    const [r2, g2, b2] = rgbOf(b.color);
+    return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+  };
+  const chosen: Team[] = [];
+  for (const i of order) {
+    if (chosen.length === n) break;
+    if (chosen.every((c) => dist(c, pool[i]) >= minDistance)) chosen.push(pool[i]);
+  }
+  for (const i of order) {
+    if (chosen.length === n) break;
+    if (!chosen.includes(pool[i])) chosen.push(pool[i]);
+  }
+  return chosen;
+}
+
 /** Draw a team ball: flag filling the ball (or colour + initial), team-colour rim, glossy highlight. */
 export function drawTeamBall(ctx: Ctx2D, x: number, y: number, r: number, team: Team, fontFamily: string, opts: { initial?: boolean } = {}) {
   ctx.save();

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getTemplate } from '@sim/templates';
+import { findTemplate } from '@sim/templates';
 import { SOURCE_INFO, api, formatBytes, previewVolume, type LibraryEntry } from './api';
 
 type Group = 'all' | 'batch' | 'playground' | 'cli';
@@ -8,11 +8,7 @@ const when = (ms: number) =>
   new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 function templateName(id: string | undefined) {
-  try {
-    return id ? getTemplate(id).name : 'Unknown';
-  } catch {
-    return id ?? 'Unknown';
-  }
+  return id ? (findTemplate(id)?.name ?? id) : 'Unknown';
 }
 
 function LibraryCard({ e, onOpenBatch, onDeleted }: { e: LibraryEntry; onOpenBatch: (id: string) => void; onDeleted: () => void }) {
