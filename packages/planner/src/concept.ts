@@ -117,6 +117,24 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  polyrhythm: [
+    {
+      // Rotates the looks so batches don't repeat one style, and lets the learner compare them.
+      param: 'style',
+      values: ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d'],
+      guide: {
+        arcs: 'Style: arcs (fixed for this video). Dots swing along concentric half-circles, each edge hit plays a note.',
+        'pendulum-wave': 'Style: pendulum-wave (fixed for this video). A pendulum wave seen from above: rows of bobs swinging side to side, forming snakes and waves before lining up.',
+        polygons:
+          'Style: polygons (fixed for this video). Dots trace nested shapes (triangle, square, pentagon…) and ping at every corner, so you hear 3 against 4 against 5. Hooks can name the shapes or the rhythm.',
+        'string-art':
+          'Style: string-art (fixed for this video). Dots orbit rings joined by strings that draw a mandala as they move; it completes just before they all line up. "Watch what it draws" works well.',
+        piano: 'Style: piano (fixed for this video). Balls bounce on piano keys, each landing plays its key; slow balls bounce high, fast ones skip. Musical, piano-roll feel.',
+        'pendulum-3d':
+          'Style: pendulum-3d (fixed for this video). A real-looking 3D pendulum-wave apparatus: balls on strings of different lengths swinging in and out of sync. Hooks can lean on "real physics".',
+      },
+    },
+  ],
   'snake-ai': [
     {
       param: 'ending',

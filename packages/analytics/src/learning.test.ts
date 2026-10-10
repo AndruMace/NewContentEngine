@@ -231,7 +231,10 @@ describe('learner', () => {
       }
       return late / (30 * perDay);
     };
-    const avg = (p: 'learner' | 'uniform' | 'beta') => [1, 2, 3].map((s) => run(p, s)).reduce((a, b) => a + b, 0) / 3;
+    // Eight seeds: single runs swing by ±0.1, so fewer made this a test of luck (adding unrelated
+    // features to the model shifts the random stream).
+    const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
+    const avg = (p: 'learner' | 'uniform' | 'beta') => SEEDS.map((s) => run(p, s)).reduce((a, b) => a + b, 0) / SEEDS.length;
     const learner = avg('learner');
     const uniform = avg('uniform');
     const beta = avg('beta');
@@ -239,7 +242,7 @@ describe('learner', () => {
     expect(learner).toBeGreaterThan(0.6);
     expect(learner).toBeGreaterThan(uniform + 0.4);
     expect(learner).toBeGreaterThan(beta);
-  }, 60_000);
+  }, 180_000);
 
   it('calibration rewards a model that ranks well', () => {
     const pts = Array.from({ length: 20 }, (_, i) => ({ predicted: i, actual: i + (i % 3), drama: 20 - i }));

@@ -51,7 +51,7 @@ aren't approved or exported.
 | `grow-until-full` | bounce | Ball grows on every bounce until it fills the circle; paint trail |
 | `marble-race` | race | Elimination (or finish-line) marble race on a procedural course; flags or colours |
 | `ball-battle` | race | Weapon balls (sword, daggers, hammer, bow) in a shrinking arena; FFA, teams, giant or bracket |
-| `polyrhythm` | kinetic | Arcs or pendulum wave; perfectly looping, all elements re-sync at the end |
+| `polyrhythm` | kinetic | Arcs, pendulum wave, polygons, string art, piano keys or 3D pendulums; 5 speed patterns; loops perfectly, all re-sync at the end |
 | `sorting-race` | kinetic | 2-4 sorting algorithms race on the same data with pitch-mapped tones |
 | `sand-pour` | particles | Falling-sand layers into a jar, heart, hourglass or Galton board (bell curve) |
 | `territory-war` | race | 2-4 teams (colours or country flags) flip tiles with bouncing balls; live share bar; biggest territory wins |
