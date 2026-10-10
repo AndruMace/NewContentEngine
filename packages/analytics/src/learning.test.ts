@@ -154,6 +154,29 @@ describe('learner', () => {
     expect(avg).toBeGreaterThan(lo);
   });
 
+  it('learns planner-split variants for their own template only', () => {
+    expect(catalog.variants).toContain('ball-battle.teams=countries');
+    const rng = new Rng(11);
+    const rows: TrainingRow[] = Array.from({ length: 80 }, (_, i) => {
+      const arm = { ...randomArm(rng), templateId: i % 2 ? 'ball-battle' : 'ring-escape' };
+      const teams = rng.chance(0.5) ? 'countries' : 'colors';
+      const bonus = arm.templateId === 'ball-battle' && teams === 'countries' ? 0.8 : 0;
+      return { input: { arm, params: arm.templateId === 'ball-battle' ? { teams } : { gravity: 1 } }, reward: bonus + 0.8 * gauss(rng), weight: 1 };
+    });
+    const m = fitLearner(rows, catalog, { matured: 80 });
+    expect(effects(m).find((e) => e.name === 'variant:ball-battle.teams=countries')!.mean).toBeGreaterThan(0.25);
+    const arm = { templateId: 'ball-battle', themeId: 'sunset', lengthBucket: 'medium' as const, hookStyle: 'question' as const };
+    const countries = predict(m, { arm, params: { teams: 'countries' } }).mean;
+    const colors = predict(m, { arm, params: { teams: 'colors' } }).mean;
+    const unknown = predict(m, { arm }).mean;
+    expect(countries).toBeGreaterThan(colors + 0.25);
+    expect(unknown).toBeGreaterThan(colors);
+    expect(unknown).toBeLessThan(countries);
+    // Other templates' params never touch the variant.
+    const ring = { ...arm, templateId: 'ring-escape' };
+    expect(predict(m, { arm: ring, params: { teams: 'countries' } }).mean).toBeCloseTo(predict(m, { arm: ring }).mean, 6);
+  });
+
   it('chooses experiments and is reproducible with a fixed seed', () => {
     const rng = new Rng(3);
     const rows: TrainingRow[] = Array.from({ length: 20 }, () => {

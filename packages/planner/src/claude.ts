@@ -4,7 +4,7 @@ import type { Rng } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 import type { Arm } from './arms';
-import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, normalizeCopy, type Concept } from './concept';
+import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, normalizeCopy, variantGuide, type Concept } from './concept';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
 
@@ -47,6 +47,8 @@ const ResponseShape = z.object({
 export interface ConceptOptions {
   /** Lead the title with an emoji (true) or not (false). */
   titleEmoji: boolean;
+  /** Params the planner already chose (see PLANNED_VARIANTS); they override whatever the model returns. */
+  variants?: Record<string, string>;
 }
 
 const titleEmojiGuide = (lead: boolean) =>
@@ -62,6 +64,7 @@ function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOp
     `Theme: ${arm.themeId}. Target length: about ${targetS} seconds.`,
     `Hook style: ${arm.hookStyle}. ${hookStyleGuide(arm)}`,
     titleEmojiGuide(opts.titleEmoji),
+    ...variantGuide(arm.templateId, opts.variants ?? {}),
     `Available melodies (public domain): ${MELODIES.map((m) => `${m.id} (${m.title})`).join(', ')}.`,
     ctx.recentHooks.length ? `Recent hooks to avoid repeating:\n${ctx.recentHooks.slice(0, 20).map((h) => `- ${h}`).join('\n')}` : '',
     ctx.performanceSummary ? `What has been performing:\n${ctx.performanceSummary}` : '',
@@ -84,7 +87,7 @@ export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, sou
     templateId: arm.templateId,
     themeId: arm.themeId,
     melodyId,
-    params: coerceParams(template, r.params),
+    params: coerceParams(template, { ...r.params, ...opts?.variants }),
     targetS,
     source,
     rationale: r.rationale,

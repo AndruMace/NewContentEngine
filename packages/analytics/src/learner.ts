@@ -14,6 +14,8 @@ export interface Catalog {
   hookStyles: string[];
   lengthBuckets: { id: string; midS: number }[];
   melodies: string[];
+  /** Planner-split param values, as "templateId.param=value" (each non-default value is one feature). */
+  variants?: string[];
 }
 
 /** What the model knows about one video. Unknowns (e.g. at planning time) count as "average". */
@@ -23,6 +25,8 @@ export interface LearnerInput {
   durationS?: number;
   drama?: number;
   copy?: CopyFeatures;
+  /** Template params, for the planner-split variants (e.g. Ball Battle country vs colour teams). */
+  params?: Record<string, unknown>;
   /** Local posting time; unknown when planning. */
   publishedAt?: number;
 }
@@ -55,7 +59,8 @@ export type FeatureGroup =
   | 'drama'
   | 'copy'
   | 'cta'
-  | 'time';
+  | 'time'
+  | 'variant';
 
 const CTA_STYLES: CtaStyle[] = ['guess', 'pick', 'rate', 'opinion', 'other'];
 export const HOUR_SLOTS = ['night', 'morning', 'afternoon', 'evening'] as const;
@@ -75,6 +80,7 @@ export function featureSpace(c: Catalog): Feature[] {
   add('copy', ['copy:hookChars', 'copy:question', 'copy:digit', 'copy:emoji', 'copy:titleEmoji'], 0.2, true);
   add('cta', CTA_STYLES.map((s) => `cta:${s}`), 0.2, true);
   add('time', [...HOUR_SLOTS.map((s) => `time:${s}`), 'time:weekend'], 0.2, true);
+  add('variant', (c.variants ?? []).map((v) => `variant:${v}`), 0.3, true);
   return f;
 }
 
@@ -102,6 +108,10 @@ function rawValues(x: LearnerInput, c: Catalog): Map<string, number> {
     if (x.copy.titleEmoji !== undefined) v.set('copy:titleEmoji', x.copy.titleEmoji ? 1 : 0);
     v.set(`cta:${x.copy.ctaStyle}`, 1);
   }
+  for (const variant of c.variants ?? []) {
+    const [, templateId, param, value] = /^(.+?)\.(.+?)=(.+)$/.exec(variant) ?? [];
+    if (templateId === x.arm.templateId && x.params && param in x.params) v.set(`variant:${variant}`, x.params[param] === value ? 1 : 0);
+  }
   if (x.publishedAt !== undefined) {
     v.set(`time:${hourSlot(x.publishedAt)}`, 1);
     const d = new Date(x.publishedAt).getDay();
@@ -116,6 +126,9 @@ function knownGroups(raw: Map<string, number>, features: Feature[]): Set<Feature
   for (const f of features) if (raw.has(f.name)) g.add(f.group);
   return g;
 }
+
+/** Variants belong to different templates, so each is known on its own rather than per group. */
+const isKnown = (f: Feature, raw: Map<string, number>, known: Set<FeatureGroup>) => (f.group === 'variant' ? raw.has(f.name) : known.has(f.group));
 
 export interface LearnerModel {
   version: number;
@@ -148,7 +161,7 @@ function vector(x: LearnerInput, features: Feature[], means: Record<string, numb
   const known = knownGroups(raw, features);
   return features.map((f) => {
     if (!f.centred) return raw.get(f.name) ?? 0;
-    if (!known.has(f.group)) return 0;
+    if (!isKnown(f, raw, known)) return 0;
     return (raw.get(f.name) ?? 0) - (means[f.name] ?? 0);
   });
 }
@@ -203,7 +216,7 @@ export function fitLearner(rows: TrainingRow[], catalog: Catalog, opts: { mature
     let s = 0;
     let w = 0;
     raws.forEach((raw, i) => {
-      if (!knownGroups(raw, features).has(f.group)) return;
+      if (!isKnown(f, raw, knownGroups(raw, features))) return;
       s += (raw.get(f.name) ?? 0) * rows[i].weight;
       w += rows[i].weight;
     });

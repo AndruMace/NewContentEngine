@@ -79,6 +79,7 @@ export const featuresToInput = (f: PostFeatures, publishedAt?: number): LearnerI
   durationS: f.durationS,
   drama: f.drama.total,
   copy: f.copy,
+  params: f.params,
   publishedAt,
 });
 

@@ -41,7 +41,7 @@ export const ballBattleSchema = z.object({
   format: z.enum(['ffa', 'teams', 'giant', 'bracket']).default('ffa').meta({ title: 'Format' }),
   fighters: z.number().int().min(2).max(6).default(4).meta({ title: 'Fighters (not used by bracket)' }),
   weapons: z.enum(['mixed', 'sword', 'dagger', 'hammer', 'bow']).default('mixed').meta({ title: 'Weapons' }),
-  teams: z.enum(['colors', 'countries']).default('colors').meta({ title: 'Teams' }),
+  teams: z.enum(['colors', 'countries']).default('colors').meta({ title: 'Teams (colours or country flags)' }),
   arenaRadius: z.number().min(320).max(480).default(400).meta({ title: 'Arena radius' }),
   ballRadius: z.number().min(36).max(80).default(58).meta({ title: 'Ball radius' }),
   speed: z.number().min(300).max(1200).default(700).meta({ title: 'Ball speed', step: 10 }),
@@ -750,7 +750,7 @@ export const ballBattle: Template<BallBattleParams, State> = {
   name: 'Ball Battle',
   family: 'race',
   description:
-    'Balls armed with weapons fight in a round arena that starts shrinking partway through. Weapons: sword (blade gets longer with every hit), twin daggers (spin faster with every hit), hammer (slow, heavy knockback hits; head grows) and bow (fires arrows when facing an enemy; one more arrow per volley with every hit). Hits freeze the action for a split second, knocked-out balls shatter, and the deciding blow plays in slow motion. Formats: free-for-all, two teams (2v2 or 3v3), one giant ball against a swarm of small ones, or a 4-ball knockout bracket (two semi-finals then a final). Weapons can be mixed (different weapons fight each other) or all the same.',
+    'Balls armed with weapons fight in a round arena that starts shrinking partway through. Weapons: sword (blade gets longer with every hit), twin daggers (spin faster with every hit), hammer (slow, heavy knockback hits; head grows) and bow (fires arrows when facing an enemy; one more arrow per volley with every hit). Hits freeze the action for a split second, knocked-out balls shatter, and the deciding blow plays in slow motion. Formats: free-for-all, two teams (2v2 or 3v3), one giant ball against a swarm of small ones, or a 4-ball knockout bracket (two semi-finals then a final). Weapons can be mixed (different weapons fight each other) or all the same. Teams are either colours (Red, Blue…) or countries, with the national flag filling each ball.',
   schema: ballBattleSchema,
   substeps: 4,
   defaultCopy: {

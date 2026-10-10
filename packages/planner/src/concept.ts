@@ -72,6 +72,40 @@ export function normalizeCopy(c: SocialCopy): SocialCopy {
   };
 }
 
+/**
+ * Params the planner decides itself (seeded, evenly split) instead of leaving them to Claude, which
+ * tends to keep defaults for cosmetic options. Even splits also give the analytics a clean comparison.
+ */
+export interface PlannedVariant {
+  param: string;
+  values: readonly string[];
+  /** Prompt line telling Claude what the chosen value means for the copy. */
+  guide: Record<string, string>;
+}
+
+export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
+  'ball-battle': [
+    {
+      param: 'teams',
+      values: ['colors', 'countries'],
+      guide: {
+        colors: 'Teams: colors (fixed for this video). Balls are named by colour (Red, Blue, Green…); don\'t mention countries or flags.',
+        countries:
+          'Teams: countries (fixed for this video). Every ball is a country with its national flag filling the whole ball (USA, Brazil, Japan, Germany…), and {winner} is a country name. Lean into friendly national rivalry: invite viewers to back their country. Keep it light, no politics.',
+      },
+    },
+  ],
+};
+
+/** Seeded choice of every planned variant for a template ({} when it has none, consuming no randomness). */
+export function planVariants(templateId: string, rng: Rng): Record<string, string> {
+  return Object.fromEntries((PLANNED_VARIANTS[templateId] ?? []).map((v) => [v.param, rng.pick(v.values)]));
+}
+
+/** Prompt lines describing the fixed variant choices. */
+export const variantGuide = (templateId: string, chosen: Record<string, unknown>): string[] =>
+  (PLANNED_VARIANTS[templateId] ?? []).flatMap((v) => (typeof chosen[v.param] === 'string' && v.guide[chosen[v.param] as string] ? [v.guide[chosen[v.param] as string]] : []));
+
 /** Share of titles that lead with an emoji. The rest keep a comparison group for the analytics. */
 export const TITLE_EMOJI_SHARE = 0.75;
 
@@ -166,7 +200,7 @@ const STYLE_HOOKS: Record<Arm['hookStyle'], (t: Template) => string> = {
  * Concept without an LLM: template defaults with gentle seeded variation, and copy from
  * fill-in templates. Used when there is no API key or the API fails.
  */
-export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { titleEmoji?: boolean } = {}): Concept {
+export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { titleEmoji?: boolean; variants?: Record<string, string> } = {}): Concept {
   const template = getTemplate(arm.templateId);
   const schema = paramsJsonSchema(template) as { properties: Record<string, any> };
   const raw: Record<string, unknown> = {};
@@ -176,7 +210,7 @@ export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { tit
       raw[key] = (p.default as number) * rng.range(0.9, 1.1);
     }
   }
-  const params = coerceParams(template, raw);
+  const params = coerceParams(template, { ...raw, ...opts.variants });
   const melodyId = rng.pick(MELODIES).id;
   const name = template.name;
   const tags = ['satisfying', 'oddlysatisfying', 'asmr', 'physics', name.toLowerCase().replace(/\s+/g, '')];

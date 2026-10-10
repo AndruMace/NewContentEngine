@@ -1,7 +1,7 @@
 import { THEMES } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { TEMPLATES } from '@sim/templates';
-import { HOOK_STYLES, LENGTH_BUCKETS } from '@sim/planner';
+import { HOOK_STYLES, LENGTH_BUCKETS, PLANNED_VARIANTS } from '@sim/planner';
 import type { Catalog } from './learner';
 
 /** Everything the learner can tell apart, from the current template/theme/melody libraries. */
@@ -12,5 +12,6 @@ export function defaultCatalog(): Catalog {
     hookStyles: Object.keys(HOOK_STYLES),
     lengthBuckets: Object.entries(LENGTH_BUCKETS).map(([id, [lo, hi]]) => ({ id, midS: (lo + hi) / 2 })),
     melodies: MELODIES.map((m) => m.id),
+    variants: Object.entries(PLANNED_VARIANTS).flatMap(([templateId, vs]) => vs.flatMap((v) => v.values.slice(1).map((value) => `${templateId}.${v.param}=${value}`))),
   };
 }

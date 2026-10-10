@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Rng } from '@sim/engine';
 import { chooseArms, targetLength, type Arm, type ArmChoiceSettings, type ArmModel } from './arms';
 import { conceptFromClaude, conceptFromMock, PlannerRefusal, type PlanContext } from './claude';
-import { TITLE_EMOJI_SHARE, fallbackConcept, type Concept } from './concept';
+import { TITLE_EMOJI_SHARE, fallbackConcept, planVariants, type Concept } from './concept';
 
 export * from './arms';
 export * from './concept';
@@ -32,10 +32,13 @@ export async function planOne(
 ): Promise<PlannedConcept> {
   // Decided up front (seeded) so most titles lead with an emoji and the rest form a comparison group.
   const titleEmoji = rng.chance(TITLE_EMOJI_SHARE);
-  if (generator === 'mock') return { concept: conceptFromMock(arm, targetS, rng, { titleEmoji }) };
+  // Cosmetic variants (e.g. Ball Battle country vs colour teams) are split evenly rather than left to Claude.
+  const variants = planVariants(arm.templateId, rng);
+  const opts = { titleEmoji, variants };
+  if (generator === 'mock') return { concept: conceptFromMock(arm, targetS, rng, opts) };
   if (generator === 'claude' && client) {
     try {
-      return { concept: await conceptFromClaude(client, arm, targetS, ctx, { titleEmoji, rng }) };
+      return { concept: await conceptFromClaude(client, arm, targetS, ctx, { ...opts, rng }) };
     } catch (e) {
       const reason =
         e instanceof PlannerRefusal
@@ -47,10 +50,10 @@ export async function planOne(
               : e instanceof Anthropic.APIError
                 ? `API error ${e.status}`
                 : (e as Error).message;
-      return { concept: fallbackConcept(arm, targetS, rng, { titleEmoji }), warning: `Claude unavailable for this concept (${reason}); used template copy.` };
+      return { concept: fallbackConcept(arm, targetS, rng, opts), warning: `Claude unavailable for this concept (${reason}); used template copy.` };
     }
   }
-  return { concept: fallbackConcept(arm, targetS, rng, { titleEmoji }) };
+  return { concept: fallbackConcept(arm, targetS, rng, opts) };
 }
 
 /** Choose arms and plan their concepts, at most `concurrency` API calls at a time. */

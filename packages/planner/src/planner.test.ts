@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, paramsJsonSchema } from '@sim/engine';
 import { TEMPLATES, getTemplate } from '@sim/templates';
-import { LIMITS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText } from './index';
+import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText } from './index';
 
 describe('arm selection', () => {
   it('spreads arms across templates and respects the filters', () => {
@@ -136,6 +136,26 @@ describe('title emoji', () => {
     }
     expect(withEmoji).toBeGreaterThan(130);
     expect(withEmoji).toBeLessThan(170);
+  });
+
+  it('splits Ball Battle evenly between country and colour teams, whatever the model returns', async () => {
+    const bb = { ...arm, templateId: 'ball-battle' };
+    let countries = 0;
+    for (let i = 0; i < 200; i++) {
+      const { concept } = await planOne(bb, 30, i % 2 ? 'mock' : 'fallback', { recentHooks: [] }, new Rng(i));
+      if (concept.params.teams === 'countries') countries++;
+    }
+    expect(countries).toBeGreaterThan(80);
+    expect(countries).toBeLessThan(120);
+    // The planned choice wins over the model's answer, and every value has a prompt guide.
+    const raw = { params: { teams: 'colors' }, melodyId: 'ode-to-joy', hook: 'Who wins?', cta: 'Pick one', title: 'Battle', youtubeDescription: '', tiktokCaption: 'Battle', xPost: 'Battle', hashtags: ['#battle'], rationale: '' };
+    expect(conceptFromResponse(raw, bb, 30, 'claude', { titleEmoji: false, variants: { teams: 'countries' }, rng: new Rng(1) }).params.teams).toBe('countries');
+    for (const vs of Object.values(PLANNED_VARIANTS)) for (const v of vs) expect(Object.keys(v.guide).sort()).toEqual([...v.values].sort());
+  });
+
+  it('leaves other templates\' plans unchanged', async () => {
+    const { concept } = await planOne(arm, 30, 'fallback', { recentHooks: [] }, new Rng(5));
+    expect(concept.params).not.toHaveProperty('teams');
   });
 
   it("enforces the plan when the model doesn't follow it", () => {
