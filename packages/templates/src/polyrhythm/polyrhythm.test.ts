@@ -2,12 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { Rng, Runner, getTheme } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { PATTERNS, patternRates, polygonSides } from './patterns';
-import { POLYRHYTHM_STYLES, polyrhythm } from './index';
+import { POLYRHYTHM_STYLES, noteName, polyrhythm } from './index';
 
 const run = (params: Record<string, unknown>, seed = 1) =>
   new Runner(polyrhythm, { seed, theme: getTheme('neon-dark'), melody: getMelody('ode-to-joy'), params: { loopSeconds: 12, ...params }, visual: false }).runToEnd();
 
 describe('polyrhythm', () => {
+  it('spells key labels the way each scale is written', () => {
+    const names = (scale: Parameters<typeof noteName>[0], root: number, n = 8) => Array.from({ length: n }, (_, i) => noteName(scale, root, i)).join(' ');
+    expect(names('mixolydian', 60)).toBe('C4 D4 E4 F4 G4 A4 B♭4 C5');
+    expect(names('mixolydian', 55)).toBe('G3 A3 B3 C4 D4 E4 F4 G4');
+    expect(names('mixolydian', 58)).toBe('B♭3 C4 D4 E♭4 F4 G4 A♭4 B♭4');
+    expect(names('major', 66, 7)).toBe('F♯4 G♯4 A♯4 B4 C♯5 D♯5 E♯5');
+    expect(names('lydian', 64, 4)).toBe('E4 F♯4 G♯4 A♯4');
+    expect(names('minor', 62, 7)).toBe('D4 E4 F4 G4 A4 B♭4 C5');
+    expect(names('pentatonic', 61, 3)).toBe('C♯4 D♯4 F4');
+  });
+
   it.each(POLYRHYTHM_STYLES.flatMap((style) => PATTERNS.map((pattern) => [style, pattern] as const)))('%s / %s loops exactly', (style, pattern) => {
     const r = run({ style, pattern, count: 12 });
     expect(r.timedOut).toBe(false);

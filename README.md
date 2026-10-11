@@ -58,6 +58,9 @@ aren't approved or exported.
 | `snake-ai` | kinetic | AI snake tries to fill the whole board; ends full or trapped a few cells short |
 | `shell-escape` | bounce | 3D: ball bounces inside nested spinning glass polyhedra; each shell shatters when it finds the window |
 | `gravity-funnel` | race | 3D: marbles (colours or flags) spiral down a coin-funnel; last one still spinning wins |
+| `colliding-blocks` | bounce | Blocks 1 kg vs 100ⁿ kg: the collision counts spell the digits of π (3, 31, 314…), with a velocity-circle diagram |
+| `pathfinding-race` | kinetic | BFS, DFS, Dijkstra, A*, Greedy… race through the same maze/field; badges show who found the shortest route |
+| `fourier-drawing` | kinetic | Spinning circles draw a mystery country, US state, dinosaur, animal or mythical creature, 1 → 200 circles, then the reveal |
 
 Themes: Neon Dark, Pastel Minimal, Retro CRT, Monochrome Gold, Sunset, Deep Ocean.
 Melodies: 15 public-domain tunes (Beethoven, Mozart, Grieg, Bach, Pachelbel, Joplin, traditional).

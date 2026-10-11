@@ -4,7 +4,7 @@ import type { Rng } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 import type { Arm } from './arms';
-import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, normalizeCopy, variantGuide, type Concept } from './concept';
+import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, normalizeCopy, variantGuide, variantHook, type Concept } from './concept';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
 
@@ -82,6 +82,7 @@ export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, sou
   if (opts) r.title = applyTitleEmoji(r.title, opts.titleEmoji, arm.templateId, opts.rng);
   const template = getTemplate(arm.templateId);
   const melodyId = MELODIES.some((m) => m.id === r.melodyId) ? r.melodyId : MELODIES[0].id;
+  r.hook = variantHook(arm.templateId, opts?.variants ?? {}) ?? r.hook;
   return {
     arm,
     templateId: arm.templateId,

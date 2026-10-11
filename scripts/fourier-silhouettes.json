@@ -1,0 +1,345 @@
+{
+ "note": "Silhouette sources for scripts/build-fourier-shapes.ts. Only public-domain / CC0 artwork.",
+ "silhouettes": [
+  {
+   "id": "t-rex",
+   "name": "a T-rex",
+   "icon": "🦖",
+   "category": "dinosaur",
+   "file": "dinosaur-tyrannosaurus_rex-2.svg",
+   "source": "https://images.phylopic.org/images/ccb9b896-20b5-4e0b-8979-001742a884c5/vector.svg",
+   "credit": "Richard Rich",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "triceratops",
+   "name": "a Triceratops",
+   "icon": "🦕",
+   "category": "dinosaur",
+   "file": "dinosaur-triceratops-5.svg",
+   "source": "https://images.phylopic.org/images/1ef8f3a2-6c8b-400e-ab01-cc26ed9d1a4d/vector.svg",
+   "credit": "Jagged Fang Designs",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "stegosaurus",
+   "name": "a Stegosaurus",
+   "icon": "🦕",
+   "category": "dinosaur",
+   "file": "dinosaur-stegosaurus-6.svg",
+   "source": "https://images.phylopic.org/images/429d71d8-2940-449b-838b-a5b7f1733eba/vector.svg",
+   "credit": "Olivia Binfield",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "brachiosaurus",
+   "name": "a Brachiosaurus",
+   "icon": "🦕",
+   "category": "dinosaur",
+   "file": "dinosaur-brachiosaurus-8.svg",
+   "source": "https://images.phylopic.org/images/2003b4f6-7b8d-4c98-9797-1aca028dc2ac/vector.svg",
+   "credit": "Amy Beauvois",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "spinosaurus",
+   "name": "a Spinosaurus",
+   "icon": "🦖",
+   "category": "dinosaur",
+   "file": "dinosaur-spinosaurus-11.svg",
+   "source": "https://images.phylopic.org/images/a6bedf44-cf1c-4a92-b90c-2a16bd7ca6b2/vector.svg",
+   "credit": "Tasman Dixon",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "velociraptor",
+   "name": "a Velociraptor",
+   "icon": "🦖",
+   "category": "dinosaur",
+   "file": "dinosaur-velociraptor-14.svg",
+   "source": "https://images.phylopic.org/images/fc9271c1-c59d-41bf-941e-9c5a084169c7/vector.svg",
+   "credit": "Itai Fein",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "pteranodon",
+   "name": "a Pteranodon",
+   "icon": "🦖",
+   "category": "dinosaur",
+   "file": "dinosaur-pteranodon-16.svg",
+   "source": "https://images.phylopic.org/images/0b4b95c2-615a-45df-adaa-a63fbd039eb2/vector.svg",
+   "credit": "Dan Niel",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "ankylosaurus",
+   "name": "an Ankylosaurus",
+   "icon": "🦕",
+   "category": "dinosaur",
+   "file": "dinosaur-ankylosaurus-18.svg",
+   "source": "https://images.phylopic.org/images/8a8a2525-e97d-4505-8085-7958f8d36137/vector.svg",
+   "credit": "Itai Fein",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "parasaurolophus",
+   "name": "a Parasaurolophus",
+   "icon": "🦕",
+   "category": "dinosaur",
+   "file": "dinosaur-parasaurolophus-21.svg",
+   "source": "https://images.phylopic.org/images/ef954cac-604a-4e1f-9b8d-bd92bf3cc3f6/vector.svg",
+   "credit": "Richard Rich",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "diplodocus",
+   "name": "a Diplodocus",
+   "icon": "🦕",
+   "category": "dinosaur",
+   "file": "dinosaur-diplodocus-23.svg",
+   "source": "https://images.phylopic.org/images/aae9fef6-0845-4842-8537-1dc418f27c94/vector.svg",
+   "credit": "Jagged Fang Designs",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "elephant",
+   "name": "an elephant",
+   "icon": "🐘",
+   "category": "animal",
+   "file": "animal-loxodonta_africana-27.svg",
+   "source": "https://images.phylopic.org/images/910d853a-1a15-4953-a1d3-b81208994d35/vector.svg",
+   "credit": "Chuanxin Yu",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "giraffe",
+   "name": "a giraffe",
+   "icon": "🦒",
+   "category": "animal",
+   "file": "animal-giraffa-28.svg",
+   "source": "https://images.phylopic.org/images/a0b3548c-3757-48e5-8b3f-5c42d212a4a8/vector.svg",
+   "credit": "Steven Traver",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "octopus",
+   "name": "an octopus",
+   "icon": "🐙",
+   "category": "animal",
+   "file": "animal-octopus_vulgaris-30.svg",
+   "source": "https://images.phylopic.org/images/f400b519-3564-4183-b4bd-c3b922cc7c5e/vector.svg",
+   "credit": "Margot Michaud",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "kangaroo",
+   "name": "a kangaroo",
+   "icon": "🦘",
+   "category": "animal",
+   "file": "animal-macropus_giganteus-31.svg",
+   "source": "https://images.phylopic.org/images/624e3d80-cba2-4465-8f3a-c9ae4025198b/vector.svg",
+   "credit": "Michael Scroggie",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "horse",
+   "name": "a horse",
+   "icon": "🐎",
+   "category": "animal",
+   "file": "animal-equus_ferus-34.svg",
+   "source": "https://images.phylopic.org/images/1ca0863c-9285-4a74-902a-313d2822f5e5/vector.svg",
+   "credit": "Jody Taylor",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "eagle",
+   "name": "an eagle",
+   "icon": "🦅",
+   "category": "animal",
+   "file": "animal-haliaeetus_leucocephalus-37.svg",
+   "source": "https://images.phylopic.org/images/804de116-5dbe-4e53-bedb-ddbfb4e895eb/vector.svg",
+   "credit": "T. Michael Keesey",
+   "license": "https://creativecommons.org/publicdomain/mark/1.0/"
+  },
+  {
+   "id": "seahorse",
+   "name": "a seahorse",
+   "icon": "🌊",
+   "category": "animal",
+   "file": "animal-hippocampus-43.svg",
+   "source": "https://images.phylopic.org/images/716d0282-67ec-423a-8287-fd3370bb2804/vector.svg",
+   "credit": "Corrine Avidan",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "deer",
+   "name": "a deer",
+   "icon": "🦌",
+   "category": "animal",
+   "file": "animal-cervus_elaphus-45.svg",
+   "source": "https://images.phylopic.org/images/cc03f5c2-933f-4c40-9c64-7f8727556fdb/vector.svg",
+   "credit": "Ferran Sayol",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "camel",
+   "name": "a camel",
+   "icon": "🐪",
+   "category": "animal",
+   "file": "animal-camelus_dromedarius-47.svg",
+   "source": "https://images.phylopic.org/images/d3aa9186-85bf-466d-8810-79c690b2f38d/vector.svg",
+   "credit": "Jody Taylor",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "rhino",
+   "name": "a rhino",
+   "icon": "🦏",
+   "category": "animal",
+   "file": "animal-rhinoceros_unicornis-49.svg",
+   "source": "https://images.phylopic.org/images/abad209c-2ca1-423b-a66b-317ca52f4c78/vector.svg",
+   "credit": "T. Michael Keesey",
+   "license": "https://creativecommons.org/publicdomain/mark/1.0/"
+  },
+  {
+   "id": "lion",
+   "name": "a lion",
+   "icon": "🦁",
+   "category": "animal",
+   "file": "animal-panthera_leo-52.svg",
+   "source": "https://images.phylopic.org/images/76a5e7ce-53fa-46ae-af9e-fabd8b863dcf/vector.svg",
+   "credit": "Margot Michaud",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "shark",
+   "name": "a shark",
+   "icon": "🦈",
+   "category": "animal",
+   "file": "animal-carcharodon_carcharias-57.svg",
+   "source": "https://images.phylopic.org/images/36d54b94-35a6-4a66-a41e-b8f28534e70c/vector.svg",
+   "credit": "Margot Michaud",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "bear",
+   "name": "a bear",
+   "icon": "🐻",
+   "category": "animal",
+   "file": "animal-ursus_arctos-59.svg",
+   "source": "https://images.phylopic.org/images/0cd82109-bb1c-4e08-ab11-c845d8a82eba/vector.svg",
+   "credit": "xgirouxb",
+   "license": "https://creativecommons.org/publicdomain/mark/1.0/"
+  },
+  {
+   "id": "flamingo",
+   "name": "a flamingo",
+   "icon": "🦩",
+   "category": "animal",
+   "file": "animal-phoenicopterus_roseus-62.svg",
+   "source": "https://images.phylopic.org/images/a1244226-f2c2-41dc-b113-f1c6545958ce/vector.svg",
+   "credit": "Ferran Sayol",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "scorpion",
+   "name": "a scorpion",
+   "icon": "🦂",
+   "category": "animal",
+   "file": "animal-scorpiones-64.svg",
+   "source": "https://images.phylopic.org/images/7742cd64-4c67-443c-942c-fdf1c2681adf/vector.svg",
+   "credit": "Dean Schnabel",
+   "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  {
+   "id": "unicorn",
+   "name": "a unicorn",
+   "icon": "🦄",
+   "category": "fantasy",
+   "file": "fantasy-unicorn-70.svg",
+   "source": "https://openclipart.org/download/238859",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "griffin",
+   "name": "a griffin",
+   "icon": "🦅",
+   "category": "fantasy",
+   "file": "fantasy-griffin-74.svg",
+   "source": "https://openclipart.org/download/249362",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "mermaid",
+   "name": "a mermaid",
+   "icon": "🧜‍♀️",
+   "category": "fantasy",
+   "file": "fantasy-mermaid-79.svg",
+   "source": "https://openclipart.org/download/287917",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "centaur",
+   "name": "a centaur",
+   "icon": "🏹",
+   "category": "fantasy",
+   "file": "fantasy-centaur-80.svg",
+   "source": "https://openclipart.org/download/129457",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "dragon",
+   "name": "a dragon",
+   "icon": "🐉",
+   "category": "fantasy",
+   "file": "fantasy2-dragon-a-229182.svg",
+   "source": "https://openclipart.org/detail/229182",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "chinese-dragon",
+   "name": "a Chinese dragon",
+   "icon": "🐲",
+   "category": "fantasy",
+   "file": "fantasy2-dragon-c-221989.svg",
+   "source": "https://openclipart.org/detail/221989",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "hydra",
+   "name": "a hydra",
+   "icon": "🐍",
+   "category": "fantasy",
+   "file": "fantasy2-hydra-c-299781.svg",
+   "source": "https://openclipart.org/detail/299781",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "winged-unicorn",
+   "name": "a winged unicorn",
+   "icon": "🦄",
+   "category": "fantasy",
+   "file": "fantasy2-pegasus-b-338934.svg",
+   "source": "https://openclipart.org/detail/338934",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  },
+  {
+   "id": "minotaur",
+   "name": "a minotaur",
+   "icon": "🐂",
+   "category": "fantasy",
+   "file": "fantasy2-minotaur-223172.svg",
+   "source": "https://openclipart.org/detail/223172",
+   "credit": "Openclipart",
+   "license": "Public Domain (Openclipart)"
+  }
+ ]
+}

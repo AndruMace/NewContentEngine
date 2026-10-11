@@ -35,6 +35,19 @@ export interface RunnerOptions {
 }
 
 /**
+ * Validate params, falling back to the default for any that no longer fit the schema (e.g. a saved
+ * recipe naming an option that has since been removed) instead of throwing.
+ */
+export function parseParams<P>(template: Template<P, any>, raw: object): P {
+  const first = template.schema.safeParse(raw);
+  if (first.success) return first.data;
+  const bad = new Set(first.error.issues.map((i) => String(i.path[0])));
+  const kept = Object.fromEntries(Object.entries(raw).filter(([k]) => !bad.has(k)));
+  const second = template.schema.safeParse(kept);
+  return second.success ? second.data : template.schema.parse({});
+}
+
+/**
  * Drives a template deterministically at a fixed timestep: physics substeps at
  * FPS * substeps Hz, frames at FPS. Collects sim events and the derived audio events.
  */
@@ -58,7 +71,7 @@ export class Runner<P = any, S = any> {
   private postFx: PostFx | null = null;
 
   constructor(readonly template: Template<P, S>, opts: RunnerOptions) {
-    this.params = template.schema.parse(opts.params ?? {});
+    this.params = parseParams(template, opts.params ?? {});
     this.substeps = template.substeps ?? 4;
     this.theme = opts.theme;
     this.maxSeconds = opts.maxSeconds ?? 90;

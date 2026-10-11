@@ -8,6 +8,8 @@ export interface SynthBus {
   ctx: BaseAudioContext;
   input: GainNode;
   noise: AudioBuffer;
+  /** Shared panners by pan position, so dense event lists don't pile up thousands of nodes. */
+  panners: Map<number, StereoPannerNode>;
 }
 
 const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
@@ -47,13 +49,18 @@ export function createBus(ctx: BaseAudioContext, opts: { reverb: number; destina
     wet.gain.value = opts.reverb;
     input.connect(verb).connect(wet).connect(comp);
   }
-  return { ctx, input, noise: seededNoise(ctx, 2, 1) };
+  return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map() };
 }
 
 function out(bus: SynthBus, pan = 0): AudioNode {
-  const p = bus.ctx.createStereoPanner();
-  p.pan.value = pan;
-  p.connect(bus.input);
+  const key = Math.round(Math.max(-1, Math.min(1, pan)) * 20);
+  let p = bus.panners.get(key);
+  if (!p) {
+    p = bus.ctx.createStereoPanner();
+    p.pan.value = key / 20;
+    p.connect(bus.input);
+    bus.panners.set(key, p);
+  }
   return p;
 }
 

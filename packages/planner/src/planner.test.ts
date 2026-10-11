@@ -156,6 +156,25 @@ describe('title emoji', () => {
     for (const vs of Object.values(PLANNED_VARIANTS)) for (const v of vs) expect(Object.keys(v.guide).sort()).toEqual([...v.values].sort());
   });
 
+  it('fixes the Fourier hook to the subject (country, US state, dinosaur…)', async () => {
+    const fd = { ...arm, templateId: 'fourier-drawing' };
+    const hooks: Record<string, string> = {
+      countries: 'Guess what country the circles are drawing?',
+      states: 'Guess which US state the circles are drawing?',
+      dinosaurs: 'Guess which dinosaur the circles are drawing?',
+      animals: 'Guess what animal the circles are drawing?',
+      fantasy: 'Guess what mythical creature the circles are drawing?',
+    };
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      const { concept } = await planOne(fd, 30, i % 2 ? 'mock' : 'fallback', { recentHooks: [] }, new Rng(i));
+      const subject = concept.params.subject as string;
+      seen.add(subject);
+      expect(concept.copy.hook).toBe(hooks[subject]);
+    }
+    expect(seen.size).toBe(5);
+  });
+
   it('leaves other templates\' plans unchanged', async () => {
     const { concept } = await planOne(arm, 30, 'fallback', { recentHooks: [] }, new Rng(5));
     expect(concept.params).not.toHaveProperty('teams');

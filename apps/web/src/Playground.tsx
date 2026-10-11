@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { THEMES, paramsJsonSchema, type Recipe } from '@sim/engine';
+import { THEMES, paramsJsonSchema, parseParams, type Recipe } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { TEMPLATES, findTemplate, getTemplate } from '@sim/templates';
 import { ParamControls } from './ParamControls';
@@ -22,8 +22,10 @@ function loadSaved(): Recipe {
   try {
     const raw = localStorage.getItem('playground.recipe');
     const saved = raw ? { ...DEFAULT_RECIPE, ...JSON.parse(raw) } : null;
-    // A saved recipe for a removed template falls back to the default.
-    if (saved && findTemplate(saved.templateId)) return saved;
+    // A saved recipe for a removed template falls back to the default; removed options fall back to
+    // their defaults so the form only shows values that still exist.
+    const template = saved && findTemplate(saved.templateId);
+    if (template) return { ...saved, params: parseParams(template, saved.params ?? {}) as Record<string, unknown> };
   } catch {
     /* ignore */
   }

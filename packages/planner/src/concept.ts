@@ -1,6 +1,6 @@
 import { paramsJsonSchema, type Rng, type Template } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
-import { getTemplate } from '@sim/templates';
+import { FOURIER_GUESS, getTemplate } from '@sim/templates';
 import { HOOK_STYLES, type Arm } from './arms';
 
 /** On-screen text plus per-platform copy for one video. */
@@ -81,6 +81,8 @@ export interface PlannedVariant {
   values: readonly string[];
   /** Prompt line telling Claude what the chosen value means for the copy. */
   guide: Record<string, string>;
+  /** On-screen hook used verbatim for a value (overrides whatever the model writes). */
+  hook?: Record<string, string>;
 }
 
 export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
@@ -135,6 +137,48 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  'pathfinding-race': [
+    {
+      param: 'map',
+      values: ['maze', 'braided', 'open', 'weighted'],
+      guide: {
+        maze: 'Map: a classic maze (fixed for this video). There is only one route, so every algorithm ends on the same path; the race is about how much each one has to explore. Never predict the winner.',
+        braided: 'Map: a maze with loops (fixed for this video). Several routes exist, so an algorithm can arrive first on a longer path. "Fastest isn\'t always shortest" angles work. Never predict the winner.',
+        open: 'Map: an open field with scattered walls (fixed for this video). Goal-directed searches (A*, Greedy) beeline while blind ones flood everywhere. Never predict the winner.',
+        weighted:
+          'Map: an open field with mud patches that cost 5× to cross (fixed for this video). Dijkstra and A* route around the mud; the others plough straight through. "Fastest vs cheapest" angles work. Never predict the winner.',
+      },
+    },
+  ],
+  'fourier-drawing': [
+    {
+      param: 'subject',
+      values: ['countries', 'states', 'dinosaurs', 'animals', 'fantasy'],
+      guide: Object.fromEntries(
+        (
+          [
+            ['countries', 'country', 'country', 'a mystery country\'s outline'],
+            ['states', 'state', 'US state', 'a mystery US state\'s outline'],
+            ['dinosaurs', 'dinosaur', 'dinosaur', 'a mystery dinosaur\'s silhouette'],
+            ['animals', 'animal', 'animal', 'a mystery animal\'s silhouette'],
+            ['fantasy', 'fantasy', 'mythical creature', 'a mystery mythical creature\'s silhouette (unicorn, griffin, mermaid…)'],
+          ] as const
+        ).map(([value, category, kind, what]) => [
+          value,
+          `Subject: ${value} (fixed for this video). The circles draw ${what}, revealed at the end; early on it is just a blob. The on-screen hook is fixed ("${FOURIER_GUESS[category]}"). Invite guessing which ${kind} it is in the title and captions too, but never name or hint at the answer anywhere (title, captions, hashtags). The CTA should reveal it with {answer} and {icon}, e.g. "It was {answer} {icon}! Did you get it?".`,
+        ]),
+      ),
+      hook: {
+        countries: FOURIER_GUESS.country,
+        states: FOURIER_GUESS.state,
+        dinosaurs: FOURIER_GUESS.dinosaur,
+        animals: FOURIER_GUESS.animal,
+        fantasy: FOURIER_GUESS.fantasy,
+      },
+    },
+    // Keeps the mystery shape a seeded pick (Claude can't choose one, so batches don't repeat it).
+    { param: 'shape', values: ['random'], guide: { random: 'Shape: picked at random after you write the copy, so keep the copy generic to the subject.' } },
+  ],
   'snake-ai': [
     {
       param: 'ending',
@@ -153,6 +197,10 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
 export function planVariants(templateId: string, rng: Rng): Record<string, string> {
   return Object.fromEntries((PLANNED_VARIANTS[templateId] ?? []).map((v) => [v.param, rng.pick(v.values)]));
 }
+
+/** A hook fixed by one of the chosen variants, if any. */
+export const variantHook = (templateId: string, chosen: Record<string, unknown>): string | undefined =>
+  (PLANNED_VARIANTS[templateId] ?? []).map((v) => v.hook?.[chosen[v.param] as string]).find(Boolean);
 
 /** Prompt lines describing the fixed variant choices. */
 export const variantGuide = (templateId: string, chosen: Record<string, unknown>): string[] =>
@@ -174,6 +222,9 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'shell-escape': ['🤯', '💎', '😱'],
   'gravity-funnel': ['🌀', '😱', '🔥'],
   'grow-until-full': ['😱', '🫧', '👀'],
+  'colliding-blocks': ['🤯', '🧱', '😱'],
+  'pathfinding-race': ['🧭', '🏁', '🤓'],
+  'fourier-drawing': ['✏️', '🤯', '👀'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
 
@@ -280,7 +331,7 @@ export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { tit
     source: 'fallback',
     titleEmoji,
     copy: normalizeCopy({
-      hook: STYLE_HOOKS[arm.hookStyle](template),
+      hook: variantHook(arm.templateId, params) ?? STYLE_HOOKS[arm.hookStyle](template),
       cta: template.defaultCopy.cta,
       title: applyTitleEmoji(`${name} — oddly satisfying`, titleEmoji, arm.templateId, rng),
       youtubeDescription: `${template.description}\nWatch till the end.`,

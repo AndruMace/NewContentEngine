@@ -54,7 +54,28 @@ const tri = (phase: number) => {
 };
 const frac = (x: number) => x - Math.floor(x);
 const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
-const noteName = (midi: number) => `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+/** Root names as keys are usually written (B♭ mixolydian, not A♯). */
+const ROOT_NAMES = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+const LETTERS = 'CDEFGAB';
+const LETTER_PITCH = [0, 2, 4, 5, 7, 9, 11];
+const ACCIDENTAL: Record<number, string> = { [-2]: '𝄫', [-1]: '♭', 0: '', 1: '♯', 2: '𝄪' };
+const mod12 = (n: number) => ((n % 12) + 12) % 12;
+
+/**
+ * Name of the scale's i-th note. Seven-note scales use each letter once (C mixolydian has B♭, not
+ * A♯), so the labels read the way the scale is written; other scales fall back to sharps.
+ */
+export function noteName(scale: ScaleName, root: number, i: number): string {
+  const midi = scaleNote(scale, root, i);
+  if (SCALES[scale].length !== 7) return `${NOTE_NAMES[mod12(midi)]}${Math.floor(midi / 12) - 1}`;
+  const rootLetter = LETTERS.indexOf(ROOT_NAMES[mod12(root)][0]);
+  const letter = (rootLetter + (((i % 7) + 7) % 7)) % 7;
+  let diff = mod12(midi) - LETTER_PITCH[letter];
+  if (diff > 6) diff -= 12;
+  if (diff < -6) diff += 12;
+  // Octave of the written letter (B♯3 sounds as C4, C♭4 as B3).
+  return `${LETTERS[letter]}${ACCIDENTAL[diff] ?? ''}${Math.floor((midi - diff) / 12) - 1}`;
+}
 
 /** Smooth version (cosine) for pendulums: -1..1. */
 function pendulumX(s: State, i: number, t: number) {
@@ -442,7 +463,7 @@ function drawPiano(ctx: Ctx2D, s: State, t: number, color: ColorFn) {
       ctx.font = `900 ${Math.round(Math.min(30, w * 0.5))}px ${FONT_FAMILY}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(noteName(scaleNote(s.scale, s.p.rootNote, i)), x + w / 2, keyTop + press + keyH - 30);
+      ctx.fillText(noteName(s.scale, s.p.rootNote, i), x + w / 2, keyTop + press + keyH - 30);
     }
     // Ball: higher, slower bounces for the slow lanes (height ∝ period², like real bounces).
     const f = frac((s.notesPerLoop[i] * t) / T);
