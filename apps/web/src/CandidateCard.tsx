@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { THEMES } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { findTemplate } from '@sim/templates';
-import { api, exportFileUrl, previewVolume, type ReviewItem, type SocialCopy } from './api';
+import { api, exportFileUrl, previewVideoRef, type ReviewItem, type SocialCopy } from './api';
 
 const SOURCE_LABEL: Record<string, string> = { claude: 'Claude', fallback: 'Template defaults', mock: 'Mock (dry run)', manual: 'You (Playground)' };
 const HOOK_STYLE_LABEL: Record<string, string> = { question: 'Question', challenge: 'Challenge', 'pick-a-side': 'Pick a side', curiosity: 'Curiosity' };
@@ -122,15 +122,10 @@ function Posts({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewItem) =
 const fmtSigned = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
 
 export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; rank: number; onChanged: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const template = findTemplate(item.recipe.templateId);
   const ready = item.status === 'ready' && item.files;
-
-  useEffect(() => {
-    if (videoRef.current) videoRef.current.volume = previewVolume();
-  });
 
   const act = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(label);
@@ -149,7 +144,7 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
     <article className={`card decision-${item.decision}`}>
       <div className="card-media">
         {ready ? (
-          <video ref={videoRef} src={`/files/${item.files!.final}`} poster={`/files/${item.files!.cover}`} preload="none" controls playsInline />
+          <video ref={previewVideoRef} src={`/files/${item.files!.final}`} poster={`/files/${item.files!.cover}`} preload="none" controls playsInline />
         ) : (
           <div className="card-placeholder">
             {item.status === 'queued' && <span>Queued</span>}

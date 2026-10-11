@@ -155,16 +155,35 @@ function buildSection(world: World, kind: SectionKind, y0: number, h: number, p:
       break;
     }
     case 'zigzag': {
-      const gap = 250;
-      const count = Math.max(2, Math.floor((h - 250) / gap));
+      // Staircase ramps: short, slightly downhill steps, so a marble drops (and clacks) at every step
+      // edge, with a peg under each ramp's end. Smooth ramps let marbles roll silently for seconds:
+      // the course's quietest stretch. (Studs along a smooth ramp made noise but stalled marbles.)
+      const reach = W * 0.7;
+      const drop = 230;
+      // Where a ramp's low end overhangs the next ramp down, a marble rolling underneath needs room:
+      // clearance there = gap − drop·(2·reach − W)/reach, so space the ramps to leave a marble's
+      // width plus margin. (Too tight and marbles wedge under the overhang.)
+      const gap = Math.max(205, (drop * (2 * reach - W)) / reach + 2 * p.marbleRadius + 55);
+      const count = Math.max(2, Math.floor((h - 150 - drop) / gap) + 1);
       const start = rng.chance(0.5) ? 0 : 1;
       for (let i = 0; i < count; i++) {
-        const y = y0 + 160 + i * gap;
+        const y = y0 + 150 + i * gap;
         const left = (i + start) % 2 === 0;
-        const reach = W * 0.74;
-        const drop = 110;
-        if (left) world.addSegment({ ax: L, ay: y, bx: L + reach, by: y + drop, r: 7, restitution: 0.3, tag: 'ramp' });
-        else world.addSegment({ ax: R, ay: y, bx: R - reach, by: y + drop, r: 7, restitution: 0.3, tag: 'ramp' });
+        const ax = left ? L : R;
+        const bx = left ? L + reach : R - reach;
+        const dir = left ? 1 : -1;
+        const steps = Math.max(3, Math.round(reach / Math.max(100, p.marbleRadius * 3.2)));
+        const stepLen = reach / steps;
+        const stepDrop = drop / steps;
+        for (let k = 0; k < steps; k++) {
+          const sx = ax + dir * stepLen * k;
+          const sy = y + stepDrop * k;
+          // Each tread tilts down a little so marbles keep rolling to its edge.
+          world.addSegment({ ax: sx, ay: sy, bx: sx + dir * stepLen * 0.9, by: sy + stepDrop * 0.65, r: 7, restitution: 0.35, tag: 'step' });
+        }
+        // A peg in the drop zone below the ramp's end.
+        const py = y + drop + gap * 0.42;
+        if (py < y0 + h - 60) world.addDisc({ x: bx + (left ? 1 : -1) * Math.min(90, (W - reach) * 0.45), y: py, r: 10, restitution: 0.5, tag: 'peg' });
       }
       break;
     }
@@ -583,11 +602,16 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     const half = win.t / 2;
     const leaderAtHalf = [...leadChanges].reverse().find((e) => e.t <= half)?.to;
     const comeback = leaderAtHalf !== undefined && leaderAtHalf !== win.who ? 1 : 0.4;
-    const total = durFit * (0.45 + 0.55 * lcFit) * (0.5 + 0.5 * closeFit) * (0.4 + 0.6 * kickFit) * (0.75 + 0.25 * comeback);
+    // Lulls: the longest stretch without an audible impact (no notes = a dead patch for viewers).
+    const impacts = events.filter((e) => e.type === 'hit' && e.t > GATE_OPEN_S && e.t < win.t && (e.tag === 'bumper' || (e.impulse as number) / 900 > 0.15)).map((e) => e.t);
+    let maxGap = 0;
+    for (let i = 1; i < impacts.length; i++) maxGap = Math.max(maxGap, impacts[i] - impacts[i - 1]);
+    const lullFit = dm.exp(-Math.max(0, maxGap - 1) / 0.6);
+    const total = durFit * (0.45 + 0.55 * lcFit) * (0.5 + 0.5 * closeFit) * (0.4 + 0.6 * kickFit) * (0.75 + 0.25 * comeback) * (0.55 + 0.45 * lullFit);
     return {
       total,
-      parts: { durFit, lcFit, closeFit, kickFit, comeback },
-      notes: [`${leadChanges.length} lead changes`, `${kicks} unstick nudges`, `winner decided at ${win.t.toFixed(1)}s`],
+      parts: { durFit, lcFit, closeFit, kickFit, comeback, lullFit },
+      notes: [`${leadChanges.length} lead changes`, `${kicks} unstick nudges`, `longest quiet gap ${maxGap.toFixed(1)}s`, `winner decided at ${win.t.toFixed(1)}s`],
     };
   },
 };

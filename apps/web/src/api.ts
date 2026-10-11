@@ -258,3 +258,24 @@ export function previewVolume(): number {
     return 0.8;
   }
 }
+
+const volumeReady = new WeakSet<HTMLVideoElement>();
+
+/**
+ * Ref callback for preview <video>s. Applies the shared preview volume once, when the element first
+ * appears, and remembers changes made with the video's own controls as the new preview volume.
+ * (Setting the volume on every render undid the viewer's changes whenever a page refreshed its data.)
+ */
+export function previewVideoRef(v: HTMLVideoElement | null) {
+  if (!v || volumeReady.has(v)) return;
+  volumeReady.add(v);
+  v.volume = previewVolume();
+  v.addEventListener('volumechange', () => {
+    if (v.muted) return;
+    try {
+      localStorage.setItem('playground.volume', String(v.volume));
+    } catch {
+      /* ignore */
+    }
+  });
+}

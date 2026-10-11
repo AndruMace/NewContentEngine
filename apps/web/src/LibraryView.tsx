@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { findTemplate } from '@sim/templates';
-import { SOURCE_INFO, api, formatBytes, previewVolume, type LibraryEntry } from './api';
+import { SOURCE_INFO, api, formatBytes, previewVideoRef, type LibraryEntry } from './api';
 
 type Group = 'all' | 'batch' | 'playground' | 'cli';
 
@@ -24,9 +24,7 @@ function LibraryCard({ e, onOpenBatch, onDeleted }: { e: LibraryEntry; onOpenBat
             autoPlay
             controls
             playsInline
-            ref={(v) => {
-              if (v) v.volume = previewVolume();
-            }}
+            ref={previewVideoRef}
           />
         ) : e.hasCover ? (
           <img src={`/files/${e.dir}/cover.jpg`} alt="" loading="lazy" />
