@@ -343,9 +343,10 @@ export const pathfindingRace: Template<PathfindingRaceParams, State> = {
       }
       case 'finish': {
         const place = e.place as number;
-        const notes = place === 1 ? [72, 76, 79, 84] : [67, 72];
+        // D major, to match the D pentatonic search notes still sounding from the other panels.
+        const notes = place === 1 ? [74, 78, 81, 86] : [69, 74];
         return [
-          { kind: 'sfx', name: 'chime', vel: place === 1 ? 0.7 : 0.4, pitch: 1 - place / 4 },
+          { kind: 'note', midi: [86, 81, 78, 74][place - 1] ?? 74, vel: place === 1 ? 0.6 : 0.36, voice: 'bell', dur: 1.2 },
           ...notes.map((midi, i) => ({ kind: 'note' as const, midi, vel: 0.33, voice: 'bell' as const, dur: 1.5 + i * 0.1 })),
         ];
       }

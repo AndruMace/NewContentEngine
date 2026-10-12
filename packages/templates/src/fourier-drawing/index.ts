@@ -57,6 +57,8 @@ const COUNTS = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 128, 200, 300];
 /** The biggest circles each ping as they pass 12 o'clock. */
 const SINGERS = 10;
 const CHECKPOINTS = 8;
+/** Scale for every note (with C roots below): C major pentatonic. */
+const KEY = 'pentatonic' as const;
 const LEAD_S = 0.6;
 const REVEAL_S = 4.2;
 /** The CTA appears this long after the reveal starts. */
@@ -287,18 +289,22 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
   },
 
   audio(e) {
+    // Everything stays in one key (C major pentatonic), so the circles, the arpeggio, the stage
+    // bells and the reveal chord can overlap freely without clashing.
     switch (e.type) {
       case 'ping': {
+        // Bigger circles ring lower, smaller (faster) ones higher.
         const rank = e.rank as number;
-        return [{ kind: 'note', midi: scaleNote('pentatonic', 76, -rank * 2), vel: 0.18 + 0.32 * (e.size as number), voice: 'glass', dur: 0.9 }];
+        return [{ kind: 'note', midi: scaleNote(KEY, 60, rank), vel: 0.18 + 0.32 * (e.size as number), voice: 'glass', dur: 0.9 }];
       }
       case 'step': {
-        const stage = e.stage as number;
+        // Soft arpeggio, a scale step higher each stage (capped so the late stages don't get shrill).
+        const stage = Math.min(e.stage as number, 6);
         const k = e.k as number;
-        return [{ kind: 'note', midi: scaleNote('pentatonic', 48, stage + [0, 2, 4, 2, 1, 3, 5, 3][k % 8]), vel: 0.3, voice: 'softsine', dur: 0.5 }];
+        return [{ kind: 'note', midi: scaleNote(KEY, 48, stage + [0, 2, 4, 2, 1, 3, 5, 3][k % 8]), vel: 0.3, voice: 'softsine', dur: 0.5 }];
       }
       case 'stage':
-        return [{ kind: 'sfx', name: 'chime', vel: 0.3, pitch: Math.min(1, (e.stage as number) / 14) }];
+        return [{ kind: 'note', midi: scaleNote(KEY, 72, Math.min(e.stage as number, 9)), vel: 0.3, voice: 'bell', dur: 1.2 }];
       case 'reveal':
         return [
           { kind: 'sfx', name: 'whoosh', vel: 0.45 },

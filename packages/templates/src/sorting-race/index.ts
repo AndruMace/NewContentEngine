@@ -207,8 +207,9 @@ export const sortingRace: Template<SortingRaceParams, State> = {
       case 'finish': {
         const place = e.place as number;
         const notes = place === 1 ? [72, 76, 79, 84] : [67, 72];
+        // The bell stays in C major with the fanfare (lower for later places).
         return [
-          { kind: 'sfx', name: 'chime', vel: place === 1 ? 0.7 : 0.4, pitch: 1 - place / 4 },
+          { kind: 'note', midi: [84, 79, 76, 72][place - 1] ?? 72, vel: place === 1 ? 0.6 : 0.36, voice: 'bell', dur: 1.2 },
           ...notes.map((midi, i) => ({ kind: 'note' as const, midi, vel: 0.35, voice: 'bell' as const, dur: 1.5 + i * 0.1 })),
         ];
       }

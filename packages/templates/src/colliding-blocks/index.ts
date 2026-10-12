@@ -316,7 +316,8 @@ export const collidingBlocks: Template<CollidingBlocksParams, State> = {
       case 'round':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.18 }];
       case 'roundEnd':
-        return [{ kind: 'sfx', name: 'chime', vel: 0.26, pitch: Math.min(1, (e.exp as number) / 10) }];
+        // A bell in E major (the rounds' key), one step higher each round.
+        return [{ kind: 'note', midi: scaleNote('major', 76, (e.exp as number) / 2), vel: 0.26, voice: 'bell', dur: 1 }];
       case 'digit': {
         const reveal = e.reveal as boolean;
         const midi = scaleNote('major', reveal ? 60 : 64, e.digit as number);
