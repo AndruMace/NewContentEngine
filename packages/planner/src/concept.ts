@@ -29,6 +29,8 @@ export interface Concept {
   experiment?: { reason: string };
   /** Whether the title was planned to lead with an emoji (most do; the rest are a comparison group). */
   titleEmoji?: boolean;
+  /** Where the settings came from when the taste model chose them (e.g. "near a video you approved"). */
+  paramsSource?: string;
 }
 
 export const LIMITS = { hook: 60, cta: 48, title: 90, tiktok: 300, x: 270, hashtags: 6 };
@@ -306,7 +308,7 @@ const STYLE_HOOKS: Record<Arm['hookStyle'], (t: Template) => string> = {
  * Concept without an LLM: template defaults with gentle seeded variation, and copy from
  * fill-in templates. Used when there is no API key or the API fails.
  */
-export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { titleEmoji?: boolean; variants?: Record<string, string> } = {}): Concept {
+export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { titleEmoji?: boolean; variants?: Record<string, unknown> } = {}): Concept {
   const template = getTemplate(arm.templateId);
   const schema = paramsJsonSchema(template) as { properties: Record<string, any> };
   const raw: Record<string, unknown> = {};

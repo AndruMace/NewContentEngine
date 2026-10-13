@@ -33,12 +33,15 @@ export async function planOne(
   // Decided up front (seeded) so most titles lead with an emoji and the rest form a comparison group.
   const titleEmoji = rng.chance(TITLE_EMOJI_SHARE);
   // Cosmetic variants (e.g. Ball Battle country vs colour teams) are split evenly rather than left to Claude.
-  const variants = planVariants(arm.templateId, rng);
-  const opts = { titleEmoji, variants };
-  if (generator === 'mock') return { concept: conceptFromMock(arm, targetS, rng, opts) };
+  const variants: Record<string, unknown> = planVariants(arm.templateId, rng);
+  // The taste model, when present, picks every setting up front (variants stay as planned).
+  const chosen = ctx.chooseParams?.(arm, targetS, variants, rng);
+  const opts = { titleEmoji, variants: chosen ? chosen.params : variants, fixedParams: Boolean(chosen) };
+  const withSource = (p: PlannedConcept): PlannedConcept => (chosen ? { ...p, concept: { ...p.concept, paramsSource: chosen.source } } : p);
+  if (generator === 'mock') return withSource({ concept: conceptFromMock(arm, targetS, rng, opts) });
   if (generator === 'claude' && client) {
     try {
-      return { concept: await conceptFromClaude(client, arm, targetS, ctx, { ...opts, rng }) };
+      return withSource({ concept: await conceptFromClaude(client, arm, targetS, ctx, { ...opts, rng }) });
     } catch (e) {
       const reason =
         e instanceof PlannerRefusal
@@ -50,10 +53,10 @@ export async function planOne(
               : e instanceof Anthropic.APIError
                 ? `API error ${e.status}`
                 : (e as Error).message;
-      return { concept: fallbackConcept(arm, targetS, rng, opts), warning: `Claude unavailable for this concept (${reason}); used template copy.` };
+      return withSource({ concept: fallbackConcept(arm, targetS, rng, opts), warning: `Claude unavailable for this concept (${reason}); used template copy.` });
     }
   }
-  return { concept: fallbackConcept(arm, targetS, rng, opts) };
+  return withSource({ concept: fallbackConcept(arm, targetS, rng, opts) });
 }
 
 /** Choose arms and plan their concepts, at most `concurrency` API calls at a time. */

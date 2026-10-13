@@ -25,6 +25,10 @@ import {
 } from './db';
 import { hashSeed, recipeFor, type BatchRunner } from './batch';
 import { postFeatures, predictFeatures } from './analytics';
+import { chooseParams } from './taste';
+import { REJECT_REASONS } from '@sim/analytics';
+
+const REASON_IDS = new Set<string>(REJECT_REASONS.map((r) => r.id));
 import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
 import { fallbackConcept } from '@sim/planner';
@@ -41,8 +45,10 @@ export class ReviewActions {
     private batches: BatchRunner,
   ) {}
 
-  setDecision(id: string, decision: 'approved' | 'rejected' | 'pending') {
-    updateRender(id, { decision });
+  /** Approve / reject / undo. Reject reasons and a note teach the taste model why. */
+  setDecision(id: string, decision: 'approved' | 'rejected' | 'pending', feedback: { reasons?: string[]; note?: string | null } = {}) {
+    const keep = decision === 'rejected';
+    updateRender(id, { decision, reasons: keep ? (feedback.reasons ?? []).filter((x) => REASON_IDS.has(x)) : [], note: keep ? feedback.note?.trim() || null : null });
     return getRender(id)!;
   }
 
@@ -82,7 +88,9 @@ export class ReviewActions {
     const c = r.conceptId ? getConcept(r.conceptId) : undefined;
     if (!c) throw new Error('This video has no concept to rewrite');
     const client = claudeAvailable() ? new Anthropic() : undefined;
-    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks() }, new Rng(Date.now() % 1e9), client);
+    // Same simulation, so the new copy is written for the settings already on screen.
+    const keep = () => ({ params: c.concept.params, source: c.concept.paramsSource ?? 'kept' });
+    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams: keep }, new Rng(Date.now() % 1e9), client);
     const copy = planned.concept.copy;
     updateConcept(c.id, { ...c.concept, copy });
     return this.rerenderWithCopy(r, copy);
@@ -94,7 +102,7 @@ export class ReviewActions {
     const c = r.conceptId ? getConcept(r.conceptId) : undefined;
     if (!c || !r.batchId) throw new Error('This video has no concept to replace');
     const client = claudeAvailable() ? new Anthropic() : undefined;
-    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks() }, new Rng(Date.now() % 1e9), client);
+    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams }, new Rng(Date.now() % 1e9), client);
     if (c.concept.experiment) planned.concept.experiment = c.concept.experiment;
     const concept = insertConcept(r.batchId, conceptsForBatch(r.batchId).length, planned.concept);
     const next = await this.batches.searchAndQueue(r.batchId, concept, { kind: r.kind });

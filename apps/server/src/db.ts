@@ -92,6 +92,9 @@ export interface RenderRow {
   supersededBy: string | null;
   /** Learner's expected reward when the candidate was ranked (null before the model is ready). */
   prediction: { mean: number; sd: number; modelVersion: number } | null;
+  /** Reject reasons chosen in Review (see REJECT_REASONS). */
+  reasons: string[];
+  note: string | null;
 }
 
 export interface ExportRow {
@@ -160,6 +163,9 @@ const MIGRATIONS = [
    CREATE TABLE insights (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, n_posts INTEGER NOT NULL, kind TEXT NOT NULL, report TEXT NOT NULL);`,
   // What the learner expected of each candidate when it was ranked.
   `ALTER TABLE renders ADD COLUMN prediction TEXT;`,
+  // Review feedback: why a candidate was rejected (reason ids) and an optional free-text note.
+  `ALTER TABLE renders ADD COLUMN reasons TEXT NOT NULL DEFAULT '[]';
+   ALTER TABLE renders ADD COLUMN note TEXT;`,
 ];
 
 {
@@ -285,6 +291,8 @@ const toRender = (r: any): RenderRow => ({
   decision: r.decision,
   supersededBy: r.superseded_by,
   prediction: json(r.prediction, null),
+  reasons: json(r.reasons, []),
+  note: r.note ?? null,
 });
 
 export function insertRender(
@@ -316,6 +324,22 @@ export function getRender(id: string): RenderRow | undefined {
   return r ? toRender(r) : undefined;
 }
 
+/** Changes whenever a decision, reason, reroll or new render could change what the taste model learns. */
+export function tasteFingerprint(): string {
+  const r = db
+    .prepare("SELECT COUNT(*) AS n, group_concat(id || decision || reasons || coalesce(superseded_by, ''), ',') AS f FROM renders WHERE status IN ('ready', 'deleted')")
+    .get() as { n: number; f: string | null };
+  let h = 2166136261;
+  const f = r.f ?? '';
+  for (let i = 0; i < f.length; i++) h = Math.imul(h ^ f.charCodeAt(i), 16777619) >>> 0;
+  return `${r.n}:${h}`;
+}
+
+/** Every render that can teach the taste model: reviewed batch candidates plus playground work. */
+export function reviewableRenders(): RenderRow[] {
+  return db.prepare("SELECT * FROM renders WHERE status IN ('ready', 'deleted') ORDER BY created_at").all().map(toRender);
+}
+
 export function rendersForBatch(batchId: string): RenderRow[] {
   return db.prepare('SELECT * FROM renders WHERE batch_id = ? ORDER BY created_at').all(batchId).map(toRender);
 }
@@ -337,9 +361,9 @@ export function listExportJobs(limit = 20): RenderRow[] {
 const RENDER_COLS: Record<string, string> = {
   recipe: 'recipe', copy: 'copy', score: 'score', scoreParts: 'score_parts', altSeeds: 'alt_seeds', status: 'status', stage: 'stage',
   progress: 'progress', dir: 'dir', qc: 'qc', durationS: 'duration_s', rankScore: 'rank_score', error: 'error', startedAt: 'started_at',
-  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', prediction: 'prediction',
+  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', prediction: 'prediction', reasons: 'reasons', note: 'note',
 };
-const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc', 'prediction']);
+const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc', 'prediction', 'reasons']);
 
 export function updateRender(id: string, patch: Partial<RenderRow>) {
   const cols: string[] = [];

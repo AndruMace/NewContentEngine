@@ -62,7 +62,14 @@ export interface ReviewItem {
     rationale: string | null;
     targetS: number;
     experiment: { reason: string } | null;
+    /** Where the taste model got the settings (e.g. "near a video you approved"). */
+    paramsSource: string | null;
   } | null;
+  /** Fit to your taste (approval chance 0..1) once the taste model has enough reviews. */
+  taste: { chance: number } | null;
+  /** Why it was rejected (reason ids) and an optional note. */
+  reasons: string[];
+  note: string | null;
   /** Learner's expected reward (z units vs the channel's average); null before it has enough data. */
   prediction: { mean: number; sd: number; modelVersion: number } | null;
   platformText: { youtube: string; tiktok: string; x: string } | null;
@@ -95,7 +102,8 @@ export const api = {
   batches: () => call<Batch[]>('GET', '/api/batches'),
   startBatch: (settings: BatchSettings) => call<Batch>('POST', '/api/batches', { settings }),
   cancelBatch: (id: string) => call('POST', `/api/batches/${id}/cancel`),
-  decide: (id: string, decision: 'approved' | 'rejected' | 'pending') => call<ReviewItem>('POST', `/api/review/${id}/decision`, { decision }),
+  decide: (id: string, decision: 'approved' | 'rejected' | 'pending', feedback: { reasons?: string[]; note?: string | null } = {}) =>
+    call<ReviewItem>('POST', `/api/review/${id}/decision`, { decision, ...feedback }),
   reroll: (id: string, kind: 'seed' | 'copy' | 'concept') => call<ReviewItem>('POST', `/api/review/${id}/reroll`, { kind }),
   editCopy: (id: string, patch: Partial<SocialCopy>) => call<ReviewItem>('PATCH', `/api/review/${id}/copy`, patch),
   exportBundle: (id: string) => call<ReviewItem>('POST', `/api/review/${id}/export`),
@@ -116,6 +124,7 @@ export const api = {
   ignoreUpload: (videoId: string) => call<PostsResponse>('POST', '/api/analytics/ignore', { videoId }),
   linkable: () => call<{ id: string; title: string; exportedAt: number }[]>('GET', '/api/analytics/linkable'),
   learning: () => call<LearningStatus>('GET', '/api/analytics/learning'),
+  taste: () => call<TasteStatus>('GET', '/api/analytics/taste'),
   analyticsSettings: () => call<AnalyticsSettings>('GET', '/api/analytics/settings'),
   setAnalyticsSettings: (body: { preset: string; weights?: RewardWeights }) => call<AnalyticsSettings>('PUT', '/api/analytics/settings', body),
 };
@@ -127,6 +136,24 @@ export interface AnalyticsSettings {
   preset: string;
   weights: RewardWeights;
   presets: Record<string, { label: string; weights: RewardWeights }>;
+}
+
+export interface TasteStatus {
+  ready: boolean;
+  readyAt: number;
+  examples: number;
+  liked: number;
+  reasons: readonly { id: string; label: string }[];
+  templates: {
+    id: string;
+    name: string;
+    liked: number;
+    rejected: number;
+    skipped: number;
+    reasons: Record<string, number>;
+    /** What the model has learned about this template's settings (liked = up). */
+    settings: { text: string; direction: 'up' | 'down'; strength: number; sure: boolean }[];
+  }[];
 }
 
 export interface LearningStatus {

@@ -15,6 +15,11 @@ export interface PlanContext {
   notes?: string;
   /** Phase 5: summary of what has been performing. */
   performanceSummary?: string;
+  /**
+   * Picks the simulation settings before the copy is written (the taste model: settings near what
+   * the owner approved). When set, the model's own params are ignored and it writes to these.
+   */
+  chooseParams?: (arm: Arm, targetS: number, fixed: Record<string, unknown>, rng: Rng) => { params: Record<string, unknown>; source: string };
 }
 
 const SYSTEM = `You are the content strategist for a short-form video channel (YouTube Shorts, TikTok, X) that posts "oddly satisfying" physics simulations with collision-driven music: balls escaping rings, marble races, ball battles, falling sand, fluids, polyrhythms, sorting races.
@@ -48,7 +53,9 @@ export interface ConceptOptions {
   /** Lead the title with an emoji (true) or not (false). */
   titleEmoji: boolean;
   /** Params the planner already chose (see PLANNED_VARIANTS); they override whatever the model returns. */
-  variants?: Record<string, string>;
+  variants?: Record<string, unknown>;
+  /** Every param was chosen up front (taste model): tell the model they're fixed. */
+  fixedParams?: boolean;
 }
 
 const titleEmojiGuide = (lead: boolean) =>
@@ -65,6 +72,9 @@ function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOp
     `Hook style: ${arm.hookStyle}. ${hookStyleGuide(arm)}`,
     titleEmojiGuide(opts.titleEmoji),
     ...variantGuide(arm.templateId, opts.variants ?? {}),
+    opts.fixedParams
+      ? `Parameters are already chosen for this video (from settings the channel owner liked): ${JSON.stringify(opts.variants)}. Return them unchanged as params and write copy that matches them; prefer {paramName} placeholders over restating numbers.`
+      : '',
     `Available melodies (public domain): ${MELODIES.map((m) => `${m.id} (${m.title})`).join(', ')}.`,
     ctx.recentHooks.length ? `Recent hooks to avoid repeating:\n${ctx.recentHooks.slice(0, 20).map((h) => `- ${h}`).join('\n')}` : '',
     ctx.performanceSummary ? `What has been performing:\n${ctx.performanceSummary}` : '',

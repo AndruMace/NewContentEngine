@@ -109,6 +109,8 @@ export interface Template<P = any, S = any> {
   glowScale?: number;
   /** The final state equals the first frame: renders drop the last frame so the video loops cleanly. */
   seamlessLoop?: boolean;
+  /** The param that sets the video's length (video ≈ value + offsetS), so planners set it from the target length. */
+  lengthParam?: { param: string; offsetS: number };
   /** Copy with {paramName} / {hud:key} placeholders. */
   defaultCopy: Copy;
   init(ctx: InitCtx<P>): S;

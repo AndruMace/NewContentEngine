@@ -11,6 +11,7 @@ import {
   type RenderRow,
 } from './db';
 import { liveRenders } from './batch';
+import { tasteInput, tastePredict } from './taste';
 
 /** A render as the review UI sees it: render + concept summary + export + posts. */
 export function reviewItem(r: RenderRow) {
@@ -19,11 +20,20 @@ export function reviewItem(r: RenderRow) {
   return {
     ...r,
     files: r.dir ? { final: join(r.dir, 'final.mp4'), cover: join(r.dir, 'cover.jpg'), contact: join(r.dir, 'contact.jpg') } : null,
-    concept: c ? { arm: c.arm, source: c.source, rationale: c.rationale ?? null, targetS: c.targetS, experiment: c.experiment ?? null } : null,
+    concept: c ? { arm: c.arm, source: c.source, rationale: c.rationale ?? null, targetS: c.targetS, experiment: c.experiment ?? null, paramsSource: c.paramsSource ?? null } : null,
+    taste: tasteFor(r),
     platformText: r.copy ? platformText(r.copy) : null,
     export: ex ? { id: ex.id, dir: ex.dir, createdAt: ex.createdAt } : null,
     posts: postsForRender(r.id),
   };
+}
+
+/** How well the candidate fits the owner's taste (approval chance), once the taste model is ready. */
+function tasteFor(r: RenderRow): { chance: number } | null {
+  if (r.kind === 'export') return null;
+  const input = tasteInput(r);
+  const p = input && tastePredict(input);
+  return p ? { chance: Math.round(p.chance * 100) / 100 } : null;
 }
 
 const rankKey = (r: RenderRow) =>

@@ -92,6 +92,7 @@ export const pathfindingRace: Template<PathfindingRaceParams, State> = {
   description:
     'Search algorithms (BFS, DFS, Dijkstra, A*, Greedy, Bidirectional, Wall follower) race through the same maze at the same speed. Explored cells flood outward with a note each; finishers trace their route, and badges show who found the shortest path.',
   schema: pathfindingRaceSchema,
+  lengthParam: { param: 'durationS', offsetS: 5.9 },
   substeps: 1,
   searchBudget: 60,
   glowScale: 0.45,

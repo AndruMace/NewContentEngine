@@ -7,6 +7,7 @@ import type { Recipe } from '@sim/engine';
 import { RENDERS_DIR, ROOT } from '@sim/render';
 import { claudeAvailable, type SocialCopy } from '@sim/planner';
 import { REWARD_PRESETS, parsePostUrl } from '@sim/analytics';
+import { tasteStatus } from './taste';
 
 // Load .env (ANTHROPIC_API_KEY etc.) before anything reads the environment.
 try {
@@ -136,8 +137,8 @@ app.post<{ Params: { id: string } }>('/api/batches/:id/cancel', async (req) => {
 
 const changed = (r: { batchId: string | null }) => r.batchId && batches.emit('changed', r.batchId);
 
-app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected' | 'pending' } }>('/api/review/:id/decision', async (req) => {
-  const r = review.setDecision(req.params.id, req.body.decision);
+app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected' | 'pending'; reasons?: string[]; note?: string | null } }>('/api/review/:id/decision', async (req) => {
+  const r = review.setDecision(req.params.id, req.body.decision, { reasons: req.body.reasons, note: req.body.note });
   changed(r);
   return reviewItem(r);
 });
@@ -338,6 +339,8 @@ app.post<{ Body: { videoId: string } }>('/api/analytics/ignore', async (req) => 
   youtube.ignoreUpload(req.body.videoId);
   return { posts: listPostViews('youtube'), uploads: youtube.unlinkedUploads() };
 });
+
+app.get('/api/analytics/taste', async () => tasteStatus());
 
 app.get('/api/analytics/learning', async () => learningStatus());
 

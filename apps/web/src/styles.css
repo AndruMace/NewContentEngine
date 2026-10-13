@@ -195,3 +195,19 @@ button.link { color: var(--accent); padding: 0; }
 .reset-params { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--text); }
 .reset-params:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
 .reset-params:disabled { opacity: 0.4; cursor: default; }
+.reject-panel { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 8px; border: 1px solid #3a1616; border-radius: 8px; background: #1a1012; }
+.reject-panel input { width: 100%; }
+.reject-panel .hint { margin: 0; }
+.chip.on.reason { background: #ff8a8a; border-color: #ff8a8a; color: #2a0c0c; }
+.taste-panel { margin-bottom: 18px; }
+.taste-panel h3 { margin: 0 0 4px; }
+.taste-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.taste-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid #222632; }
+.taste-table td { padding: 6px; border-bottom: 1px solid #1a1d26; vertical-align: top; }
+.taste-bar { display: flex; width: 90px; height: 8px; border-radius: 4px; overflow: hidden; background: #222632; margin-bottom: 2px; }
+.taste-bar .yes { background: var(--accent); }
+.taste-bar .no { background: #ff8a8a; }
+.taste-bar .skip { background: #555b6e; }
+.taste-table .pos { color: var(--accent); }
+.taste-table .neg { color: #ff8a8a; }
+.taste-table .leaning { opacity: 0.7; }

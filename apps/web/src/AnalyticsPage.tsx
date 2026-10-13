@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, coverUrl, youtubeConnectUrl, type AnalyticsSettings, type LearningStatus, type PostReward, type PostView, type PostsResponse, type RefreshResult, type Upload, type YouTubeStatus } from './api';
+import { api, coverUrl, youtubeConnectUrl, type AnalyticsSettings, type LearningStatus, type TasteStatus, type PostReward, type PostView, type PostsResponse, type RefreshResult, type Upload, type YouTubeStatus } from './api';
 
 const MATURE_H = 7 * 24;
 
@@ -23,6 +23,7 @@ function oauthMessage(): string | null {
 export function AnalyticsPage() {
   const [status, setStatus] = useState<YouTubeStatus | null>(null);
   const [learning, setLearning] = useState<LearningStatus | null>(null);
+  const [taste, setTaste] = useState<TasteStatus | null>(null);
   const [data, setData] = useState<PostsResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(oauthMessage);
@@ -30,10 +31,11 @@ export function AnalyticsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [s, d, l] = await Promise.all([api.youtubeStatus(), api.posts(), api.learning()]);
+      const [s, d, l, t] = await Promise.all([api.youtubeStatus(), api.posts(), api.learning(), api.taste()]);
       setStatus(s);
       setData(d);
       setLearning(l);
+      setTaste(t);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -81,9 +83,76 @@ export function AnalyticsPage() {
           </div>
         )}
         {error && <div className="warnings">{error}</div>}
+        {taste && <TastePanel taste={taste} />}
         <PostsTable posts={posts} connected={Boolean(status?.connected)} onChanged={load} />
       </section>
     </main>
+  );
+}
+
+/**
+ * What Review decisions have taught the taste model: per template, how often you approve it, why
+ * you reject it, and which of its settings you like or dislike.
+ */
+function TastePanel({ taste }: { taste: TasteStatus }) {
+  const label = (id: string) => taste.reasons.find((r) => r.id === id)?.label ?? id;
+  const rows = taste.templates.filter((t) => t.liked + t.rejected + t.skipped > 0);
+  return (
+    <div className="taste-panel">
+      <h3>Your taste</h3>
+      <p className="hint">
+        Learned from {taste.examples} review decisions ({taste.liked} liked, including Playground exports). Unpicked videos in a reviewed batch count as a mild no after a day.{' '}
+        {taste.ready ? (
+          <b className="ok">Steering batch settings, templates and ranking until YouTube results take over.</b>
+        ) : (
+          `Needs ${Math.max(0, taste.readyAt - taste.examples)} more decisions before it steers batches.`
+        )}
+      </p>
+      <table className="taste-table">
+        <thead>
+          <tr>
+            <th>Template</th>
+            <th>Liked / no</th>
+            <th>Why rejected</th>
+            <th>What it's learned about the settings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((t) => {
+            const no = t.rejected + t.skipped;
+            const reasons = Object.entries(t.reasons).sort((a, b) => b[1] - a[1]);
+            return (
+              <tr key={t.id}>
+                <td>{t.name}</td>
+                <td>
+                  <div className="taste-bar" title={`${t.liked} liked · ${t.rejected} rejected/re-rolled · ${t.skipped} passed over`}>
+                    <div className="yes" style={{ flex: t.liked }} />
+                    <div className="no" style={{ flex: t.rejected }} />
+                    <div className="skip" style={{ flex: t.skipped }} />
+                  </div>
+                  <span className="hint small-text">
+                    {t.liked} / {no}
+                  </span>
+                </td>
+                <td className="small-text">{reasons.length ? reasons.map(([id, n]) => `${label(id)} ×${n}`).join(', ') : <span className="hint">—</span>}</td>
+                <td className="small-text">
+                  {t.settings.length ? (
+                    t.settings.map((x) => (
+                      <div key={x.text} className={`${x.direction === 'up' ? 'pos' : 'neg'} ${x.sure ? '' : 'leaning'}`} title={x.sure ? 'Fairly sure' : 'Leaning this way, not sure yet'}>
+                        {x.direction === 'up' ? '▲' : '▼'} {x.text}
+                        {!x.sure && <span className="hint"> (leaning)</span>}
+                      </div>
+                    ))
+                  ) : (
+                    <span className="hint">not sure yet</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -109,7 +178,7 @@ function Learning({ status, postCount, onChanged }: { status: LearningStatus; po
             <div style={{ width: `${(Math.min(status.matured, status.readyAt) / status.readyAt) * 100}%` }} />
           </div>
           <p className="hint">
-            {left} more mature post{left === 1 ? '' : 's'} until results start steering batches. Until then, batches explore evenly and are ranked by drama score.
+            {left} more mature post{left === 1 ? '' : 's'} until YouTube results start steering batches. Until then, your Review decisions do (see Your taste).
           </p>
         </>
       )}

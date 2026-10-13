@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { THEMES } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { findTemplate } from '@sim/templates';
+import { REJECT_REASONS } from '@sim/analytics/reasons';
 import { api, exportFileUrl, previewVideoRef, type ReviewItem, type SocialCopy } from './api';
 
 const SOURCE_LABEL: Record<string, string> = { claude: 'Claude', fallback: 'Template defaults', mock: 'Mock (dry run)', manual: 'You (Playground)' };
@@ -121,9 +122,41 @@ function Posts({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewItem) =
 
 const fmtSigned = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(1)}`;
 
+/**
+ * Reject with reasons: pick what was wrong (any number), optionally add a note. The taste model
+ * uses these to tell bad settings apart from a weak hook or a bug.
+ */
+function RejectPanel({ item, onDone, onCancel }: { item: ReviewItem; onDone: (reasons: string[], note: string) => void; onCancel: () => void }) {
+  const [picked, setPicked] = useState<string[]>(item.reasons);
+  const [note, setNote] = useState(item.note ?? '');
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  return (
+    <div className="reject-panel">
+      <p className="hint">What was wrong? (pick any)</p>
+      <div className="chips">
+        {REJECT_REASONS.map((r) => (
+          <button key={r.id} className={`chip ${picked.includes(r.id) ? 'on' : ''}`} onClick={() => toggle(r.id)}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+      <input placeholder="Note (optional), e.g. root note too high" value={note} onChange={(e) => setNote(e.target.value)} />
+      <div className="row">
+        <button className="danger" onClick={() => onDone(picked, note)}>
+          Reject{picked.length ? ` (${picked.length})` : ''}
+        </button>
+        <button onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+const reasonLabel = (id: string) => REJECT_REASONS.find((r) => r.id === id)?.label ?? id;
+
 export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; rank: number; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState(false);
   const template = findTemplate(item.recipe.templateId);
   const ready = item.status === 'ready' && item.files;
 
@@ -172,8 +205,22 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
               Experiment
             </span>
           )}
+          {item.taste && (
+            <span
+              className={`badge taste-badge ${item.taste.chance >= 0.6 ? 'ok-badge' : item.taste.chance < 0.4 ? 'warn-badge' : ''}`}
+              title={`How well this fits what you've approved and rejected so far (settings included).${item.concept?.paramsSource ? ` Settings: ${item.concept.paramsSource}.` : ''}`}
+            >
+              taste {Math.round(item.taste.chance * 100)}%
+            </span>
+          )}
           {item.decision !== 'pending' && <span className={`badge decision ${item.decision}`}>{item.decision}</span>}
         </div>
+        {item.decision === 'rejected' && (item.reasons.length > 0 || item.note) && (
+          <p className="hint small-text">
+            Rejected: {item.reasons.map(reasonLabel).join(', ')}
+            {item.note ? `${item.reasons.length ? ' · ' : ''}“${item.note}”` : ''}
+          </p>
+        )}
         {(item.prediction || item.concept?.experiment) && (
           <p className="prediction">
             {item.prediction && (
@@ -207,8 +254,12 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
           <button className={item.decision === 'approved' ? 'primary' : ''} disabled={!ready || !!busy} onClick={() => act('approve', () => api.decide(item.id, item.decision === 'approved' ? 'pending' : 'approved'))}>
             {item.decision === 'approved' ? '✓ Approved' : 'Approve'}
           </button>
-          <button className={item.decision === 'rejected' ? 'danger' : ''} disabled={!!busy || item.status === 'queued' || item.status === 'rendering'} onClick={() => act('reject', () => api.decide(item.id, item.decision === 'rejected' ? 'pending' : 'rejected'))}>
-            {item.decision === 'rejected' ? '✗ Rejected' : 'Reject'}
+          <button
+            className={item.decision === 'rejected' ? 'danger' : ''}
+            disabled={!!busy || item.status === 'queued' || item.status === 'rendering'}
+            onClick={() => (item.decision === 'rejected' ? act('reject', () => api.decide(item.id, 'pending')) : setRejecting((v) => !v))}
+          >
+            {item.decision === 'rejected' ? '✗ Rejected' : 'Reject…'}
           </button>
           <select
             value=""
@@ -224,6 +275,17 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
             <option value="concept">New concept</option>
           </select>
         </div>
+
+        {rejecting && item.decision !== 'rejected' && (
+          <RejectPanel
+            item={item}
+            onCancel={() => setRejecting(false)}
+            onDone={(reasons, note) => {
+              setRejecting(false);
+              void act('reject', () => api.decide(item.id, 'rejected', { reasons, note }));
+            }}
+          />
+        )}
 
         {item.platformText && (
           <details className="captions-box">

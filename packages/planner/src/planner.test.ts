@@ -175,6 +175,18 @@ describe('title emoji', () => {
     expect(seen.size).toBe(5);
   });
 
+  it('uses settings chosen up front (taste model) whatever the model returns, keeping planned variants', async () => {
+    const bb = { ...arm, templateId: 'ball-battle' };
+    const chooseParams = (_a: unknown, _t: number, fixed: Record<string, unknown>) => ({ params: { ...fixed, speed: 1111, hp: 222 }, source: 'near a video you approved' });
+    for (const gen of ['mock', 'fallback'] as const) {
+      const { concept } = await planOne(bb, 30, gen, { recentHooks: [], chooseParams }, new Rng(3));
+      expect(concept.params.speed).toBe(1111);
+      expect(concept.params.hp).toBe(222);
+      expect(['colors', 'countries']).toContain(concept.params.teams);
+      expect(concept.paramsSource).toBe('near a video you approved');
+    }
+  });
+
   it('leaves other templates\' plans unchanged', async () => {
     const { concept } = await planOne(arm, 30, 'fallback', { recentHooks: [] }, new Rng(5));
     expect(concept.params).not.toHaveProperty('teams');

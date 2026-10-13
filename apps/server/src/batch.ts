@@ -25,6 +25,7 @@ import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
 import { refreshYouTube, youtubeStatus } from './youtube';
 import { lastPostedAt, planningModel, predictInput, refitLearner } from './analytics';
+import { chooseParams, tasteArmPlanningModel, tastePredict } from './taste';
 
 const TERMINAL = new Set(['ready', 'failed', 'cancelled', 'deleted']);
 
@@ -142,6 +143,10 @@ export class BatchRunner extends EventEmitter {
       this.warn(batchId, 'No Anthropic API key found (ANTHROPIC_API_KEY in .env), so concepts use template copy.');
     }
     let idx = existing.length;
+    // YouTube results steer once enough posts have matured; until then, the taste model learned
+    // from Review decisions does (templates judged by their best settings, not the batch average).
+    const youtube = planningModel();
+    const model = youtube.ready ? youtube : (tasteArmPlanningModel() ?? youtube);
     await planConcepts(
       {
         count: missing,
@@ -153,8 +158,8 @@ export class BatchRunner extends EventEmitter {
         generator,
         seed: hashSeed(batchId) + existing.length,
       },
-      planningModel(),
-      { recentHooks: recentHooks(), notes: s.notes || undefined },
+      model,
+      { recentHooks: recentHooks(), notes: s.notes || undefined, chooseParams },
       (planned) => {
         if (this.cancelled.has(batchId)) return;
         const concept = planned.concept;
@@ -198,7 +203,10 @@ export class BatchRunner extends EventEmitter {
     const best = results[0];
     // Rank by what the learner expects of this exact candidate (its real length, drama and copy);
     // until the model is steering, by drama score alone.
-    const prediction = predictInput({ arm: concept.arm, melodyId: concept.melodyId, durationS: best.durationS, drama: best.total, copy: copyFeatures(concept.copy) });
+    const input = { arm: concept.arm, melodyId: concept.melodyId, durationS: best.durationS, drama: best.total, copy: copyFeatures(concept.copy) };
+    const prediction = predictInput(input);
+    // Without YouTube data yet, rank by fit to taste (settings included), with drama as a tiebreak.
+    const taste = prediction ? null : tastePredict({ ...input, params: concept.params });
     const row = insertRender({
       batchId,
       conceptId: c.id,
@@ -208,7 +216,7 @@ export class BatchRunner extends EventEmitter {
       score: best.total,
       scoreParts: best.parts ?? null,
       altSeeds: results.slice(1, 8).filter((r) => !r.timedOut).map((r) => r.seed),
-      rankScore: prediction ? prediction.mean : best.total,
+      rankScore: prediction ? prediction.mean : taste ? taste.mean + 0.3 * best.total : best.total,
       prediction,
     });
     // Cancelled while this search was running: keep the result for reference, don't render it.

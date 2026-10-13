@@ -16,7 +16,28 @@ export interface Catalog {
   melodies: string[];
   /** Planner-split param values, as "templateId.param=value" (each non-default value is one feature). */
   variants?: string[];
+  /**
+   * Template settings to learn from (the taste model): each numeric param gets a linear and a
+   * squared term (so "extreme values sound off" can be learned), each choice param one feature per
+   * option. Effects are per template, so bad settings take the blame instead of the template.
+   */
+  params?: ParamSpec[];
 }
+
+export interface ParamSpec {
+  templateId: string;
+  param: string;
+  title: string;
+  kind: 'number' | 'enum';
+  default: number | string;
+  min?: number;
+  max?: number;
+  /** Options for choice params (booleans as "true"/"false"). */
+  values?: string[];
+}
+
+/** Numeric settings in "quarter ranges" from the default: ±1 is a quarter of the slider away. */
+export const paramScale = (spec: ParamSpec, v: number) => ((v - (spec.default as number)) / Math.max(1e-9, spec.max! - spec.min!)) * 4;
 
 /** What the model knows about one video. Unknowns (e.g. at planning time) count as "average". */
 export interface LearnerInput {
@@ -60,7 +81,8 @@ export type FeatureGroup =
   | 'copy'
   | 'cta'
   | 'time'
-  | 'variant';
+  | 'variant'
+  | 'param';
 
 const CTA_STYLES: CtaStyle[] = ['guess', 'pick', 'rate', 'opinion', 'other'];
 export const HOUR_SLOTS = ['night', 'morning', 'afternoon', 'evening'] as const;
@@ -81,6 +103,11 @@ export function featureSpace(c: Catalog): Feature[] {
   add('cta', CTA_STYLES.map((s) => `cta:${s}`), 0.2, true);
   add('time', [...HOUR_SLOTS.map((s) => `time:${s}`), 'time:weekend'], 0.2, true);
   add('variant', (c.variants ?? []).map((v) => `variant:${v}`), 0.3, true);
+  for (const spec of c.params ?? []) {
+    const base = `param:${spec.templateId}.${spec.param}`;
+    if (spec.kind === 'number') add('param', [base, `${base}^2`], 0.25, true);
+    else add('param', (spec.values ?? []).map((v) => `${base}=${v}`), 0.3, true);
+  }
   return f;
 }
 
@@ -112,6 +139,19 @@ function rawValues(x: LearnerInput, c: Catalog): Map<string, number> {
     const [, templateId, param, value] = /^(.+?)\.(.+?)=(.+)$/.exec(variant) ?? [];
     if (templateId === x.arm.templateId && x.params && param in x.params) v.set(`variant:${variant}`, x.params[param] === value ? 1 : 0);
   }
+  if (x.params) {
+    for (const spec of c.params ?? []) {
+      if (spec.templateId !== x.arm.templateId) continue;
+      const base = `param:${spec.templateId}.${spec.param}`;
+      const value = x.params[spec.param] ?? spec.default;
+      if (spec.kind === 'number') {
+        const u = paramScale(spec, Number(value));
+        if (!Number.isFinite(u)) continue;
+        v.set(base, u);
+        v.set(`${base}^2`, u * u);
+      } else for (const option of spec.values ?? []) v.set(`${base}=${option}`, String(value) === option ? 1 : 0);
+    }
+  }
   if (x.publishedAt !== undefined) {
     v.set(`time:${hourSlot(x.publishedAt)}`, 1);
     const d = new Date(x.publishedAt).getDay();
@@ -127,8 +167,8 @@ function knownGroups(raw: Map<string, number>, features: Feature[]): Set<Feature
   return g;
 }
 
-/** Variants belong to different templates, so each is known on its own rather than per group. */
-const isKnown = (f: Feature, raw: Map<string, number>, known: Set<FeatureGroup>) => (f.group === 'variant' ? raw.has(f.name) : known.has(f.group));
+/** Variants and settings belong to different templates, so each is known on its own rather than per group. */
+const isKnown = (f: Feature, raw: Map<string, number>, known: Set<FeatureGroup>) => (f.group === 'variant' || f.group === 'param' ? raw.has(f.name) : known.has(f.group));
 
 export interface LearnerModel {
   version: number;
@@ -375,6 +415,69 @@ export function armModel(m: LearnerModel, opts: { temperature?: number } = {}): 
       return `Testing ${describeFactor(least.f, m.catalog)}: ${least.n === 0 ? 'no posts yet' : `${least.n} post${least.n === 1 ? '' : 's'} so far`}`;
     },
   };
+}
+
+/**
+ * Arm model for the taste model: a template is judged by what it could do with its best known
+ * settings, not by the average of what the batches happened to try. Each draw scores every
+ * candidate setting of a template and keeps the best, so a template whose batch settings were poor
+ * but whose hand-tuned settings were loved still gets picked.
+ */
+export function tasteArmModel(m: LearnerModel, candidates: Record<string, Record<string, unknown>[]>, opts: { temperature?: number; ready?: boolean } = {}): ArmModel {
+  const features = spaceFor(m.catalog);
+  const settingIdx = features.flatMap((f, i) => (f.group === 'param' || f.group === 'variant' ? [i] : []));
+  const armIdx = features.flatMap((f, i) => (f.group === 'param' || f.group === 'variant' ? [] : [i]));
+  const probe = (templateId: string): Arm => ({ templateId, themeId: '', lengthBucket: 'medium', hookStyle: 'question' });
+  // Setting-only vectors per template (centred), computed once.
+  const settingVecs = new Map<string, number[][]>();
+  for (const [t, list] of Object.entries(candidates)) {
+    settingVecs.set(
+      t,
+      list.map((params) => {
+        const v = vector({ arm: probe(t), params }, features, m.means, m.catalog);
+        return settingIdx.map((i) => v[i]);
+      }),
+    );
+  }
+  const armPart = (arm: Arm, w: number[]) => {
+    const v = vector({ arm }, features, m.means, m.catalog);
+    return armIdx.reduce((s, i) => s + v[i] * w[i], 0);
+  };
+  const bestSetting = (t: string, w: number[]) => {
+    const vecs = settingVecs.get(t);
+    if (!vecs?.length) return 0;
+    const ws = settingIdx.map((i) => w[i]);
+    return Math.max(...vecs.map((v) => dot(v, ws)));
+  };
+  const meanBest = new Map<string, number>();
+  const meanFor = (arm: Arm) => {
+    if (!meanBest.has(arm.templateId)) meanBest.set(arm.templateId, bestSetting(arm.templateId, m.mu));
+    return armPart(arm, m.mu) + meanBest.get(arm.templateId)!;
+  };
+  return {
+    ready: opts.ready ?? m.ready,
+    sample(rng) {
+      const w = sampleWeights(m, rng, opts.temperature ?? THOMPSON_TEMPERATURE);
+      const best = new Map<string, number>();
+      return (arm) => {
+        if (!best.has(arm.templateId)) best.set(arm.templateId, bestSetting(arm.templateId, w));
+        return armPart(arm, w) + best.get(arm.templateId)!;
+      };
+    },
+    mean: meanFor,
+    sd: (arm) => predict(m, { arm }).sd,
+    experimentReason(arm) {
+      const n = m.counts[`template:${arm.templateId}`] ?? 0;
+      return `Exploring ${m.catalog.templates.find((t) => t.id === arm.templateId)?.name ?? arm.templateId}: ${n === 0 ? 'not reviewed yet' : `${n} reviewed so far`}`;
+    },
+  };
+}
+
+/** Score candidate settings for one template with one posterior draw (or the mean when no rng). */
+export function scoreSettings(m: LearnerModel, arm: Arm, candidates: Record<string, unknown>[], w?: number[]): number[] {
+  const features = spaceFor(m.catalog);
+  const weights = w ?? m.mu;
+  return candidates.map((params) => dot(vector({ arm, params }, features, m.means, m.catalog), weights));
 }
 
 // ---- calibration -------------------------------------------------------------------------------

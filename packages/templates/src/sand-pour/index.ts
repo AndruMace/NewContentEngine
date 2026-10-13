@@ -298,6 +298,7 @@ export const sandPour: Template<SandPourParams, State> = {
   description:
     'Coloured sand pours from a wandering stream into a container (jar, heart, hourglass or Galton board), building up striped layers. Overfilled sand spills over the rim and piles up on the floor.',
   schema: sandPourSchema,
+  lengthParam: { param: 'fillSeconds', offsetS: 2.3 },
   substeps: 2,
   searchBudget: 16,
   glowScale: 0.5,

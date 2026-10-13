@@ -97,6 +97,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
   family: 'kinetic',
   description: `A polyrhythm visual: every element moves at its own whole-number rate and plays a note on each beat, so they drift into patterns and all line up again exactly at the end; the video loops seamlessly. Styles: ${POLYRHYTHM_STYLES.map((k) => `${k} (${STYLE_TEXT[k]})`).join('; ')}. Speed patterns: linear (even spread), harmonic (multiples, like overtones), primes (few partial lineups, one big one at the end), mirror (slowest in the middle, symmetric twins), random.`,
   schema: polyrhythmSchema,
+  lengthParam: { param: 'loopSeconds', offsetS: 0 },
   substeps: 4,
   searchBudget: 24,
   ownMusic: true,
