@@ -265,13 +265,14 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
             value=""
             disabled={!!busy || item.status === 'queued' || item.status === 'rendering'}
             onChange={(e) => {
-              const kind = e.target.value as 'seed' | 'copy' | 'concept';
+              const kind = e.target.value as 'seed' | 'copy' | 'concept' | 'melody';
               if (kind) void act('reroll', () => api.reroll(item.id, kind));
             }}
           >
             <option value="">{busy === 'reroll' ? 'Re-rolling…' : 'Re-roll…'}</option>
             <option value="seed">Different run (same idea)</option>
             <option value="copy">New copy (same run)</option>
+            {template && !template.ownMusic && <option value="melody">New melody (same run)</option>}
             <option value="concept">New concept</option>
           </select>
         </div>

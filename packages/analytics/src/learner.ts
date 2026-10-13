@@ -50,6 +50,8 @@ export interface LearnerInput {
   params?: Record<string, unknown>;
   /** Local posting time; unknown when planning. */
   publishedAt?: number;
+  /** False when the hook style wasn't planned (Playground videos), so they don't credit any style. */
+  hookKnown?: boolean;
 }
 
 export interface TrainingRow {
@@ -116,7 +118,7 @@ function rawValues(x: LearnerInput, c: Catalog): Map<string, number> {
   const v = new Map<string, number>([['intercept', 1]]);
   v.set(`template:${x.arm.templateId}`, 1);
   v.set(`theme:${x.arm.themeId}`, 1);
-  v.set(`hook:${x.arm.hookStyle}`, 1);
+  if (x.hookKnown !== false) v.set(`hook:${x.arm.hookStyle}`, 1);
   v.set(`length:${x.arm.lengthBucket}`, 1);
   v.set(`templateLength:${x.arm.templateId}|${x.arm.lengthBucket}`, 1);
   const dur = x.durationS ?? c.lengthBuckets.find((b) => b.id === x.arm.lengthBucket)?.midS;

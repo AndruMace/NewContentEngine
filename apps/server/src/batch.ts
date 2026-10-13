@@ -13,6 +13,7 @@ import {
   insertConcept,
   insertRender,
   recentHooks,
+  recentMelodies,
   rendersForBatch,
   updateBatch,
   updateRender,
@@ -163,8 +164,8 @@ export class BatchRunner extends EventEmitter {
       (planned) => {
         if (this.cancelled.has(batchId)) return;
         const concept = planned.concept;
-        // Honour the melody filter (Claude picks from all melodies).
-        if (s.melodyIds.length && !s.melodyIds.includes(concept.melodyId)) concept.melodyId = new Rng(idx + 7).pick(s.melodyIds);
+        // Melodies are assigned for variety (never learned): no repeats within the batch.
+        concept.melodyId = chooseMelody(batchId, concept.templateId, new Rng(hashSeed(batchId) + idx * 7919));
         insertConcept(batchId, idx++, concept);
         if (planned.warning) this.warn(batchId, planned.warning);
         this.emit('changed', batchId);
@@ -298,3 +299,26 @@ export function notifyMac(message: string) {
 }
 
 export const ALL_MELODY_IDS = MELODIES.map((m) => m.id);
+
+/**
+ * A melody for a new candidate in this batch, chosen for variety: one no other live candidate in
+ * the batch uses yet, preferring ones not heard in recent batches; if every melody is taken, the
+ * least used. Templates that make their own notes don't use a melody, so they don't take one.
+ */
+export function chooseMelody(batchId: string, templateId: string, rng: Rng, exclude: string[] = []): string {
+  const s = getBatch(batchId)?.settings;
+  const pool = (s?.melodyIds.length ? s.melodyIds : ALL_MELODY_IDS).filter((m) => !exclude.includes(m));
+  const options = pool.length ? pool : ALL_MELODY_IDS;
+  if (getTemplate(templateId).ownMusic) return rng.pick(options);
+  const inBatch = new Map<string, number>();
+  for (const c of conceptsForBatch(batchId)) {
+    if (getTemplate(c.concept.templateId).ownMusic) continue;
+    inBatch.set(c.concept.melodyId, (inBatch.get(c.concept.melodyId) ?? 0) + 1);
+  }
+  for (const r of liveRenders(rendersForBatch(batchId))) if (!getTemplate(r.recipe.templateId).ownMusic) inBatch.set(r.recipe.melodyId, Math.max(inBatch.get(r.recipe.melodyId) ?? 0, 1));
+  const recent = new Set(recentMelodies());
+  const fewest = Math.min(...options.map((m) => inBatch.get(m) ?? 0));
+  const least = options.filter((m) => (inBatch.get(m) ?? 0) === fewest);
+  const fresh = least.filter((m) => !recent.has(m));
+  return rng.pick(fresh.length ? fresh : least);
+}

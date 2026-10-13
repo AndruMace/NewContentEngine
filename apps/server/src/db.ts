@@ -382,6 +382,15 @@ export function requeueInterrupted(): number {
   return Number(db.prepare("UPDATE renders SET status = 'queued', stage = NULL, progress = 0 WHERE status = 'rendering'").run().changes);
 }
 
+/** Melodies of the most recent batch renders (newest first), so new batches can avoid repeating them. */
+export function recentMelodies(limit = 24): string[] {
+  return db
+    .prepare("SELECT recipe FROM renders WHERE kind = 'batch' AND superseded_by IS NULL ORDER BY created_at DESC LIMIT ?")
+    .all(limit)
+    .map((r: any) => json<{ melodyId?: string }>(r.recipe, {}).melodyId)
+    .filter((m): m is string => Boolean(m));
+}
+
 /** Recent hooks across batches, so the planner avoids repeats. */
 export function recentHooks(limit = 30): string[] {
   return db

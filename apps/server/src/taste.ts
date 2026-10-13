@@ -47,7 +47,7 @@ interface Example {
 
 const bucketFor = (s: number) => (s < 25 ? 'short' : s < 40 ? 'medium' : 'long') as Arm['lengthBucket'];
 
-/** A copy-only reroll (same simulation, new text) says nothing about the settings. */
+/** A copy or melody reroll (same simulation and settings) says nothing about the settings. */
 function copyOnlyReroll(r: RenderRow): boolean {
   const next = r.supersededBy ? getRender(r.supersededBy) : undefined;
   return Boolean(next && next.recipe.seed === r.recipe.seed && JSON.stringify(next.recipe.params) === JSON.stringify(r.recipe.params));
@@ -85,6 +85,8 @@ export function tasteInput(r: RenderRow): LearnerInput | null {
     drama: r.score ?? undefined,
     copy: r.copy ? copyFeatures({ hook: r.copy.hook, cta: r.copy.cta, title: r.copy.title }) : undefined,
     params: parseParams(template, r.recipe.params ?? {}) as Record<string, unknown>,
+    // Playground videos have no planned hook style: don't let them all credit "question".
+    hookKnown: Boolean(concept),
   };
 }
 

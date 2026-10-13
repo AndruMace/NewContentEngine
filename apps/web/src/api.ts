@@ -104,7 +104,7 @@ export const api = {
   cancelBatch: (id: string) => call('POST', `/api/batches/${id}/cancel`),
   decide: (id: string, decision: 'approved' | 'rejected' | 'pending', feedback: { reasons?: string[]; note?: string | null } = {}) =>
     call<ReviewItem>('POST', `/api/review/${id}/decision`, { decision, ...feedback }),
-  reroll: (id: string, kind: 'seed' | 'copy' | 'concept') => call<ReviewItem>('POST', `/api/review/${id}/reroll`, { kind }),
+  reroll: (id: string, kind: 'seed' | 'copy' | 'concept' | 'melody') => call<ReviewItem>('POST', `/api/review/${id}/reroll`, { kind }),
   editCopy: (id: string, patch: Partial<SocialCopy>) => call<ReviewItem>('PATCH', `/api/review/${id}/copy`, patch),
   exportBundle: (id: string) => call<ReviewItem>('POST', `/api/review/${id}/export`),
   setPost: (id: string, platform: string, url: string) => call<ReviewItem>('PUT', `/api/review/${id}/posts`, { platform, url }),

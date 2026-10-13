@@ -87,7 +87,11 @@ export class Runner<P = any, S = any> {
       height: VIDEO_HEIGHT,
       theme: opts.theme,
     });
-    const copy: Copy = { ...template.defaultCopy, ...(opts.copy ?? {}) };
+    // Field by field, so a field present but undefined (a cleared input) still falls back to the default.
+    const copy: Copy = {
+      hook: opts.copy?.hook ?? template.defaultCopy.hook,
+      cta: opts.copy?.cta ?? template.defaultCopy.cta,
+    };
     const values = this.params as Record<string, unknown>;
     this.overlays = template.overlays(this.params, {
       hook: fillCopy(copy.hook, values),

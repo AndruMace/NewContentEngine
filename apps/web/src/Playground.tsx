@@ -100,7 +100,8 @@ export function Playground() {
           <label className="param">
             <span>Template</span>
             <select value={recipe.templateId} onChange={(e) => {
-                update({ templateId: e.target.value, params: {} });
+                // Custom copy is written for one template, so it goes back to the new template's defaults.
+                update({ templateId: e.target.value, params: {}, copy: {} });
                 setSearch({ progress: 0, results: [], running: false });
               }}>
               {TEMPLATES.map((t) => (

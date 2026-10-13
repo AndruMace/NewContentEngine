@@ -1,5 +1,4 @@
 import { THEMES, paramsJsonSchema } from '@sim/engine';
-import { MELODIES } from '@sim/audio';
 import { TEMPLATES } from '@sim/templates';
 import { HOOK_STYLES, LENGTH_BUCKETS, PLANNED_VARIANTS } from '@sim/planner';
 import type { Catalog, ParamSpec } from './learner';
@@ -11,7 +10,8 @@ export function defaultCatalog(): Catalog {
     themes: THEMES.map((t) => t.id),
     hookStyles: Object.keys(HOOK_STYLES),
     lengthBuckets: Object.entries(LENGTH_BUCKETS).map(([id, [lo, hi]]) => ({ id, midS: (lo + hi) / 2 })),
-    melodies: MELODIES.map((m) => m.id),
+    // Melodies are assigned for variety, never learned: past decisions shouldn't favour one.
+    melodies: [],
     variants: Object.entries(PLANNED_VARIANTS).flatMap(([templateId, vs]) => vs.flatMap((v) => v.values.slice(1).map((value) => `${templateId}.${v.param}=${value}`))),
   };
 }

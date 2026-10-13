@@ -75,7 +75,7 @@ function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOp
     opts.fixedParams
       ? `Parameters are already chosen for this video (from settings the channel owner liked): ${JSON.stringify(opts.variants)}. Return them unchanged as params and write copy that matches them; prefer {paramName} placeholders over restating numbers.`
       : '',
-    `Available melodies (public domain): ${MELODIES.map((m) => `${m.id} (${m.title})`).join(', ')}.`,
+    `Melody: assigned separately for variety; return "${MELODIES[0].id}" as melodyId.`,
     ctx.recentHooks.length ? `Recent hooks to avoid repeating:\n${ctx.recentHooks.slice(0, 20).map((h) => `- ${h}`).join('\n')}` : '',
     ctx.performanceSummary ? `What has been performing:\n${ctx.performanceSummary}` : '',
     ctx.notes ? `Notes from the channel owner for today: ${ctx.notes}` : '',

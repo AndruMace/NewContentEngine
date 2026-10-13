@@ -23,7 +23,8 @@ import {
   updateRender,
   type RenderRow,
 } from './db';
-import { hashSeed, recipeFor, type BatchRunner } from './batch';
+import { ALL_MELODY_IDS, chooseMelody, hashSeed, recipeFor, type BatchRunner } from './batch';
+import { getTemplate } from '@sim/templates';
 import { postFeatures, predictFeatures } from './analytics';
 import { chooseParams } from './taste';
 import { REJECT_REASONS } from '@sim/analytics';
@@ -82,6 +83,30 @@ export class ReviewActions {
     return next;
   }
 
+  /** Same run and copy, a different melody (one not used elsewhere in the batch). Melody only changes the sound. */
+  async rerollMelody(id: string): Promise<RenderRow> {
+    const r = mustRender(id);
+    if (getTemplate(r.recipe.templateId).ownMusic) throw new Error('This template makes its own notes; it has no melody to change');
+    const rng = new Rng(Date.now() % 1e9);
+    const melodyId = r.batchId ? chooseMelody(r.batchId, r.recipe.templateId, rng, [r.recipe.melodyId]) : rng.pick(ALL_MELODY_IDS.filter((m) => m !== r.recipe.melodyId));
+    const c = r.conceptId ? getConcept(r.conceptId) : undefined;
+    if (c) updateConcept(c.id, { ...c.concept, melodyId });
+    const next = insertRender({
+      batchId: r.batchId,
+      conceptId: r.conceptId,
+      kind: r.kind,
+      recipe: { ...r.recipe, melodyId },
+      copy: r.copy,
+      score: r.score,
+      scoreParts: r.scoreParts,
+      altSeeds: r.altSeeds,
+      rankScore: r.rankScore,
+    });
+    supersede(r, next);
+    this.scheduler.notify();
+    return next;
+  }
+
   /** New text from Claude (or template copy), same simulation. Re-renders because the hook changes. */
   async rerollCopy(id: string): Promise<RenderRow> {
     const r = mustRender(id);
@@ -104,6 +129,7 @@ export class ReviewActions {
     const client = claudeAvailable() ? new Anthropic() : undefined;
     const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams }, new Rng(Date.now() % 1e9), client);
     if (c.concept.experiment) planned.concept.experiment = c.concept.experiment;
+    planned.concept.melodyId = chooseMelody(r.batchId, planned.concept.templateId, new Rng(Date.now() % 1e9));
     const concept = insertConcept(r.batchId, conceptsForBatch(r.batchId).length, planned.concept);
     const next = await this.batches.searchAndQueue(r.batchId, concept, { kind: r.kind });
     supersede(r, next);

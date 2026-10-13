@@ -143,10 +143,17 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected' | '
   return reviewItem(r);
 });
 
-app.post<{ Params: { id: string }; Body: { kind: 'seed' | 'copy' | 'concept' } }>('/api/review/:id/reroll', async (req, reply) => {
+app.post<{ Params: { id: string }; Body: { kind: 'seed' | 'copy' | 'concept' | 'melody' } }>('/api/review/:id/reroll', async (req, reply) => {
   try {
     const kind = req.body.kind;
-    const r = kind === 'seed' ? await review.rerollSeed(req.params.id) : kind === 'copy' ? await review.rerollCopy(req.params.id) : await review.rerollConcept(req.params.id);
+    const r =
+      kind === 'seed'
+        ? await review.rerollSeed(req.params.id)
+        : kind === 'copy'
+          ? await review.rerollCopy(req.params.id)
+          : kind === 'melody'
+            ? await review.rerollMelody(req.params.id)
+            : await review.rerollConcept(req.params.id);
     changed(r);
     return reviewItem(r);
   } catch (e) {

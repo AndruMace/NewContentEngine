@@ -354,12 +354,13 @@ export const ringEscape: Template<RingEscapeParams, State> = {
         return melody.next().map((midi, i) => ({ kind: 'note' as const, midi, vel: i ? vel * 0.45 : vel, voice: theme.voice, pan }));
       }
       case 'break': {
-        const idx = e.ring as number;
-        const penta = [0, 2, 4, 7, 9];
-        const midi = Math.min(96, 72 + penta[idx % 5] + 12 * Math.floor(idx / 5) * 0.5);
+        // Passing a gap plays the next melody step, accented, with a soft halo an octave above the
+        // melody note. Only the song's own pitches are used, so it always fits whatever key it's in.
+        const step = melody.next();
+        const glow = 0.3 + 0.2 * ((e.ring as number) / Math.max(1, (e.of as number) - 1));
         return [
-          { kind: 'sfx', name: 'shatter', vel: 0.55, pitch: idx / Math.max(1, (e.of as number) - 1), pan },
-          { kind: 'note', midi: Math.round(midi), vel: 0.3, voice: 'bell', pan },
+          ...step.map((midi, i) => ({ kind: 'note' as const, midi, vel: i ? 0.4 : 0.85, voice: theme.voice, pan })),
+          { kind: 'note', midi: step[0] + 12, vel: glow, voice: 'softsine', dur: 1.6, pan },
         ];
       }
       case 'escape':

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FONT_FAMILY, lighten, paletteAt, type DramaScore, type Rng, type Template } from '@sim/engine';
+import { FONT_FAMILY, lighten, paletteAt, type DramaScore, type Template } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { clamp01, gaussFit } from '../scoring';
 import { THREE, canvasTexture, draw3D, environmentMap, sceneCache } from '../three-layer';
@@ -10,9 +10,9 @@ const SHAPES: ShapeId[] = ['cube', 'octahedron', 'dodecahedron', 'icosahedron'];
 export const shellEscapeSchema = z.object({
   shells: z.number().int().min(2).max(6).default(4).meta({ title: 'Shells' }),
   shapes: z.enum(['mixed', ...SHAPES] as [string, ...string[]]).default('mixed').meta({ title: 'Shell shapes' }),
-  holeSize: z.number().min(0.5).max(1.6).default(1).meta({ title: 'Hole size (escape chance per bounce)', step: 0.05 }),
+  holeSize: z.number().min(0.5).max(1.6).default(1).meta({ title: 'Hole size', step: 0.05 }),
   speed: z.number().min(0.5).max(2.5).default(1.5).meta({ title: 'Ball speed', step: 0.05 }),
-  spin: z.number().min(0).max(2).default(0.7).meta({ title: 'Shell spin', step: 0.05 }),
+  spin: z.number().min(0).max(2).default(0.5).meta({ title: 'Shell spin', step: 0.05 }),
 });
 
 export type ShellEscapeParams = z.infer<typeof shellEscapeSchema>;
@@ -46,7 +46,6 @@ interface State {
   endAt: number | null;
   t: number;
   visual: boolean;
-  rng: Rng;
   trail: V3[];
   /** Recent bounces (which face, where), for the face flash and impact ripple. */
   hits: { t: number; layer: number; face: number; p: V3; n: V3 }[];
@@ -54,15 +53,22 @@ interface State {
 
 /** Each shell's circumradius as a fraction of the inradius of the shell around it. */
 const NEST = 0.84;
-/** Ball speed in active-shell inradii per second (times the speed param). */
+/** Ball speed in active-shell inradii per second (times the speed param), set as it enters each shell. */
 const SPEED_K = 2.1;
-/** Target chance that a bounce lands in the hole (times the holeSize param), the same for every shape. */
-const ESCAPE_CHANCE = 0.09;
-/** Seeded wobble on each bounce so the ball never settles into a path that keeps missing the hole. */
-const JITTER = 0.14;
+/**
+ * Window size: its share of the shell's surface (times the holeSize param), the same for every
+ * shape. Purely geometric: the ball escapes only by physically flying through it.
+ */
+const ESCAPE_CHANCE = 0.105;
 const BALL_K = 0.12;
 const OUTRO_S = 2.8;
-const GLASS = 0.14;
+/** Glass opacity on the camera's side (clear, so the ball shows) and the far side (tinted backdrop). */
+const GLASS_NEAR = 0.05;
+const GLASS_FAR = 0.22;
+const SHATTER_S = 0.9;
+const CAM_EASE_S = 1.5;
+const TRAIL = 34;
+const smooth = (u: number) => u * u * (3 - 2 * u);
 
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -95,7 +101,7 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
     'A glowing ball bounces inside nested, slowly spinning glass shapes (cubes, octahedra, dodecahedra, icosahedra), rendered in 3D. Each shell has one window; when the ball finds it, the shell shatters and the camera pulls back to the next, bigger shell. Every bounce plays a note and lights up the face it hit. Escape all of them to win.',
   schema: shellEscapeSchema,
   substeps: 4,
-  glowScale: 0.8,
+  glowScale: 0.5,
   defaultCopy: {
     hook: 'How many bounces to escape every shell?',
     cta: 'Escaped in {bounces} bounces! Guess closer?',
@@ -148,7 +154,6 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
       endAt: null,
       t: 0,
       visual,
-      rng,
       trail: [],
       hits: [],
     };
@@ -162,7 +167,7 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
     for (let k = 0; k < 3; k++) pos[k] += vel[k] * dt;
     if (s.visual && Math.round(t * 240) % 2 === 0) {
       s.trail.push([pos[0], pos[1], pos[2]]);
-      if (s.trail.length > 22) s.trail.shift();
+      if (s.trail.length > TRAIL) s.trail.shift();
     }
     if (s.layer >= s.shells.length) {
       // Free: glide to a stop while still in frame.
@@ -176,7 +181,6 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
     const ang = shellAngle(sh, t + dt);
     const local = rotate(sh.axis, -ang, pos);
     const spinV = cross(scale(sh.axis, sh.omega), pos);
-    const speed = targetSpeed(s);
 
     // The hole face goes first: while the ball is passing through the window, the other faces'
     // planes (which extend past the shell) must not bounce it back.
@@ -208,6 +212,8 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
               s.endAt = t;
               emit({ type: 'free', bounces: s.bounces });
             } else {
+              // Each shell is bigger and the camera pulls back to match, so the ball keeps the same
+              // speed on screen: scale it to the new shell (direction unchanged).
               const k = targetSpeed(s) / Math.sqrt(dot(vel, vel));
               for (let i = 0; i < 3; i++) vel[i] *= k;
             }
@@ -221,21 +227,17 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
         }
       }
       if (dist <= D - s.r) continue;
-      // Bounce off the (moving) face: reflect the velocity relative to the spinning wall.
+      // Perfectly elastic bounce off the (moving) face: mirror the velocity relative to the spinning
+      // wall. Angle of incidence = angle of reflection in the wall's frame; the wall's motion can add
+      // or take a little speed, as it would for a real ball. No randomness: the spinning walls alone
+      // keep the ball from settling into a path that never finds the window.
       const n = rotate(sh.axis, ang, face.n);
       const over = dist - (D - s.r);
       for (let i = 0; i < 3; i++) pos[i] -= n[i] * over;
       const u: V3 = [vel[0] - spinV[0], vel[1] - spinV[1], vel[2] - spinV[2]];
       const un = dot(u, n);
       if (un > 0) {
-        const j = unitVector(s.rng);
-        const sp0 = Math.sqrt(dot(u, u));
-        for (let i = 0; i < 3; i++) vel[i] = u[i] - 2 * un * n[i] + spinV[i] + j[i] * JITTER * sp0;
-        // Never let the wobble point it back into the wall.
-        const back = dot(vel, n);
-        if (back > 0) for (let i = 0; i < 3; i++) vel[i] -= 2 * back * n[i];
-        const k = speed / Math.sqrt(dot(vel, vel));
-        for (let i = 0; i < 3; i++) vel[i] *= k;
+        for (let i = 0; i < 3; i++) vel[i] = u[i] - 2 * un * n[i] + spinV[i];
         s.bounces++;
         s.hits.push({ t, layer: s.layer, face: f, p: [pos[0] + n[0] * s.r, pos[1] + n[1] * s.r, pos[2] + n[2] * s.r], n });
         if (s.hits.length > 8) s.hits.shift();
@@ -262,54 +264,79 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
 
   render({ ctx, theme }, s) {
     const v = view(s, theme);
-    // Camera: frames the active shell and pulls back after every escape.
-    const viewR = (i: number) => (i < s.shells.length ? s.shells[i].R : 1.5);
+    // Camera: frames the active shell and eases back after every escape, so the shell in play
+    // always fills about the same part of the screen.
+    const viewR = (i: number) => (i < s.shells.length ? s.shells[i].R : s.shells[s.shells.length - 1].R * 1.35);
     let R = viewR(0);
     s.escapes.forEach((te, i) => {
-      const u = clamp01((s.t - te) / 1.1);
+      const u = clamp01((s.t - te) / CAM_EASE_S);
       const e = u * u * (3 - 2 * u);
       R = viewR(i) + (viewR(i + 1) - viewR(i)) * e;
     });
-    // A wide lens close in gives strong perspective: the ball visibly grows and shrinks with depth.
     const dist = R * CAM_DIST;
+    const az = s.t * 0.22;
+    const el = 0.3 + 0.08 * Math.sin(s.t * 0.4);
+    const cam = new THREE.Vector3(Math.sin(az) * Math.cos(el) * dist, Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist);
+    // After the last escape the camera turns to keep the free ball centred.
+    const outro = s.endAt !== null ? smooth(clamp01((s.t - s.endAt) / 1.2)) : 0;
+    const look = new THREE.Vector3(...s.pos).multiplyScalar(outro);
+
     v.shells.forEach((g, i) => {
       const sh = s.shells[i];
       const broken = sh.brokeAt !== null && s.t >= sh.brokeAt;
       const ang = shellAngle(sh, broken ? sh.brokeAt! : s.t);
       g.group.quaternion.setFromAxisAngle(new THREE.Vector3(...sh.axis), ang);
       if (!broken) {
-        // Shells the camera is inside (or about to be) fade to faint edges, and fill in as it pulls back.
-        // Only the active shell has glass; the ones around it are faint outlines until the camera
-        // pulls back to them (and vanish while the camera is inside them).
-        const fade = clamp01((dist - sh.R * 1.4) / (sh.R * 1.6));
+        // Only the shell in play is shown: the ones around it are wider than the portrait frame, and
+        // their edges cutting across it made the active shell hard to read.
         const active = i === s.layer;
-        g.group.visible = active || fade > 0.01;
-        g.edgeMat.opacity = active ? 1 : 0.3 * fade;
-        g.rimMat.opacity = active ? 1 : 0.3 * fade;
+        g.group.visible = active;
+        if (!active) return;
+        const poly = polyhedron(sh.shape);
+        // How much each face looks toward the camera (1 near side, 0 far side), softened so edges
+        // don't pop as the shell turns.
+        const facing = poly.faces.map((face) => {
+          const n = new THREE.Vector3(...rotate(sh.axis, ang, face.n));
+          const c = n.clone().multiplyScalar(face.d * sh.R);
+          return clamp01(n.dot(cam.clone().sub(c).normalize()) * 4 + 0.5);
+        });
+        // Near edges bright and thick, far edges thin and dim: no more guessing which side is front.
+        g.edgeMeshes.forEach((m, e) => {
+          const [a, b] = g.edgeFaces[e];
+          const f = Math.max(facing[a] ?? 0, facing[b] ?? 0);
+          const thick = 0.55 + 0.95 * f;
+          m.scale.set(thick, 1, thick);
+          g.edgeMats[e].opacity = 0.16 + 0.84 * f;
+        });
+        // The window: a thick, pulsing white frame, unlike any edge.
+        g.rimMat.opacity = 0.8 + 0.2 * Math.sin(s.t * 6);
+        g.rims.forEach((m) => m.scale.set(1 + 0.25 * (0.5 + 0.5 * Math.sin(s.t * 6)), 1, 1 + 0.25 * (0.5 + 0.5 * Math.sin(s.t * 6))));
         g.faceMats.forEach((m, f) => {
-          m.visible = active;
+          m.visible = true;
           // The face the ball just hit lights up.
           let flash = 0;
           for (const h of s.hits) if (h.layer === i && h.face === f && s.t >= h.t) flash = Math.max(flash, Math.exp(-(s.t - h.t) * 7));
-          m.opacity = GLASS + 0.32 * flash;
+          // Near glass nearly clear (the ball shows through), far glass tinted: the ball is always
+          // seen against the back wall, which reads as depth.
+          m.opacity = GLASS_FAR - (GLASS_FAR - GLASS_NEAR) * facing[f] + 0.3 * flash;
           m.emissiveIntensity = 0.85 * flash;
         });
-        updateMarkers(g, s, i, ang);
+        updateAim(g, s, i, ang);
         return;
       }
-      // Shatter: faces fly outward, tumbling and fading.
+      // Shatter: faces fly outward fast, tumbling and fading.
       const tau = s.t - sh.brokeAt!;
-      g.group.visible = tau < 1.4;
+      g.group.visible = tau < SHATTER_S;
       g.edges.visible = false;
-      for (const m of g.markers) m.visible = false;
+      g.aim.visible = false;
       for (const m of g.faceMats) {
         m.visible = true;
         m.emissiveIntensity = 0;
-        m.opacity = GLASS * clamp01(1 - tau / 1.4);
+        m.opacity = GLASS_FAR * clamp01(1 - tau / SHATTER_S);
       }
       g.faces.forEach((m, f) => {
         const c = g.centers[f];
-        m.position.copy(c).multiplyScalar(1 + 2.6 * tau + 1.5 * tau * tau);
+        m.position.copy(c).multiplyScalar(1 + 4 * tau + 3 * tau * tau);
         m.rotation.set(tau * (3 + (f % 3)), tau * (2 + (f % 4)), 0);
       });
     });
@@ -318,23 +345,11 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
       const tau = s.t - s.endAt;
       v.wave.visible = tau < 1.6;
       const out = s.shells[s.shells.length - 1];
-      v.wave.scale.setScalar(out.R * (1 + 3.5 * tau));
+      v.wave.position.copy(look);
+      v.wave.scale.setScalar(out.R * (0.4 + 2.6 * tau));
       (v.wave.material as THREE.MeshBasicMaterial).opacity = clamp01(1 - tau / 1.6);
-      v.wave.lookAt(v.camera.position);
+      v.wave.lookAt(cam);
     }
-    // Impact ripples where the ball touched the wall.
-    let ri = 0;
-    for (const h of s.hits) {
-      const tau = s.t - h.t;
-      if (tau < 0 || tau > 0.45 || ri >= v.ripples.length) continue;
-      const m = v.ripples[ri++];
-      m.visible = true;
-      m.position.set(...h.p);
-      m.quaternion.setFromUnitVectors(Z_AXIS, new THREE.Vector3(...h.n));
-      m.scale.setScalar(s.r * (1.1 + 6 * tau));
-      (m.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - tau / 0.45);
-    }
-    for (; ri < v.ripples.length; ri++) v.ripples[ri].visible = false;
     // Depth fog: the far side of the shell dims.
     (v.scene.fog as THREE.Fog).near = dist - R * 0.6;
     (v.scene.fog as THREE.Fog).far = dist + R * 2.6;
@@ -349,16 +364,14 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
       m.visible = !!pt && i > 0;
       if (!pt) return;
       m.position.set(...pt);
-      m.scale.setScalar(s.r * (0.85 - (0.7 * i) / v.trail.length));
-      (m.material as THREE.MeshBasicMaterial).opacity = 0.5 * (1 - i / v.trail.length);
+      m.scale.setScalar(s.r * (0.8 - (0.65 * i) / v.trail.length));
+      (m.material as THREE.MeshBasicMaterial).opacity = 0.45 * (1 - i / v.trail.length);
     });
-    const az = s.t * 0.22;
-    const el = 0.3 + 0.08 * Math.sin(s.t * 0.4);
-    v.camera.position.set(Math.sin(az) * Math.cos(el) * dist, Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist);
+    v.camera.position.copy(cam);
     v.camera.near = R * 0.05;
     v.camera.far = R * 40;
     v.camera.updateProjectionMatrix();
-    v.camera.lookAt(0, 0, 0);
+    v.camera.lookAt(look);
     draw3D(ctx, v.scene, v.camera);
   },
 
@@ -433,42 +446,63 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
 interface ShellView {
   group: THREE.Group;
   edges: THREE.Group;
+  edgeMeshes: THREE.Mesh[];
+  edgeMats: THREE.MeshBasicMaterial[];
+  /** The two faces that meet at each edge. */
+  edgeFaces: [number, number][];
   faces: THREE.Mesh[];
   centers: THREE.Vector3[];
   faceMats: THREE.MeshPhysicalMaterial[];
-  markers: THREE.Mesh[];
-  edgeMat: THREE.MeshBasicMaterial;
+  /** Where the ball will hit next: a soft spot that grows brighter as impact nears (gold if it's the window). */
+  aim: THREE.Mesh;
+  aimMat: THREE.MeshBasicMaterial;
   rimMat: THREE.MeshBasicMaterial;
+  rims: THREE.Mesh[];
 }
 
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const CAM_DIST = 4.4;
+const AIM_LEAD_S = 1.1;
 
-/** Proximity spots: a soft glow on each face, under the ball, that sharpens and brightens as it nears. */
-function updateMarkers(g: ShellView, s: State, i: number, ang: number) {
-  const active = i === s.layer;
+/**
+ * Aim spot: on the face the ball is heading for, where it will land, fading in over the last
+ * AIM_LEAD_S seconds. When the landing point is inside the window it turns gold, so viewers see
+ * an escape coming (and feel the near misses).
+ */
+function updateAim(g: ShellView, s: State, i: number, ang: number) {
   const sh = s.shells[i];
+  g.aim.visible = false;
+  if (i !== s.layer || s.endAt !== null) return;
   const poly = polyhedron(sh.shape);
   const local = rotate(sh.axis, -ang, s.pos);
-  const pl: V3 = [local[0] / sh.R, local[1] / sh.R, local[2] / sh.R];
-  const rUnit = s.r / sh.R;
+  const vel = rotate(sh.axis, -ang, s.vel);
+  let best = -1;
+  let tHit = Infinity;
   poly.faces.forEach((face, f) => {
-    const m = g.markers[f];
-    if (!active) {
-      m.visible = false;
-      return;
+    const vn = dot(vel, face.n);
+    if (vn <= 1e-9) return;
+    const tf = (face.d * sh.R - s.r - dot(local, face.n)) / vn;
+    if (tf >= 0 && tf < tHit) {
+      tHit = tf;
+      best = f;
     }
-    const dist = dot(pl, face.n);
-    const gap = face.d - dist;
-    const inPlane: V3 = [pl[0] - face.n[0] * dist, pl[1] - face.n[1] * dist, pl[2] - face.n[2] * dist];
-    const inside = face.edgeNormals.every((e) => dot(inPlane, e) <= face.apothem);
-    const near = clamp01(1 - gap / (0.65 * poly.inradius));
-    m.visible = inside && near > 0.01;
-    if (!m.visible) return;
-    m.position.set(inPlane[0] + face.n[0] * (face.d - 0.004), inPlane[1] + face.n[1] * (face.d - 0.004), inPlane[2] + face.n[2] * (face.d - 0.004));
-    m.scale.setScalar(rUnit * (1.3 + 2.4 * (1 - near)));
-    (m.material as THREE.MeshBasicMaterial).opacity = Math.min(1, 1.3 * near * near);
   });
+  if (best < 0 || tHit > AIM_LEAD_S) return;
+  const face = poly.faces[best];
+  const hit: V3 = [local[0] + vel[0] * tHit, local[1] + vel[1] * tHit, local[2] + vel[2] * tHit];
+  const dist = dot(hit, face.n);
+  const inPlane: V3 = [hit[0] - face.n[0] * dist, hit[1] - face.n[1] * dist, hit[2] - face.n[2] * dist];
+  let clearance = Infinity;
+  for (const m of face.edgeNormals) clearance = Math.min(clearance, face.apothem * sh.holeScale * sh.R - dot(inPlane, m));
+  const window = best === sh.hole && clearance >= s.r;
+  const near = 1 - tHit / AIM_LEAD_S;
+  const k = 1 / sh.R;
+  g.aim.visible = true;
+  g.aim.position.set((inPlane[0] + face.n[0] * (face.d * sh.R - 0.004 * sh.R)) * k, (inPlane[1] + face.n[1] * (face.d * sh.R - 0.004 * sh.R)) * k, (inPlane[2] + face.n[2] * (face.d * sh.R - 0.004 * sh.R)) * k);
+  g.aim.quaternion.setFromUnitVectors(Z_AXIS, new THREE.Vector3(...face.n));
+  g.aim.scale.setScalar((s.r / sh.R) * (window ? 2.6 : 1.8) * (1.2 + 0.8 * (1 - near)));
+  g.aimMat.color.set(window ? '#ffffff' : g.aimMat.userData.base);
+  g.aimMat.opacity = Math.min(1, 0.3 + 0.9 * near);
 }
 
 const view = sceneCache((s: State, theme) => {
@@ -482,10 +516,12 @@ const view = sceneCache((s: State, theme) => {
   scene.add(sun);
   // Physical falloff; intensity is rescaled with the active shell's size each frame (render).
   const light = new THREE.PointLight(new THREE.Color(theme.accent), 1, 0, 2);
-  const spotTex = canvasTexture(128, 128, (c) => {
+  // Aim spot: a solid core with a soft edge, so it reads on bright glass too.
+  const aimTex = canvasTexture(128, 128, (c) => {
     const g = c.createRadialGradient(64, 64, 0, 64, 64, 64);
     g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+    g.addColorStop(0.45, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.7, 'rgba(255,255,255,0.35)');
     g.addColorStop(1, 'rgba(255,255,255,0)');
     c.fillStyle = g;
     c.fillRect(0, 0, 128, 128);
@@ -497,13 +533,13 @@ const view = sceneCache((s: State, theme) => {
     const poly = polyhedron(sh.shape);
     const col = paletteAt(theme.palette, sh.hue);
     const color = new THREE.Color(`rgb(${col.map((c) => Math.round(c)).join(',')})`);
-    const edgeCol = lighten(col, 0.2);
+    const edgeCol = col;
     const group = new THREE.Group();
     group.scale.setScalar(sh.R);
     const glass = new THREE.MeshPhysicalMaterial({
       color,
       transparent: true,
-      opacity: GLASS,
+      opacity: GLASS_FAR,
       roughness: 0.1,
       metalness: 0,
       side: THREE.DoubleSide,
@@ -513,10 +549,10 @@ const view = sceneCache((s: State, theme) => {
       emissiveIntensity: 0,
     });
     const faceMats: THREE.MeshPhysicalMaterial[] = [];
-    const markers: THREE.Mesh[] = [];
     const faces: THREE.Mesh[] = [];
     const centers: THREE.Vector3[] = [];
-    const rimMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.accent), transparent: true });
+    const rimMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffffff'), transparent: true });
+    const rims: THREE.Mesh[] = [];
     poly.faces.forEach((face, f) => {
       const c = new THREE.Vector3(...face.n).multiplyScalar(face.d);
       const u = new THREE.Vector3(...face.pts[0]).sub(c).normalize();
@@ -540,11 +576,6 @@ const view = sceneCache((s: State, theme) => {
       group.add(mesh);
       faces.push(mesh);
       centers.push(c.clone());
-      const marker = new THREE.Mesh(spotGeo, new THREE.MeshBasicMaterial({ map: spotTex, color: new THREE.Color(theme.accent), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
-      marker.quaternion.setFromUnitVectors(Z_AXIS, n);
-      marker.visible = false;
-      group.add(marker);
-      markers.push(marker);
       if (f === sh.hole) {
         // Glowing outline around the window.
         const basis = new THREE.Matrix4().makeBasis(u, w, n);
@@ -552,36 +583,52 @@ const view = sceneCache((s: State, theme) => {
           const b = window2d[(e + 1) % window2d.length];
           const va = new THREE.Vector3(a.x, a.y, 0).applyMatrix4(basis);
           const vb = new THREE.Vector3(b.x, b.y, 0).applyMatrix4(basis);
-          const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, va.distanceTo(vb), 8), rimMat);
+          const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, va.distanceTo(vb), 10), rimMat);
           seg.position.copy(va).add(vb).multiplyScalar(0.5);
           seg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), vb.clone().sub(va).normalize());
           mesh.add(seg);
+          rims.push(seg);
         });
       }
     });
     const edges = new THREE.Group();
-    const edgeMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(`rgb(${edgeCol.map((c) => Math.round(c)).join(',')})`), transparent: true });
+    const edgeColor = new THREE.Color(`rgb(${edgeCol.map((c) => Math.round(c)).join(',')})`);
     const up = new THREE.Vector3(0, 1, 0);
+    const near = (p: V3, q: V3) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]) < 1e-6;
+    const edgeMeshes: THREE.Mesh[] = [];
+    const edgeMats: THREE.MeshBasicMaterial[] = [];
+    const edgeFaces: [number, number][] = [];
     for (const [a, b] of poly.edges) {
       const va = new THREE.Vector3(...a);
       const vb = new THREE.Vector3(...b);
       const len = va.distanceTo(vb);
-      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, len, 8), edgeMat);
+      // Each edge has its own material: its brightness depends on whether it's on the near side.
+      const mat = new THREE.MeshBasicMaterial({ color: edgeColor, transparent: true });
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, len, 8), mat);
       m.position.copy(va).add(vb).multiplyScalar(0.5);
       m.quaternion.setFromUnitVectors(up, vb.clone().sub(va).normalize());
       edges.add(m);
+      edgeMeshes.push(m);
+      edgeMats.push(mat);
+      const adj = poly.faces.flatMap((face, f) => (face.pts.some((p) => near(p, a)) && face.pts.some((p) => near(p, b)) ? [f] : []));
+      edgeFaces.push([adj[0] ?? 0, adj[1] ?? adj[0] ?? 0]);
     }
     group.add(edges);
+    const aimMat = new THREE.MeshBasicMaterial({ map: aimTex, color: new THREE.Color(theme.accent), transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    aimMat.userData.base = theme.accent;
+    const aim = new THREE.Mesh(spotGeo, aimMat);
+    aim.visible = false;
+    group.add(aim);
     scene.add(group);
     glass.dispose();
-    return { group, edges, faces, centers, faceMats, markers, edgeMat, rimMat };
+    return { group, edges, edgeMeshes, edgeMats, edgeFaces, faces, centers, faceMats, aim, aimMat, rimMat, rims };
   });
 
   const ballCol = new THREE.Color(theme.ball);
   const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 28), new THREE.MeshStandardMaterial({ color: ballCol, emissive: ballCol, emissiveIntensity: 0.9, roughness: 0.25 }));
   scene.add(ball);
   const trailGeo = new THREE.SphereGeometry(1, 16, 12);
-  const trail = Array.from({ length: 20 }, () => {
+  const trail = Array.from({ length: TRAIL - 2 }, () => {
     const m = new THREE.Mesh(trailGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.accent), transparent: true, opacity: 0.4, depthWrite: false }));
     scene.add(m);
     return m;
@@ -589,11 +636,5 @@ const view = sceneCache((s: State, theme) => {
   const wave = new THREE.Mesh(new THREE.TorusGeometry(1, 0.02, 12, 96), new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.accent), transparent: true, depthWrite: false }));
   wave.visible = false;
   scene.add(wave);
-  const ripples = Array.from({ length: 6 }, () => {
-    const m = new THREE.Mesh(new THREE.RingGeometry(0.72, 1, 48), new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.accent), transparent: true, depthWrite: false, side: THREE.DoubleSide }));
-    m.visible = false;
-    scene.add(m);
-    return m;
-  });
-  return { scene, camera, light, shells, ball, trail, wave, ripples };
+  return { scene, camera, light, shells, ball, trail, wave };
 });
