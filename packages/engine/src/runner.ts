@@ -97,6 +97,8 @@ export class Runner<P = any, S = any> {
       hook: fillCopy(copy.hook, values),
       cta: fillCopy(copy.cta, values),
     });
+    const nudge = opts.copy?.nudge?.trim();
+    if (nudge) this.overlays.push(...engagementCues(this.overlays, fillCopy(nudge, values), template.nudgeY));
   }
 
   get t(): number {
@@ -166,6 +168,23 @@ export class Runner<P = any, S = any> {
     const hud = { ...(this.params as Record<string, unknown>), ...this.template.hud(this.state) };
     drawOverlays(ctx, W, H, this.overlays, this.overlayState, this.t, hud, this.theme);
   }
+}
+
+/**
+ * Engagement cues added to any template's overlays: the comment prompt right after the hook fades
+ * (in the hook's spot, or `nudgeY` when the hook stays up), and a heart at the payoff, when the CTA
+ * appears. Visual only: no events change.
+ */
+function engagementCues(specs: OverlaySpec[], nudge: string, nudgeY?: number): OverlaySpec[] {
+  const hook = specs.find((s): s is Extract<OverlaySpec, { kind: 'hook' }> => s.kind === 'hook');
+  const hookEnd = hook?.to ?? 2.2;
+  const persistent = hookEnd > 8;
+  const from = persistent ? 3.2 : hookEnd + 0.45;
+  // In the hook's spot, but no lower than the usual hook line (counters often sit just below it).
+  const cues: OverlaySpec[] = [{ kind: 'nudge', text: nudge, from, to: from + 2.8, y: nudgeY ?? (persistent ? 0.25 : Math.min(hook?.y ?? 0.12, 0.125)) }];
+  const cta = specs.find((s): s is Extract<OverlaySpec, { kind: 'cta' }> => s.kind === 'cta');
+  cues.push({ kind: 'heart', when: !cta || cta.when === 'outro' ? 'outro' : { at: cta.when.from } });
+  return cues;
 }
 
 /** JSON Schema of a template's params, for UI controls and LLM tool schemas. */

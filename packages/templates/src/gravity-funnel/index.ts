@@ -87,6 +87,7 @@ export const gravityFunnel: Template<GravityFunnelParams, State> = {
     hook: 'Which marble stays up the longest?',
     cta: '{winner} outlasted them all! Who did you pick?',
   },
+  nudges: ["Pick your marble 👇", "Who spins longest? Call it 👇", "Which one drops first? 👇", "Lock in a survivor 👇", "Comment your pick 👇", "Who's the last one spinning? 👇"],
 
   init({ params: p, rng, visual }) {
     const teams = pickDistinctTeams(p.teams === 'countries' ? COUNTRY_TEAMS : COLOR_TEAMS, p.marbles, rng, 90);

@@ -45,6 +45,7 @@ export const growUntilFull: Template<GrowUntilFullParams, State> = {
     hook: 'Every bounce makes it bigger…',
     cta: 'How many bounces did you guess?',
   },
+  nudges: ["Guess the bounces before it's full 👇", "Comment your bounce count 👇", "How long until it fills? Guess 👇", "Lock in a number 👇", "Your guess goes in the comments 👇", "Call it before it fills 👇"],
 
   init({ params: p, rng, width, height }) {
     const a = rng.range(0, TAU);

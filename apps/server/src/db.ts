@@ -391,6 +391,15 @@ export function recentMelodies(limit = 24): string[] {
     .filter((m): m is string => Boolean(m));
 }
 
+/** Comment prompts used recently (newest first), so new batches vary them. */
+export function recentNudges(limit = 40): string[] {
+  return db
+    .prepare("SELECT copy FROM renders WHERE copy IS NOT NULL AND kind = 'batch' ORDER BY created_at DESC LIMIT ?")
+    .all(limit)
+    .map((r: any) => json<{ nudge?: string } | null>(r.copy, null)?.nudge)
+    .filter((n): n is string => Boolean(n));
+}
+
 /** Recent hooks across batches, so the planner avoids repeats. */
 export function recentHooks(limit = 30): string[] {
   return db

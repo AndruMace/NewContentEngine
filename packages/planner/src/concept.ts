@@ -7,6 +7,8 @@ import { HOOK_STYLES, type Arm } from './arms';
 export interface SocialCopy {
   hook: string;
   cta: string;
+  /** On-screen comment prompt (engagement cues; absent for the comparison group). */
+  nudge?: string;
   title: string;
   youtubeDescription: string;
   tiktokCaption: string;
@@ -33,7 +35,7 @@ export interface Concept {
   paramsSource?: string;
 }
 
-export const LIMITS = { hook: 60, cta: 48, title: 90, tiktok: 300, x: 270, hashtags: 6 };
+export const LIMITS = { hook: 60, cta: 48, nudge: 44, title: 90, tiktok: 300, x: 270, hashtags: 6 };
 
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…');
 
@@ -71,7 +73,24 @@ export function normalizeCopy(c: SocialCopy): SocialCopy {
     tiktokCaption: clip(stripBlockedTags(c.tiktokCaption), LIMITS.tiktok),
     xPost: clip(stripBlockedTags(c.xPost), LIMITS.x),
     hashtags: tags,
+    ...(c.nudge?.trim() ? { nudge: clip(c.nudge.trim(), LIMITS.nudge) } : {}),
   };
+}
+
+/** Share of videos with engagement cues (comment prompt + like heart); the rest are the comparison group. */
+export const CUES_SHARE = 0.75;
+
+/**
+ * A comment prompt for this template, avoiding ones used recently (and earlier in this batch) so
+ * the same nudge doesn't keep coming back. Records the pick in `recent`.
+ */
+export function pickNudge(templateId: string, rng: Rng, recent: string[] = []): string | undefined {
+  const pool = getTemplate(templateId).nudges ?? [];
+  if (!pool.length) return undefined;
+  const fresh = pool.filter((n) => !recent.includes(n));
+  const pick = rng.pick(fresh.length ? fresh : pool);
+  recent.unshift(pick);
+  return pick;
 }
 
 /**

@@ -20,6 +20,8 @@ export interface PlanContext {
    * the owner approved). When set, the model's own params are ignored and it writes to these.
    */
   chooseParams?: (arm: Arm, targetS: number, fixed: Record<string, unknown>, rng: Rng) => { params: Record<string, unknown>; source: string };
+  /** Comment prompts used recently (newest first); picks are added here so a batch varies them. */
+  recentNudges?: string[];
 }
 
 const SYSTEM = `You are the content strategist for a short-form video channel (YouTube Shorts, TikTok, X) that posts "oddly satisfying" physics simulations with collision-driven music: balls escaping rings, marble races, ball battles, falling sand, fluids, polyrhythms, sorting races.

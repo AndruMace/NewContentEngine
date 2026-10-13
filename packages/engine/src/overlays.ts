@@ -169,7 +169,86 @@ export function drawOverlays(
         strokedText(ctx, theme, fillCopy(spec.text, hud), cx, height * (spec.y ?? 0.08), 40);
         break;
       }
+      case 'nudge': {
+        if (t < spec.from || t > spec.to) break;
+        const pop = easeOutBack(clamp01((t - spec.from) / 0.22));
+        const alpha = clamp01((t - spec.from) / 0.15) * clamp01((spec.to - t) / 0.3);
+        drawPill(ctx, theme, fillCopy(spec.text, hud), cx, height * spec.y, 0.75 + 0.25 * pop, alpha);
+        break;
+      }
+      case 'heart': {
+        const at = spec.when === 'outro' ? (state.outroAt === null ? null : state.outroAt + 0.35) : spec.when.at + 0.35;
+        if (at === null || t < at || t > at + HEART_S) break;
+        drawHeartCue(ctx, width, height, (t - at) / HEART_S);
+        break;
+      }
     }
+  }
+}
+
+const HEART_S = 1.6;
+
+/** Comment prompt: a compact dark pill with white text, unobtrusive but readable on any background. */
+function drawPill(ctx: Ctx2D, theme: Theme, text: string, cx: number, cy: number, scale: number, alpha: number) {
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.font = `800 40px ${FONT_FAMILY}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const w = Math.min(860, ctx.measureText(text).width + 64);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -38, w, 76, 38);
+  ctx.fill();
+  ctx.strokeStyle = theme.accent;
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, 0, 2, 820);
+  ctx.restore();
+}
+
+function heartPath(ctx: Ctx2D, s: number) {
+  ctx.beginPath();
+  ctx.moveTo(0, s * 0.35);
+  ctx.bezierCurveTo(-s * 1.1, -s * 0.35, -s * 0.5, -s * 1.05, 0, -s * 0.45);
+  ctx.bezierCurveTo(s * 0.5, -s * 1.05, s * 1.1, -s * 0.35, 0, s * 0.35);
+  ctx.closePath();
+}
+
+/**
+ * Like cue: a heart (and a smaller follower) floating up the right edge toward where the like
+ * button sits, swelling then fading. u runs 0..1 over its life. No text.
+ */
+function drawHeartCue(ctx: Ctx2D, width: number, height: number, u: number) {
+  const hearts = [
+    { delay: 0, size: 44, dx: 0 },
+    { delay: 0.18, size: 26, dx: -38 },
+  ];
+  for (const h of hearts) {
+    const k = clamp01((u - h.delay) / (1 - h.delay));
+    if (k <= 0 || k >= 1) continue;
+    const ease = 1 - (1 - k) * (1 - k);
+    const x = width * 0.86 + h.dx + Math.sin(k * Math.PI * 2) * 10;
+    const y = height * (0.71 - 0.13 * ease);
+    const scale = 0.6 + 0.55 * easeOutBack(clamp01(k / 0.35));
+    const alpha = clamp01(k / 0.12) * clamp01((1 - k) / 0.35);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    heartPath(ctx, h.size);
+    ctx.fillStyle = '#ff3d6e';
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.stroke();
+    ctx.restore();
   }
 }
 

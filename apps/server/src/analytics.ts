@@ -66,7 +66,7 @@ export function postFeatures(r: RenderRow): PostFeatures {
     targetS,
     durationS: r.durationS ?? drama.durationS,
     drama: { total: drama.total, parts: drama.parts },
-    copy: copyFeatures({ hook: r.copy?.hook ?? r.recipe.copy?.hook ?? '', cta: r.copy?.cta ?? r.recipe.copy?.cta ?? '', title: r.copy?.title }),
+    copy: copyFeatures({ hook: r.copy?.hook ?? r.recipe.copy?.hook ?? '', cta: r.copy?.cta ?? r.recipe.copy?.cta ?? '', title: r.copy?.title, nudge: r.recipe.copy?.nudge }),
     source: c?.source ?? r.kind,
     experiment: Boolean(c?.experiment),
     rankScore: r.rankScore,

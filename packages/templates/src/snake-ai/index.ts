@@ -60,6 +60,7 @@ export const snakeAi: Template<SnakeAiParams, State> = {
     hook: 'Will the snake fill the whole board?',
     cta: '{result}! Did you think it would make it?',
   },
+  nudges: ['Will it fill the board? 👇', 'Full board or trapped? Call it 👇', 'Guess the final % 👇', 'Comment your prediction 👇', 'Lock in: fill or fail 👇', 'How far does it get? 👇'],
 
   init({ params: p, rng, fxRng, visual }) {
     const g = playSnake(p.grid, rng);

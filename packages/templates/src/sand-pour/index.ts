@@ -306,6 +306,7 @@ export const sandPour: Template<SandPourParams, State> = {
     hook: 'Wait for the last layer…',
     cta: 'Which color was your favorite?',
   },
+  nudges: ['Guess the grain count 👇', 'Which colour layer is best? 👇', 'How many grains? Lock it in 👇', 'Rate the final layers 👇', 'Comment your grain guess 👇', 'Call it: how many grains? 👇'],
 
   init({ params: p, rng, fxRng, width, height }) {
     const gw = Math.floor(width / p.cellSize);

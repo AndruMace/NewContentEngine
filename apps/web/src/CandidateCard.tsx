@@ -33,17 +33,17 @@ function CopyEditor({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewIt
   useEffect(() => setDraft(item.copy), [item.id, item.copy]);
   if (!draft || !item.copy) return null;
   const dirty = JSON.stringify(draft) !== JSON.stringify(item.copy);
-  const onScreen = draft.hook !== item.copy.hook || draft.cta !== item.copy.cta;
+  const onScreen = draft.hook !== item.copy.hook || draft.cta !== item.copy.cta || (draft.nudge ?? '') !== (item.copy.nudge ?? '');
   const field = (key: keyof SocialCopy, label: string, rows = 1, max?: number) => (
     <label className="param" key={key}>
       <span>
         {label}
-        {max && <b className={String(draft[key]).length > max ? 'warn' : ''}>{String(draft[key]).length}/{max}</b>}
+        {max && <b className={String(draft[key] ?? '').length > max ? 'warn' : ''}>{String(draft[key] ?? '').length}/{max}</b>}
       </span>
       {rows > 1 ? (
-        <textarea rows={rows} value={draft[key] as string} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />
+        <textarea rows={rows} value={(draft[key] as string) ?? ''} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />
       ) : (
-        <input value={draft[key] as string} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />
+        <input value={(draft[key] as string) ?? ''} onChange={(e) => setDraft({ ...draft, [key]: e.target.value })} />
       )}
     </label>
   );
@@ -52,6 +52,7 @@ function CopyEditor({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewIt
       <summary>Edit copy</summary>
       {field('hook', 'Hook (on screen)', 1, 60)}
       {field('cta', 'Call to action (on screen)', 1, 48)}
+      {field('nudge', 'Comment prompt (on screen; empty for none)', 1, 44)}
       {field('title', 'YouTube title', 1, 90)}
       {field('youtubeDescription', 'YouTube description', 2)}
       {field('tiktokCaption', 'TikTok caption', 3, 300)}
@@ -82,7 +83,7 @@ function CopyEditor({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewIt
           <button onClick={() => setDraft(item.copy)}>Discard</button>
         </div>
       )}
-      {onScreen && dirty && <p className="hint">Hook and CTA are drawn into the video, so changing them renders a new version.</p>}
+      {onScreen && dirty && <p className="hint">Hook, CTA and comment prompt are drawn into the video, so changing them renders a new version.</p>}
       {error && <p className="warn">{error}</p>}
     </details>
   );

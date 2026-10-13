@@ -187,6 +187,25 @@ describe('title emoji', () => {
     }
   });
 
+  it('adds a template-relevant comment prompt to most videos, varied across a batch', async () => {
+    const { getTemplate } = await import('@sim/templates');
+    const recentNudges: string[] = [];
+    let withCues = 0;
+    const picked: string[] = [];
+    for (let i = 0; i < 120; i++) {
+      const templateId = i % 2 ? 'ring-escape' : 'marble-race';
+      const { concept } = await planOne({ ...arm, templateId }, 30, i % 3 ? 'fallback' : 'mock', { recentHooks: [], recentNudges }, new Rng(i));
+      if (!concept.copy.nudge) continue;
+      withCues++;
+      expect(getTemplate(templateId).nudges).toContain(concept.copy.nudge);
+      if (i < 12) picked.push(concept.copy.nudge);
+    }
+    expect(withCues).toBeGreaterThan(75);
+    expect(withCues).toBeLessThan(105);
+    // Within a batch-sized run, no prompt repeats until its template's pool is used up.
+    expect(new Set(picked).size).toBe(picked.length);
+  });
+
   it('leaves other templates\' plans unchanged', async () => {
     const { concept } = await planOne(arm, 30, 'fallback', { recentHooks: [] }, new Rng(5));
     expect(concept.params).not.toHaveProperty('teams');

@@ -101,7 +101,7 @@ export function featureSpace(c: Catalog): Feature[] {
   add('duration', ['duration:log', 'duration:log2'], 0.3, true);
   add('melody', c.melodies.map((m) => `melody:${m}`), 0.15, true);
   add('drama', ['drama'], 0.3, true);
-  add('copy', ['copy:hookChars', 'copy:question', 'copy:digit', 'copy:emoji', 'copy:titleEmoji'], 0.2, true);
+  add('copy', ['copy:hookChars', 'copy:question', 'copy:digit', 'copy:emoji', 'copy:titleEmoji', 'copy:cues'], 0.2, true);
   add('cta', CTA_STYLES.map((s) => `cta:${s}`), 0.2, true);
   add('time', [...HOUR_SLOTS.map((s) => `time:${s}`), 'time:weekend'], 0.2, true);
   add('variant', (c.variants ?? []).map((v) => `variant:${v}`), 0.3, true);
@@ -135,6 +135,7 @@ function rawValues(x: LearnerInput, c: Catalog): Map<string, number> {
     v.set('copy:digit', x.copy.hookDigit ? 1 : 0);
     v.set('copy:emoji', x.copy.hookEmoji ? 1 : 0);
     if (x.copy.titleEmoji !== undefined) v.set('copy:titleEmoji', x.copy.titleEmoji ? 1 : 0);
+    if (x.copy.cues !== undefined) v.set('copy:cues', x.copy.cues ? 1 : 0);
     v.set(`cta:${x.copy.ctaStyle}`, 1);
   }
   for (const variant of c.variants ?? []) {

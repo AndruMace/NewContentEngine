@@ -106,6 +106,7 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
     hook: 'How many bounces to escape every shell?',
     cta: 'Escaped in {bounces} bounces! Guess closer?',
   },
+  nudges: ['Guess the bounce count 👇', 'How many bounces to break out? 👇', 'Which shell is hardest? 👇', 'Comment your guess 👇', 'Lock in a number 👇', 'Call it before it escapes 👇'],
 
   init({ params: p, rng, visual }) {
     const shapes: ShapeId[] = [];

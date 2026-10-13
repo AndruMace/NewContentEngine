@@ -10,6 +10,8 @@ export interface CopyFeatures {
   ctaStyle: CtaStyle;
   /** Title leads with an emoji (planned for ~75% of videos; the rest are the comparison group). */
   titleEmoji?: boolean;
+  /** Engagement cues on screen (comment prompt + like heart; ~75% of videos). */
+  cues?: boolean;
 }
 
 /**
@@ -41,7 +43,7 @@ export function ctaStyle(cta: string): CtaStyle {
   return 'other';
 }
 
-export function copyFeatures(copy: Pick<SocialCopy, 'hook' | 'cta'> & { title?: string }): CopyFeatures {
+export function copyFeatures(copy: Pick<SocialCopy, 'hook' | 'cta'> & { title?: string; nudge?: string }): CopyFeatures {
   const hook = copy.hook.trim();
   return {
     titleEmoji: copy.title !== undefined ? startsWithEmoji(copy.title) : undefined,
@@ -50,5 +52,6 @@ export function copyFeatures(copy: Pick<SocialCopy, 'hook' | 'cta'> & { title?: 
     hookDigit: /\d/.test(hook),
     hookEmoji: EMOJI.test(hook),
     ctaStyle: ctaStyle(copy.cta),
+    cues: Boolean(copy.nudge),
   };
 }

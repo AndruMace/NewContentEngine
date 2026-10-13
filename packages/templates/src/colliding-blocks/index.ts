@@ -82,6 +82,7 @@ export const collidingBlocks: Template<CollidingBlocksParams, State> = {
     hook: 'How many times will the blocks collide?',
     cta: '{count} collisions… those are the digits of π 🤯',
   },
+  nudges: ["Guess the collision count 👇", "How many clacks? Comment 👇", "Lock in a number 👇", "Guess the last round's count 👇", "Comment your guess 👇", "Spot the pattern yet? 👇"],
 
   init({ params: p, rng, visual }) {
     const exps = p.staged ? Array.from({ length: p.digits }, (_, k) => 2 * k) : [2 * (p.digits - 1)];

@@ -4,6 +4,8 @@ import type { Recipe } from '@sim/engine';
 export interface SocialCopy {
   hook: string;
   cta: string;
+  /** On-screen comment prompt; also adds the like heart. Absent for the comparison group. */
+  nudge?: string;
   title: string;
   youtubeDescription: string;
   tiktokCaption: string;

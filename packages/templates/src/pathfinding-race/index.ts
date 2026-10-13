@@ -101,6 +101,7 @@ export const pathfindingRace: Template<PathfindingRaceParams, State> = {
     hook: 'Which algorithm finds the exit first?',
     cta: '{winner} won — but was it the shortest?',
   },
+  nudges: ['Which algorithm wins? 👇', 'Pick one in the comments 👇', 'Who finds the shortest path? 👇', 'Call it: fastest search 👇', 'Lock in your pick 👇', 'Comment your algorithm 👇'],
 
   init({ params: p, rng }) {
     let lineupKey = p.lineup;

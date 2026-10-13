@@ -14,6 +14,7 @@ import {
   insertRender,
   recentHooks,
   recentMelodies,
+  recentNudges,
   rendersForBatch,
   updateBatch,
   updateRender,
@@ -41,7 +42,7 @@ export function recipeFor(concept: Concept, seed: number): Recipe {
     params: concept.params,
     themeId: concept.themeId,
     melodyId: concept.melodyId,
-    copy: { hook: concept.copy.hook, cta: concept.copy.cta },
+    copy: { hook: concept.copy.hook, cta: concept.copy.cta, ...(concept.copy.nudge ? { nudge: concept.copy.nudge } : {}) },
     targetS: concept.targetS,
   };
 }
@@ -160,7 +161,7 @@ export class BatchRunner extends EventEmitter {
         seed: hashSeed(batchId) + existing.length,
       },
       model,
-      { recentHooks: recentHooks(), notes: s.notes || undefined, chooseParams },
+      { recentHooks: recentHooks(), notes: s.notes || undefined, chooseParams, recentNudges: recentNudges() },
       (planned) => {
         if (this.cancelled.has(batchId)) return;
         const concept = planned.concept;

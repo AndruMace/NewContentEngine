@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Rng } from '@sim/engine';
 import { chooseArms, targetLength, type Arm, type ArmChoiceSettings, type ArmModel } from './arms';
 import { conceptFromClaude, conceptFromMock, PlannerRefusal, type PlanContext } from './claude';
-import { TITLE_EMOJI_SHARE, fallbackConcept, planVariants, type Concept } from './concept';
+import { CUES_SHARE, TITLE_EMOJI_SHARE, fallbackConcept, pickNudge, planVariants, type Concept } from './concept';
 
 export * from './arms';
 export * from './concept';
@@ -37,7 +37,12 @@ export async function planOne(
   // The taste model, when present, picks every setting up front (variants stay as planned).
   const chosen = ctx.chooseParams?.(arm, targetS, variants, rng);
   const opts = { titleEmoji, variants: chosen ? chosen.params : variants, fixedParams: Boolean(chosen) };
-  const withSource = (p: PlannedConcept): PlannedConcept => (chosen ? { ...p, concept: { ...p.concept, paramsSource: chosen.source } } : p);
+  // Engagement cues (comment prompt + like heart) for most videos; the rest are a comparison group.
+  const nudge = rng.chance(CUES_SHARE) ? pickNudge(arm.templateId, rng, ctx.recentNudges) : undefined;
+  const withSource = (p: PlannedConcept): PlannedConcept => {
+    const concept = { ...p.concept, copy: { ...p.concept.copy, ...(nudge ? { nudge } : {}) } };
+    return { ...p, concept: chosen ? { ...concept, paramsSource: chosen.source } : concept };
+  };
   if (generator === 'mock') return withSource({ concept: conceptFromMock(arm, targetS, rng, opts) });
   if (generator === 'claude' && client) {
     try {

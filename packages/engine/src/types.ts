@@ -77,7 +77,11 @@ export type OverlaySpec =
   | { kind: 'cta'; text: string; when: 'outro' | { from: number; to: number }; y?: number }
   | { kind: 'label'; text: string; y?: number }
   /** hud[key] must be LeaderboardRow[]; drawn as a compact ranked list. */
-  | { kind: 'leaderboard'; key: string; title?: string; max?: number; x?: number; y?: number };
+  | { kind: 'leaderboard'; key: string; title?: string; max?: number; x?: number; y?: number }
+  /** A small comment-prompt pill (engagement cue), shown briefly after the hook. */
+  | { kind: 'nudge'; text: string; from: number; to: number; y: number }
+  /** A small heart drifting up toward the like button at the payoff (when the CTA appears). */
+  | { kind: 'heart'; when: 'outro' | { at: number } };
 
 export interface LeaderboardRow {
   label: string;
@@ -91,6 +95,11 @@ export interface LeaderboardRow {
 export interface Copy {
   hook: string;
   cta: string;
+  /**
+   * Engagement cues: a short comment prompt shown just after the hook (e.g. "Lock in your guess 👇").
+   * When present, a small heart also drifts toward the like button at the payoff.
+   */
+  nudge?: string;
 }
 
 export interface Template<P = any, S = any> {
@@ -109,6 +118,10 @@ export interface Template<P = any, S = any> {
   glowScale?: number;
   /** The final state equals the first frame: renders drop the last frame so the video loops cleanly. */
   seamlessLoop?: boolean;
+  /** Where the comment-prompt nudge sits (fraction of height); defaults to the hook's spot once the hook is gone. */
+  nudgeY?: number;
+  /** Comment prompts that fit this template (the planner picks one per video, varying them). */
+  nudges?: string[];
   /** The param that sets the video's length (video ≈ value + offsetS), so planners set it from the target length. */
   lengthParam?: { param: string; offsetS: number };
   /** Copy with {paramName} / {hud:key} placeholders. */

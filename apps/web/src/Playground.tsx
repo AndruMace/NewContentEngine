@@ -184,6 +184,14 @@ export function Playground() {
               onChange={(e) => update({ copy: { ...recipe.copy, cta: e.target.value || undefined } })}
             />
           </label>
+          <label className="param">
+            <span>Comment prompt (adds the like heart)</span>
+            <input
+              value={recipe.copy?.nudge ?? ''}
+              placeholder={template.nudges?.[0] ?? 'None'}
+              onChange={(e) => update({ copy: { ...recipe.copy, nudge: e.target.value || undefined } })}
+            />
+          </label>
         </section>
 
         <section>

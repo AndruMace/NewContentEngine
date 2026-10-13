@@ -83,7 +83,7 @@ export function tasteInput(r: RenderRow): LearnerInput | null {
     melodyId: r.recipe.melodyId,
     durationS,
     drama: r.score ?? undefined,
-    copy: r.copy ? copyFeatures({ hook: r.copy.hook, cta: r.copy.cta, title: r.copy.title }) : undefined,
+    copy: r.copy ? copyFeatures({ hook: r.copy.hook, cta: r.copy.cta, title: r.copy.title, nudge: r.recipe.copy?.nudge }) : undefined,
     params: parseParams(template, r.recipe.params ?? {}) as Record<string, unknown>,
     // Playground videos have no planned hook style: don't let them all credit "question".
     hookKnown: Boolean(concept),

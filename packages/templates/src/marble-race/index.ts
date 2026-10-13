@@ -253,6 +253,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
     hook: 'Pick a marble before the race starts!',
     cta: '{winner} wins! Did you call it?',
   },
+  nudges: ["Pick your marble in the comments 👇", "Who wins? Call it now 👇", "Lock in a winner 👇", "Comment your pick before the finish 👇", "Who's out first? Guess 👇", "Who are you backing? 👇"],
 
   init({ params: p, rng, fxRng, visual }) {
     const world = new World();

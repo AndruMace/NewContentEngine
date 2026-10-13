@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { FONT_FAMILY, lighten, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type Template, type Theme } from '@sim/engine';
 import { gaussFit } from '../scoring';
-import { scaleNote } from '../music';
 import { SHAPES, dft, reconstructionError, type Shape, type Term } from './fourier';
 
 const SUBJECTS = ['random', 'countries', 'states', 'dinosaurs', 'animals', 'fantasy'] as const;
@@ -35,6 +34,10 @@ interface Stage {
   start: number;
   dur: number;
   err: number;
+  /** Beats in this stage's loop (one loop is one bar). */
+  beats: number;
+  /** Index into CHORDS. */
+  chord: number;
 }
 
 interface State {
@@ -45,10 +48,8 @@ interface State {
   stages: Stage[];
   stage: number;
   revealAt: number;
-  /** Per singing circle: the last "passed 12 o'clock" count. */
-  crossings: number[];
-  lastPingT: number;
-  lastCheck: number;
+  /** The last sixteenth-note slot handled in the current stage. */
+  lastSlot: number;
   t: number;
 }
 
@@ -56,9 +57,16 @@ interface State {
 const COUNTS = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 128, 200, 300];
 /** The biggest circles each ping as they pass 12 o'clock. */
 const SINGERS = 10;
-const CHECKPOINTS = 8;
-/** Scale for every note (with C roots below): C major pentatonic. */
-const KEY = 'pentatonic' as const;
+/**
+ * One chord per stage, cycling I-vi-IV-V in C major (pitch classes, root first), lined up so the last
+ * stage sits on G and the reveal resolves home to C.
+ */
+const CHORDS = [
+  [0, 4, 7],
+  [9, 0, 4],
+  [5, 9, 0],
+  [7, 11, 2],
+];
 const LEAD_S = 0.6;
 const REVEAL_S = 4.2;
 /** The CTA appears this long after the reveal starts. */
@@ -70,6 +78,10 @@ const SCALE = 740;
 /** Pen magnifier: shown from this many circles on. */
 const MAGNIFY_FROM = 12;
 const MAG = { x: 190, y: 1385, r: 122 };
+/** Comment prompt for the second half of the drawing: under the caption, above the platform's bottom UI. */
+const PROMPT = { text: 'Comment your guess!', x: 580, y: 1500 };
+/** Roughly where TikTok, Reels and Shorts put the comment button (right-hand rail, about 2/3 down). */
+const COMMENT_BUTTON = { x: 1010, y: 1270 };
 const TRACE_SAMPLES = 720;
 
 /** The arm's angle as a fraction of a turn, measured from 12 o'clock (screen y points down). */
@@ -100,7 +112,8 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
     'A chain of spinning circles draws a mystery outline (a country, US state, dinosaur, animal or mythical creature). It starts with one circle drawing a blob, then 2, 4, 8… up to hundreds, and the shape sharpens until the reveal. Any closed shape is a sum of circles.',
   schema: fourierDrawingSchema,
   lengthParam: { param: 'durationS', offsetS: 0 },
-  substeps: 1,
+  // No physics, but notes are timed to the step, so 240 Hz keeps the beat tight (within ~4 ms).
+  substeps: 4,
   searchBudget: 6,
   glowScale: 0.55,
   ownMusic: true,
@@ -109,6 +122,9 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
     hook: '{guess}',
     cta: 'It was {answer} {icon}! Did you get it?',
   },
+  nudges: ['Know it yet? Comment 👇', 'Drop your guess before the reveal 👇', 'Lock in your answer 👇', 'How many circles until you knew? 👇', 'Guessed it already? 👇', 'Comment your guess 👇'],
+  // The question stays up top for the whole drawing, so the prompt sits just under the circle count.
+  nudgeY: 0.245,
 
   init({ params: p, rng }) {
     const pool = p.subject === 'random' ? SHAPES : SHAPES.filter((s) => s.category === CATEGORY[p.subject as keyof typeof CATEGORY]);
@@ -116,13 +132,21 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
     const { centre, terms } = dft(shape.points);
     const max = Math.min(p.maxCircles, terms.length);
     const counts = [...COUNTS.filter((c) => c < max), max];
-    // Loops slow down a little as detail arrives; the last one lingers.
-    const weights = counts.map((_, i) => (1 + i / (counts.length - 1)) * (i === counts.length - 1 ? 1.5 : 1));
-    const drawS = p.durationS - REVEAL_S - LEAD_S;
-    const unit = drawS / weights.reduce((a, b) => a + b, 0);
+    // Every loop is a whole bar at one steady tempo, so the music keeps a pulse: two beats per loop
+    // early on, four once detail arrives, and eight for the last one, which lingers.
+    const n = counts.length;
+    const beats = counts.map((_, i) => (i === n - 1 ? 8 : i < n / 2 ? 2 : 4));
+    const beatS = (p.durationS - REVEAL_S - LEAD_S) / beats.reduce((a, b) => a + b, 0);
     let at = LEAD_S;
     const stages: Stage[] = counts.map((circles, i) => {
-      const st = { circles, start: at, dur: weights[i] * unit, err: reconstructionError(shape.points, centre, terms, circles) };
+      const st = {
+        circles,
+        start: at,
+        dur: beats[i] * beatS,
+        err: reconstructionError(shape.points, centre, terms, circles),
+        beats: beats[i],
+        chord: (((i - (n - 1)) % 4) + 4 + 3) % 4,
+      };
       at += st.dur;
       return st;
     });
@@ -134,9 +158,7 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
       stages,
       stage: -1,
       revealAt: at,
-      crossings: [],
-      lastPingT: -1,
-      lastCheck: -1,
+      lastSlot: -1,
       t: 0,
     };
   },
@@ -157,29 +179,29 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
     const u = (t - st.start) / st.dur;
     if (i !== s.stage) {
       s.stage = i;
-      s.crossings = s.terms.slice(0, Math.min(SINGERS, st.circles)).map((term) => Math.floor(turnsFromTop(term, u)));
-      s.lastCheck = -1;
-      emit({ type: 'stage', stage: i, circles: st.circles, err: st.err });
+      s.lastSlot = -1;
+      emit({ type: 'stage', stage: i, circles: st.circles, err: st.err, chord: st.chord });
     }
-    // Each big circle pings when its arm passes 12 o'clock: the soundtrack is the circles' own rhythm.
+    const slots = st.beats * 4;
+    const slot = Math.floor(u * slots);
+    if (slot === s.lastSlot) return;
+    s.lastSlot = slot;
+    if (slot % 4 === 0) emit({ type: 'beat', chord: st.chord, k: slot / 4 });
+    // Each big circle pings when its arm passes 12 o'clock: the soundtrack is the circles' own rhythm,
+    // snapped to the nearest sixteenth note so it stays in time. Every circle turns a whole number of
+    // times per loop, so the window may reach back before u = 0 at the start of a loop.
+    const half = 0.5 / slots;
+    const at = slot / slots;
     const amp0 = s.terms[0].amp;
-    s.crossings.forEach((prev, j) => {
+    const ranks: number[] = [];
+    const sizes: number[] = [];
+    for (let j = 0; j < Math.min(SINGERS, st.circles) && ranks.length < 2; j++) {
       const term = s.terms[j];
-      const now = Math.floor(turnsFromTop(term, u));
-      if (now !== prev) {
-        s.crossings[j] = now;
-        if (t - s.lastPingT >= 1 / 14) {
-          s.lastPingT = t;
-          emit({ type: 'ping', rank: j, size: Math.sqrt(term.amp / amp0) });
-        }
-      }
-    });
-    // A soft arpeggio as the pen passes evenly spaced points, one scale step higher each stage.
-    const check = Math.floor(u * CHECKPOINTS);
-    if (check !== s.lastCheck) {
-      s.lastCheck = check;
-      emit({ type: 'step', stage: i, k: check });
+      if (Math.floor(turnsFromTop(term, at - half)) === Math.floor(turnsFromTop(term, at + half))) continue;
+      ranks.push(j);
+      sizes.push(Math.sqrt(term.amp / amp0));
     }
+    if (ranks.length) emit({ type: 'ping', ranks, sizes, chord: st.chord });
   },
 
   isDone(s) {
@@ -287,28 +309,41 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
       wrapLines(ctx, text, 860).forEach((line, i, all) => ctx.fillText(line, 540, 1385 + (i - (all.length - 1) / 2) * 42));
     }
     ctx.globalAlpha = 1;
+
+    const promptFrom = s.p.durationS / 2;
+    if (t >= promptFrom) drawCommentPrompt(ctx, theme, t - promptFrom, s.revealAt - t);
   },
 
   audio(e) {
-    // Everything stays in one key (C major pentatonic), so the circles, the arpeggio, the stage
-    // bells and the reveal chord can overlap freely without clashing.
+    // Every note is a tone of the current stage's chord, on a steady beat, so the circles, the bass
+    // and the stage bells always agree, and the reveal resolves the last stage's G chord to C.
+    const chord = CHORDS[(e.chord as number) ?? 0];
     switch (e.type) {
       case 'ping': {
-        // Bigger circles ring lower, smaller (faster) ones higher.
-        const rank = e.rank as number;
-        return [{ kind: 'note', midi: scaleNote(KEY, 60, rank), vel: 0.18 + 0.32 * (e.size as number), voice: 'glass', dur: 0.9 }];
+        // Bigger circles ring lower, smaller (faster) ones higher. Two circles that land on the same
+        // pitch play it once.
+        const ladder = chordNotes(chord, 64, 88);
+        const sizes = e.sizes as number[];
+        const midis = (e.ranks as number[]).map((rank) => ladder[rank % ladder.length]);
+        return midis
+          .filter((midi, i) => midis.indexOf(midi) === i)
+          .map((midi, i) => ({ kind: 'note' as const, midi, vel: 0.16 + 0.3 * sizes[i], voice: 'marimba' as const, dur: 0.8 }));
       }
-      case 'step': {
-        // Soft arpeggio, a scale step higher each stage (capped so the late stages don't get shrill).
-        const stage = Math.min(e.stage as number, 6);
-        const k = e.k as number;
-        return [{ kind: 'note', midi: scaleNote(KEY, 48, stage + [0, 2, 4, 2, 1, 3, 5, 3][k % 8]), vel: 0.3, voice: 'softsine', dur: 0.5 }];
+      case 'beat': {
+        // A soft bass on every beat: root, fifth, octave, fifth.
+        const root = 41 + ((chord[0] - 41 + 120) % 12);
+        return [{ kind: 'note', midi: root + [0, 7, 12, 7][(e.k as number) % 4], vel: 0.3, voice: 'softsine', dur: 0.9 }];
       }
-      case 'stage':
-        return [{ kind: 'note', midi: scaleNote(KEY, 72, Math.min(e.stage as number, 9)), vel: 0.3, voice: 'bell', dur: 1.2 }];
+      case 'stage': {
+        // A bell on each new loop: the first chord tone at or above a line that climbs a step per stage (capped
+        // so the late stages don't get shrill).
+        const target = 72 + Math.min(e.stage as number, 12);
+        return [{ kind: 'note', midi: chordNotes(chord, target, target + 12)[0], vel: 0.26, voice: 'bell', dur: 1.2 }];
+      }
       case 'reveal':
         return [
           { kind: 'sfx', name: 'whoosh', vel: 0.45 },
+          { kind: 'note', midi: 48, vel: 0.4, voice: 'softsine', dur: 3 },
           ...[60, 64, 67, 72, 76].map((midi, i) => ({ kind: 'note' as const, midi, vel: 0.36, voice: 'bell' as const, dur: 2.4 + i * 0.1 })),
         ];
     }
@@ -328,6 +363,55 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
     return { total: durFit * (0.75 + 0.25 * suspense), parts: { durFit, suspense }, notes: [`recognisable at ${(frac * 100).toFixed(0)}% (${clear?.circles ?? '–'} circles)`] };
   },
 };
+
+/** The notes in [lo, hi) whose pitch class is in the chord, lowest first. */
+function chordNotes(chord: number[], lo: number, hi: number): number[] {
+  const out: number[] = [];
+  for (let m = lo; m < hi; m++) if (chord.includes(m % 12)) out.push(m);
+  return out;
+}
+
+/**
+ * "Comment your guess!" in a dark pill, with a pointing hand tilted toward the comment button and
+ * tapping toward it. `since` is time since it appeared, `left` the time until the reveal.
+ */
+function drawCommentPrompt(ctx: Ctx2D, theme: Theme, since: number, left: number) {
+  const alpha = Math.min(1, since / 0.3, left / 0.3);
+  if (alpha <= 0) return;
+  const k = Math.min(1, since / 0.35);
+  const pop = 0.8 + 0.2 * (1 + 2.7 * (k - 1) ** 3 + 1.7 * (k - 1) ** 2);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(PROMPT.x, PROMPT.y);
+  ctx.scale(pop, pop);
+  ctx.font = `800 34px ${FONT_FAMILY}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const textW = ctx.measureText(PROMPT.text).width;
+  const hand = 60;
+  const w = textW + hand + 72;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -30, w, 60, 30);
+  ctx.fill();
+  ctx.strokeStyle = theme.accent;
+  ctx.globalAlpha = alpha * 0.6;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(PROMPT.text, -hand / 2, 2);
+
+  // The hand sits at the pill's right end, turned to point at the comment button.
+  const hx = w / 2 - 22 - hand / 2;
+  const angle = Math.atan2(COMMENT_BUTTON.y - PROMPT.y, COMMENT_BUTTON.x - (PROMPT.x + hx));
+  const tap = 6 * Math.max(0, Math.sin(since * 7));
+  ctx.translate(hx + Math.cos(angle) * tap, Math.sin(angle) * tap);
+  ctx.rotate(angle);
+  ctx.font = `50px ${FONT_FAMILY}`;
+  ctx.fillText('👉', 0, 2);
+  ctx.restore();
+}
 
 function captionFor(circles: number, last: boolean): string {
   if (last) return 'Every circle spins a whole number of times per loop. Enough of them can draw any closed shape.';

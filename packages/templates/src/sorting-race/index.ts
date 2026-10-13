@@ -88,6 +88,7 @@ export const sortingRace: Template<SortingRaceParams, State> = {
     hook: 'Which sorting algorithm finishes first?',
     cta: '{winner} sort wins! Did you guess it?',
   },
+  nudges: ['Which sort wins? Call it 👇', 'Bet on an algorithm 👇', 'Who finishes last? Guess 👇', 'Comment your pick 👇', 'Lock in your pick 👇', 'Fastest sort? Say it now 👇'],
 
   init({ params: p, rng }) {
     const lineup = p.lineup === 'random' ? LINEUPS[rng.pick(Object.keys(LINEUPS))] : LINEUPS[p.lineup];

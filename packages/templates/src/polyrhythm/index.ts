@@ -107,6 +107,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     hook: 'Wait for them to line up again…',
     cta: 'It loops perfectly. Watch again 🔁',
   },
+  nudges: ['Comment the second they sync 👇', 'Rate this rhythm 1–10 👇', 'Which dot is your favourite? 👇', 'Can you hear the pattern? 👇', 'Guess when they line up 👇', 'Rate the sync moment 👇'],
 
   init({ params: p, rng }) {
     const scale = p.scale === 'random' ? rng.pick(Object.keys(SCALES) as ScaleName[]) : p.scale;

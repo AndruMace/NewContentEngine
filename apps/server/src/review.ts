@@ -116,7 +116,9 @@ export class ReviewActions {
     // Same simulation, so the new copy is written for the settings already on screen.
     const keep = () => ({ params: c.concept.params, source: c.concept.paramsSource ?? 'kept' });
     const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams: keep }, new Rng(Date.now() % 1e9), client);
-    const copy = planned.concept.copy;
+    // Keep the video's comment prompt (or its absence): only the written copy is being replaced.
+    const { nudge: _drop, ...fresh } = planned.concept.copy;
+    const copy = { ...fresh, ...(c.concept.copy.nudge ? { nudge: c.concept.copy.nudge } : {}) };
     updateConcept(c.id, { ...c.concept, copy });
     return this.rerenderWithCopy(r, copy);
   }
@@ -144,7 +146,7 @@ export class ReviewActions {
       const c = getConcept(r.conceptId);
       if (c) updateConcept(c.id, { ...c.concept, copy });
     }
-    const onScreenChanged = copy.hook !== (r.copy?.hook ?? '') || copy.cta !== (r.copy?.cta ?? '');
+    const onScreenChanged = copy.hook !== (r.copy?.hook ?? '') || copy.cta !== (r.copy?.cta ?? '') || (copy.nudge ?? '') !== (r.copy?.nudge ?? '');
     if (!onScreenChanged) {
       updateRender(id, { copy });
       return getRender(id)!;
@@ -157,7 +159,7 @@ export class ReviewActions {
       batchId: r.batchId,
       conceptId: r.conceptId,
       kind: r.kind,
-      recipe: { ...r.recipe, copy: { hook: copy.hook, cta: copy.cta } },
+      recipe: { ...r.recipe, copy: { hook: copy.hook, cta: copy.cta, ...(copy.nudge ? { nudge: copy.nudge } : {}) } },
       copy,
       score: r.score,
       scoreParts: r.scoreParts,
@@ -178,7 +180,7 @@ export class ReviewActions {
       melodyId: recipe.melodyId,
       params: recipe.params,
       source: 'manual' as const,
-      copy: normalizeCopy({ ...base.copy, hook: recipe.copy?.hook || base.copy.hook, cta: recipe.copy?.cta || base.copy.cta }),
+      copy: normalizeCopy({ ...base.copy, hook: recipe.copy?.hook || base.copy.hook, cta: recipe.copy?.cta || base.copy.cta, nudge: recipe.copy?.nudge }),
     };
     const c = insertConcept(batch.id, conceptsForBatch(batch.id).length, concept);
     const row = insertRender({ batchId: batch.id, conceptId: c.id, kind: 'manual', recipe: recipeFor(concept, recipe.seed), copy: concept.copy, score: null, scoreParts: null, altSeeds: [], rankScore: null });

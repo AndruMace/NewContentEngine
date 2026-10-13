@@ -108,6 +108,7 @@ export const territoryWar: Template<TerritoryWarParams, State> = {
     hook: 'Pick a side. Biggest territory wins!',
     cta: '{winner} wins! Who did you pick?',
   },
+  nudges: ["Pick a side in the comments 👇", "Who takes the map? 👇", "Call the winner now 👇", "Comment your team 👇", "Who's wiped out first? 👇", "Who are you backing? 👇"],
 
   init({ params: p, rng, fxRng, visual }) {
     const n = p.grid;

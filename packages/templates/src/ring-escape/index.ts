@@ -148,6 +148,7 @@ export const ringEscape: Template<RingEscapeParams, State> = {
     hook: 'Can the ball escape all {ringCount} rings?',
     cta: 'Rate this escape 1-10',
   },
+  nudges: ['Guess the bounce count 👇', 'How many bounces? Lock it in 👇', 'Comment your guess before it escapes 👇', 'Which ring holds it longest? 👇', 'Drop your number in the comments 👇', 'Call it: fast escape or slow? 👇'],
 
   init({ params: p, rng, fxRng, visual, width, height }) {
     const cx = width / 2;

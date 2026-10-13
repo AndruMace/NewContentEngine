@@ -757,6 +757,7 @@ export const ballBattle: Template<BallBattleParams, State> = {
     hook: 'Sword, daggers, hammer or bow: who wins?',
     cta: '{winner} wins! Who did you pick?',
   },
+  nudges: ["Pick a fighter in the comments 👇", "Who's your money on? 👇", "Call the winner now 👇", "Who goes down first? 👇", "Lock in your champion 👇", "Comment your pick 👇"],
 
   init({ params: p, rng, fxRng, visual, width, height }) {
     const world = new World();
