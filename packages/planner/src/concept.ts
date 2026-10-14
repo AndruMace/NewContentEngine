@@ -200,6 +200,42 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
     // Keeps the mystery shape a seeded pick (Claude can't choose one, so batches don't repeat it).
     { param: 'shape', values: ['random'], guide: { random: 'Shape: picked at random after you write the copy, so keep the copy generic to the subject.' } },
   ],
+  'spin-battle': [
+    {
+      param: 'format',
+      values: ['duel', 'points'],
+      guide: {
+        duel: 'Format: duel (fixed for this video). One fight: the last top still spinning (or still in the stadium) wins.',
+        points:
+          'Format: points (fixed for this video). Several rounds: a spin finish (the loser runs out of spin) scores 1, an over finish (knocked out of the stadium) scores 2, first to {targetPoints} wins. "Who gets to {targetPoints} first?" angles work; in the CTA, {score} is the final score.',
+      },
+    },
+    {
+      param: 'matchup',
+      values: ['attack-defense', 'attack-stamina', 'defense-stamina', 'mirror', 'random'],
+      guide: {
+        'attack-defense':
+          'Matchup: Attack vs Defense (fixed for this video). Attack races around and smashes into its rival; Defense is heavy and tries to absorb hits. Which colour/name gets which type is picked after you write, so name the types, not the tops. Never predict the winner.',
+        'attack-stamina':
+          'Matchup: Attack vs Stamina (fixed for this video). Attack hunts and smashes; Stamina sits in the middle trying to outlast it. Which colour/name gets which type is picked after you write, so name the types, not the tops. Never predict the winner.',
+        'defense-stamina':
+          'Matchup: Defense vs Stamina (fixed for this video). A heavy wall against a top built to spin longest: a battle of endurance. Which colour/name gets which type is picked after you write, so name the types, not the tops. Never predict the winner.',
+        mirror: 'Matchup: mirror (fixed for this video). Both tops are the same type (picked after you write), so it comes down to the launch. Keep the copy about two identical tops, without naming the type.',
+        random: 'Matchup: random (fixed for this video). The two types (Attack, Defense, Stamina or Balance) are picked after you write, so keep the copy generic about two battle tops.',
+      },
+    },
+    {
+      param: 'identity',
+      values: ['colors', 'countries', 'named'],
+      guide: {
+        colors: 'Tops: colors (fixed for this video). Tops are named by colour (Red, Blue…); don\'t mention countries, flags or top names.',
+        countries:
+          'Tops: countries (fixed for this video). Each top carries a national flag (USA, Brazil, Japan…), and {winner} is a country name. Lean into friendly national rivalry: invite viewers to back their country. Keep it light, no politics.',
+        named:
+          'Tops: named (fixed for this video). Each top has an invented anime-style name and emblem (e.g. Ember Lynx, Frost Mammoth), and {winner} is that name. You can lean into the anime-tournament feel, but never mention any real toy brand.',
+      },
+    },
+  ],
   'snake-ai': [
     {
       param: 'ending',
@@ -246,6 +282,7 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'colliding-blocks': ['🤯', '🧱', '😱'],
   'pathfinding-race': ['🧭', '🏁', '🤓'],
   'fourier-drawing': ['✏️', '🤯', '👀'],
+  'spin-battle': ['🌀', '⚔️', '🔥'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
 

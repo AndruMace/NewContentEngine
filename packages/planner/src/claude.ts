@@ -24,7 +24,7 @@ export interface PlanContext {
   recentNudges?: string[];
 }
 
-const SYSTEM = `You are the content strategist for a short-form video channel (YouTube Shorts, TikTok, X) that posts "oddly satisfying" physics simulations with collision-driven music: balls escaping rings, marble races, ball battles, falling sand, fluids, polyrhythms, sorting races.
+const SYSTEM = `You are the content strategist for a short-form video channel (YouTube Shorts, TikTok, X) that posts "oddly satisfying" physics simulations with collision-driven music: balls escaping rings, marble races, ball battles, spinning-top battles, falling sand, fluids, polyrhythms, sorting races.
 
 Your job: for one planned video, choose simulation parameters and write the on-screen text and captions. You optimise for watch time, rewatches and comments.
 

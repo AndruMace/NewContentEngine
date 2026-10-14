@@ -175,6 +175,35 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
       osc(bus, 'triangle', 520 + p * 260, when, when + 0.08, dest, v * 0.3, 0.001, 0.04);
       break;
     }
+    case 'clang': {
+      // Metal contours slamming together: a bright strike and inharmonic ringing partials.
+      // pitch 0..1: low = heavy, dull hits; high = light, bright ones.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.03, dest, v * 0.8, 'highpass', 3000 + p * 3000);
+      const base = 700 + p * 900;
+      [1, 2.76, 5.4, 8.93].forEach((ratio, k) => {
+        osc(bus, 'sine', base * ratio, when, when + 0.5, dest, (v * 0.3) / (k + 1), 0.0008, 0.18 + 0.12 / (k + 1));
+      });
+      break;
+    }
+    case 'grind': {
+      // Contours scraping: a short, rough band of noise.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.09, dest, v * 0.35, 'bandpass', 1800 + p * 2400, 3);
+      noiseBurst(bus, when + 0.03, 0.06, dest, v * 0.2, 'bandpass', 3800 + p * 2000, 4);
+      break;
+    }
+    case 'rip': {
+      // A ripcord yanked out of a launcher: a ratchet of clicks speeding up, over a rising zip.
+      const p = ev.pitch ?? 0.5;
+      let at = when;
+      for (let k = 0; k < 14; k++) {
+        noiseBurst(bus, at, 0.008, dest, v * (0.35 + 0.03 * k), 'bandpass', 1800 + p * 1200 + k * 260, 6);
+        at += 0.018 * (1 - k / 18);
+      }
+      noiseBurst(bus, when, 0.22, dest, v * 0.25, 'bandpass', 900 + p * 600, 1.5, 5200 + p * 2000);
+      break;
+    }
     case 'pop': {
       const o = osc(bus, 'sine', 600, when, when + 0.15, dest, v * 0.5, 0.001, 0.1);
       o.frequency.exponentialRampToValueAtTime(140, when + 0.09);
