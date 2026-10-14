@@ -37,23 +37,34 @@ export interface TopStats {
  * who tends to win.
  */
 export const TOPS: Record<TopType, TopStats> = {
-  attack: { label: 'Attack', tagline: 'Hits the hardest', emoji: '⚔️', radius: 0.16, mass: 1.12, traction: 4.3, spinDecay: 0.05, smash: 1.25, restitution: 0.85, fragility: 0.97, aggression: 0.55, hold: 1.38 },
-  defense: { label: 'Defense', tagline: 'Hardest to knock out', emoji: '🛡️', radius: 0.172, mass: 1.63, traction: 3.28, spinDecay: 0.0422, smash: 0.55, restitution: 0.42, fragility: 0.67, aggression: 0.36, hold: 0.75 },
-  stamina: { label: 'Stamina', tagline: 'Spins the longest', emoji: '⏳', radius: 0.165, mass: 0.93, traction: 0.62, spinDecay: 0.0306, smash: 0.38, restitution: 0.65, fragility: 1.15, aggression: 0, hold: 0.89 },
-  balance: { label: 'Balance', tagline: 'A bit of everything', emoji: '⚖️', radius: 0.162, mass: 1.32, traction: 3.75, spinDecay: 0.0405, smash: 0.58, restitution: 0.48, fragility: 0.87, aggression: 0.41, hold: 1.01 },
+  attack: { label: 'Attack', tagline: 'Hits the hardest', emoji: '⚔️', radius: 0.16, mass: 1.12, traction: 4.3, spinDecay: 0.0552, smash: 1.73, restitution: 0.76, fragility: 0.84, aggression: 0.55, hold: 1.72 },
+  defense: { label: 'Defense', tagline: 'Hardest to knock out', emoji: '🛡️', radius: 0.172, mass: 1.63, traction: 3.28, spinDecay: 0.042, smash: 0.2, restitution: 0.35, fragility: 0.81, aggression: 0.36, hold: 0.81 },
+  stamina: { label: 'Stamina', tagline: 'Spins the longest', emoji: '⏳', radius: 0.165, mass: 0.93, traction: 0.62, spinDecay: 0.0318, smash: 0.38, restitution: 0.36, fragility: 1.2, aggression: 0, hold: 1.49 },
+  balance: { label: 'Balance', tagline: 'A bit of everything', emoji: '⚖️', radius: 0.162, mass: 1.32, traction: 3.75, spinDecay: 0.0405, smash: 0.68, restitution: 0.44, fragility: 0.98, aggression: 0.41, hold: 1.01 },
 };
 
 /**
  * Opposite-spin fights play differently (the tops curl round the bowl in opposite directions and
- * meet head-on, and their contours swing them round together rather than flinging them apart), so
+ * meet head-on, and their contours' surfaces run together where they touch, so blades rarely bite), so
  * each type's spin cost per hit and knockout resistance get their own tuning there, to keep the
  * odds a coin flip. Tuned with spin-battle.test.ts.
  */
 export const OPPOSITE: Record<TopType, { fragility: number; hold: number }> = {
-  attack: { fragility: 1, hold: 0.48 },
-  defense: { fragility: 1.59, hold: 1 },
-  stamina: { fragility: 0.73, hold: 1.26 },
-  balance: { fragility: 1, hold: 0.67 },
+  attack: { fragility: 0.75, hold: 1.84 },
+  defense: { fragility: 0.89, hold: 1.19 },
+  stamina: { fragility: 1.65, hold: 0.97 },
+  balance: { fragility: 0.82, hold: 1.08 },
+};
+
+/**
+ * Points format: short rounds and double points for an over finish favour the types that win fast
+ * and by knockout, so types get their own spin cost per hit and knockout resistance there.
+ */
+export const POINTS_MOD: Record<TopType, { fragility: number; hold: number }> = {
+  attack: { fragility: 1, hold: 1 },
+  defense: { fragility: 1, hold: 1 },
+  stamina: { fragility: 0.9, hold: 1 },
+  balance: { fragility: 1, hold: 1 },
 };
 
 export function resolveMatchup(m: Matchup, rng: Rng): [TopType, TopType] {

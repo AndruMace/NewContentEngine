@@ -7,7 +7,6 @@ import { THREE, canvasTexture, draw3D, environmentMap, sceneCache } from '../thr
 import { clamp01 } from '../scoring';
 import type { Team } from '../fx';
 import { HEAVY_HIT, POCKET_HALF, RIM, type Top } from './physics';
-import type { TopType } from './tops';
 import type { State, VsSlide } from './index';
 import { BEAT_S, DROP_S, VS_TOP } from './intro';
 
@@ -24,37 +23,20 @@ const CAM_LOOK_Z = -0.3;
 
 const floorY = (x: number, y: number) => BOWL_H * Math.min(1, x * x + y * y);
 
-/** Contour outline radius (fraction of the top's radius) at angle a, per type. */
-function outline(type: TopType, a: number): number {
-  switch (type) {
-    case 'attack': {
-      // Three hooked blades.
-      const u = ((a * 3) / (Math.PI * 2)) % 1;
-      return 0.66 + 0.34 * Math.pow(u, 0.6);
-    }
-    case 'defense':
-      return 0.92 + 0.08 * Math.abs(Math.cos(a * 4));
-    case 'stamina':
-      return 0.97 + 0.03 * Math.cos(a * 12);
-    case 'balance':
-      return 0.78 + 0.22 * Math.pow(Math.abs(Math.cos(a * 3)), 1.5);
-  }
-}
-
-function contourGeometry(type: TopType, r: number) {
+/** The contour ring, extruded straight from the top's collision polygon (what you see is what hits). */
+function contourGeometry(top: Top) {
   const shape = new THREE.Shape();
-  const N = 120;
-  for (let k = 0; k <= N; k++) {
-    const a = (k / N) * Math.PI * 2;
-    const rr = r * outline(type, a);
-    // Shape y is mirrored so that after rotateX(-90°) the outline lands at (cos a, sin a) in x/z.
-    const px = Math.cos(a) * rr;
-    const py = -Math.sin(a) * rr;
-    if (k === 0) shape.moveTo(px, py);
-    else shape.lineTo(px, py);
+  const { x, y } = top.poly;
+  for (let k = 0; k <= x.length; k++) {
+    const i = k % x.length;
+    // Shape y is mirrored so that after rotateX(-90°) the outline lands at (x, y) in x/z.
+    if (k === 0) shape.moveTo(x[i], -y[i]);
+    else shape.lineTo(x[i], -y[i]);
   }
+  const type = top.type;
   const depth = type === 'stamina' ? 0.018 : type === 'defense' ? 0.04 : 0.03;
-  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006, bevelSegments: 2, curveSegments: 4 });
+  // A small bevel only, so the visible edge stays on the collision outline.
+  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.002, bevelSegments: 1, curveSegments: 4 });
   geo.rotateX(-Math.PI / 2);
   return { geo, depth };
 }
@@ -124,7 +106,7 @@ function buildTop(top: Top, theme: Theme) {
   driver.position.y = 0.03;
   driver.castShadow = true;
   spinner.add(driver);
-  const { geo, depth } = contourGeometry(top.type, r);
+  const { geo, depth } = contourGeometry(top);
   const contour = new THREE.Mesh(geo, metal);
   contour.position.y = 0.06;
   // Left-spin tops have mirrored blades (hooks facing the other way).

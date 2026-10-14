@@ -6,7 +6,8 @@
 import type { Rng } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import type { Team } from '../fx';
-import { OPPOSITE, TOPS, type TopStats, type TopType } from './tops';
+import { OPPOSITE, POINTS_MOD, TOPS, type TopStats, type TopType } from './tops';
+import { POLY_N, contourPolygon, getDesign, type Design } from './designs';
 
 export type TopStatus = 'spinning' | 'down' | 'out';
 export type FinishKind = 'spin' | 'pocket' | 'wall';
@@ -14,7 +15,14 @@ export type FinishKind = 'spin' | 'pocket' | 'wall';
 export interface Top {
   idx: number;
   type: TopType;
+  /** The contour design; `stats` already include its radius and weight. */
+  design: Design;
   stats: TopStats;
+  /** Contour polygon in the top's own frame, its inner and outer radius, and scratch space for its
+   * world position (rebuilt when tops are close). */
+  poly: { x: Float64Array; y: Float64Array; min: number; max: number };
+  wx: Float64Array;
+  wy: Float64Array;
   team: Team;
   x: number;
   y: number;
@@ -35,8 +43,9 @@ export interface Top {
   outVy: number;
   /** Sim time it left the fight (for the replay). */
   outSimT: number;
-  /** Visual only: spin angle, wobble tilt and precession angle, hit flash. */
+  /** Spin angle (radians, physics: the contour polygon turns with it). */
   spin: number;
+  /** Visual only: wobble tilt and precession angle, hit flash. */
   tilt: number;
   precess: number;
   flash: number;
@@ -51,6 +60,8 @@ export interface Arena {
   /** Extra resistance to knockouts, and extra randomness (points format). */
   hold: number;
   chaos: number;
+  /** Points format (per-type knockout resistance applies). */
+  points: boolean;
   hitPower: number;
   /** Multiplier on every spin loss (decay, hits, grinding): sets how long rounds last without
    * changing who tends to win. */
@@ -81,11 +92,11 @@ export const K = {
   pocketLip: 2.6,
   damp: 0.85,
   wallRestitution: 0.55,
-  /** Extra recoil from the spinning contours meeting (both tops spin the same way). */
-  spinRecoil: 1.45,
-  /** Sideways kick from the contours' surface speed, as a share of the normal impulse. */
-  sideKick: 0.46,
-  hitDrain: 0.015,
+  /** How much of a contour's spinning surface speed (× smash) goes into a hit. */
+  surface: 1.9,
+  /** Friction between contours (sideways kick, as a share of the normal impulse at most). */
+  mu: 0.56,
+  hitDrain: 0.0088,
   grindDrain: 0.057,
   clashCooldown: 0.14,
   /** Turn rates (rad/s at full spin): the steady curl, and steering at the opponent. */
@@ -99,15 +110,13 @@ export const K = {
   /** Longer rounds mean more clashes: tops get harder to knock out to keep the odds the same. */
   holdExp: 0.39,
   /** Points format: an over finish scores double, so knockouts are made a little harder. */
-  pointsHold: 1.12,
+  pointsHold: 1,
   /** Points format: more chaos per round, so small edges don't add up over a match. */
   pointsChaos: 1,
-  /** Opposite spins: the contours' surfaces move the same way where they touch, so the recoil is softer. */
-  oppRecoil: 0.8,
-  /** Opposite spins curl round the bowl in opposite directions and meet head-on far more often,
-   * so each hit costs less spin to keep the odds the same. */
-  oppDrain: 1.11,
-  oppLenExp: 0.6,
+  /** Opposite spins curl round the bowl in opposite directions and meet head-on far more often:
+   * hit spin cost multiplier (and its growth with round length) for those fights. */
+  oppDrain: 0.35,
+  oppLenExp: 0,
 };
 /** Seconds after launch before a top can be knocked out of the stadium. */
 const LAUNCH_GRACE = 1.2;
@@ -116,11 +125,20 @@ export const HEAVY_HIT = 2.4;
 export const WOBBLE_AT = 0.24;
 export const FALL_AT = 0.035;
 
-export function makeTop(idx: number, type: TopType, team: Team, dir: 1 | -1 = 1): Top {
+/** Spin rate (rad/s) at a given spin fraction: the contour's angular speed. */
+export const spinRate = (omega: number) => 5 + 30 * omega;
+
+export function makeTop(idx: number, type: TopType, team: Team, dir: 1 | -1 = 1, design: Design = getDesign(DEFAULT_DESIGN[type])): Top {
+  const base = TOPS[type];
+  const stats = { ...base, radius: base.radius * design.radiusScale, mass: base.mass * design.massScale };
   return {
     idx,
     type,
-    stats: TOPS[type],
+    design,
+    stats,
+    poly: contourPolygon(design, stats.radius),
+    wx: new Float64Array(POLY_N),
+    wy: new Float64Array(POLY_N),
     team,
     x: 0,
     y: 0,
@@ -143,6 +161,8 @@ export function makeTop(idx: number, type: TopType, team: Team, dir: 1 | -1 = 1)
   };
 }
 
+const DEFAULT_DESIGN: Record<TopType, string> = { attack: 'tri-blade', defense: 'bastion', stamina: 'halo', balance: 'trinity' };
+
 const wrap = (a: number) => {
   let x = a % (Math.PI * 2);
   if (x > Math.PI) x -= Math.PI * 2;
@@ -158,11 +178,12 @@ export function inPocket(arena: Arena, x: number, y: number, extra = 0): boolean
 
 /** Outward speed that would carry this top out of the stadium at (x, y). */
 export function escapeSpeed(arena: Arena, t: Top, x: number, y: number): number {
-  const k = Math.sqrt(t.stats.mass) * t.stats.hold * (t.vsOpposite ? OPPOSITE[t.type].hold : 1);
+  const k = Math.sqrt(t.stats.mass) * t.stats.hold * (t.vsOpposite ? OPPOSITE[t.type].hold : 1) * (arena.points ? POINTS_MOD[t.type].hold : 1);
   return (inPocket(arena, x, y) ? K.pocketLip : arena.wallLaunch) * k * arena.hold * arena.spin ** -K.holdExp;
 }
 
 const pairKey = (a: Top, b: Top) => `${a.idx}-${b.idx}`;
+const TAU = Math.PI * 2;
 
 export function stepTops(tops: Top[], arena: Arena, dt: number, contact: Map<string, number>, h: StepHooks) {
   const live = tops.filter((t) => t.status === 'spinning');
@@ -210,6 +231,8 @@ export function stepTops(tops: Top[], arena: Arena, dt: number, contact: Map<str
     t.x += t.vx * dt;
     t.y += t.vy * dt;
     t.omega = Math.max(0, t.omega - t.stats.spinDecay * arena.spin * ramp * dt);
+    t.spin += spinRate(t.omega) * dt;
+    if (t.spin >= TAU) t.spin -= TAU;
   }
 
   // Top against top.
@@ -268,76 +291,163 @@ export function stepTops(tops: Top[], arena: Arena, dt: number, contact: Map<str
   }
 }
 
+/** World positions of a top's contour vertices (left-spin tops are mirrored, turning the other way). */
+function placePolygon(t: Top) {
+  const th = t.dir * t.spin;
+  const c = dm.cos(th);
+  const sn = dm.sin(th);
+  const { x, y } = t.poly;
+  for (let i = 0; i < POLY_N; i++) {
+    const lx = t.dir > 0 ? x[i] : -x[i];
+    t.wx[i] = t.x + lx * c - y[i] * sn;
+    t.wy[i] = t.y + lx * sn + y[i] * c;
+  }
+}
+
+function insidePolygon(px: number, py: number, wx: Float64Array, wy: Float64Array) {
+  let inside = false;
+  for (let i = 0, j = POLY_N - 1; i < POLY_N; j = i++) {
+    if (wy[i] > py !== wy[j] > py && px < ((wx[j] - wx[i]) * (py - wy[i])) / (wy[j] - wy[i]) + wx[i]) inside = !inside;
+  }
+  return inside;
+}
+
+interface Contact {
+  depth: number;
+  /** Contact point, and the direction the first top must move to separate. */
+  x: number;
+  y: number;
+  nx: number;
+  ny: number;
+}
+
+/** Deepest vertex of p inside polygon q: how far it is in, and the way out (nearest edge of q). */
+function deepestIn(p: Top, q: Top, sign: number, best: Contact | null): Contact | null {
+  const qMax2 = q.poly.max * q.poly.max;
+  const qMin2 = q.poly.min * q.poly.min;
+  for (let i = 0; i < POLY_N; i++) {
+    const px = p.wx[i];
+    const py = p.wy[i];
+    const dx = px - q.x;
+    const dy = py - q.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > qMax2) continue;
+    if (d2 > qMin2 && !insidePolygon(px, py, q.wx, q.wy)) continue;
+    // Nearest point on q's outline.
+    let bd2 = Infinity;
+    let bx = 0;
+    let by = 0;
+    for (let k = 0, j = POLY_N - 1; k < POLY_N; j = k++) {
+      const ax = q.wx[j];
+      const ay = q.wy[j];
+      const ex = q.wx[k] - ax;
+      const ey = q.wy[k] - ay;
+      const l2 = ex * ex + ey * ey || 1e-12;
+      let u = ((px - ax) * ex + (py - ay) * ey) / l2;
+      u = u < 0 ? 0 : u > 1 ? 1 : u;
+      const cx = ax + ex * u;
+      const cy = ay + ey * u;
+      const e2 = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+      if (e2 < bd2) {
+        bd2 = e2;
+        bx = cx;
+        by = cy;
+      }
+    }
+    const depth = Math.sqrt(bd2);
+    if (depth < 1e-9 || (best && depth <= best.depth)) continue;
+    // p's top must move towards the outline point; `sign` turns that into the first top's direction.
+    best = { depth, x: (px + bx) / 2, y: (py + by) / 2, nx: (sign * (bx - px)) / depth, ny: (sign * (by - py)) / depth };
+  }
+  return best;
+}
+
+/**
+ * Contour against contour. The contours are real polygons turning with each top's spin, and the
+ * impulse at the contact point includes each contour's surface speed there: a hooked face sweeping
+ * into the opponent strikes hard; a smooth rim (surface moving along the contact) mostly scrapes.
+ */
 function collide(a: Top, b: Top, arena: Arena, dt: number, contact: Map<string, number>, h: StepHooks) {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
-  const minD = a.stats.radius + b.stats.radius;
-  const d2 = dx * dx + dy * dy;
-  if (d2 >= minD * minD) return;
-  const d = Math.sqrt(d2) || 1e-6;
-  const nx = dx / d;
-  const ny = dy / d;
+  const reach = a.poly.max + b.poly.max;
+  if (dx * dx + dy * dy >= reach * reach) return;
+  placePolygon(a);
+  placePolygon(b);
+  const hit = deepestIn(b, a, -1, deepestIn(a, b, 1, null));
+  if (!hit) return;
   const ma = a.stats.mass;
   const mb = b.stats.mass;
-  const over = minD - d;
-  a.x += (nx * over * mb) / (ma + mb);
-  a.y += (ny * over * mb) / (ma + mb);
-  b.x -= (nx * over * ma) / (ma + mb);
-  b.y -= (ny * over * ma) / (ma + mb);
+  const { nx, ny } = hit;
+  a.x += (nx * hit.depth * mb) / (ma + mb);
+  a.y += (ny * hit.depth * mb) / (ma + mb);
+  b.x -= (nx * hit.depth * ma) / (ma + mb);
+  b.y -= (ny * hit.depth * ma) / (ma + mb);
 
-  const vn = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
-  const e = (a.stats.restitution + b.stats.restitution) / 2;
-  const invM = 1 / ma + 1 / mb;
-  const J = vn < 0 ? (-(1 + e) * vn) / invM : 0;
+  // Velocity of each contour where they touch: the top's motion plus its spinning surface.
+  const rax = hit.x - a.x;
+  const ray = hit.y - a.y;
+  const rbx = hit.x - b.x;
+  const rby = hit.y - b.y;
+  const sa = K.surface * arena.hitPower * a.stats.smash * a.dir * spinRate(a.omega);
+  const sb = K.surface * arena.hitPower * b.stats.smash * b.dir * spinRate(b.omega);
+  const rvx = a.vx - sa * ray - (b.vx - sb * rby);
+  const rvy = a.vy + sa * rax - (b.vy + sb * rbx);
+  const vn = rvx * nx + rvy * ny;
   const key = pairKey(a, b);
-  const fresh = (contact.get(key) ?? -1) <= h.simT;
-  // Same spin: where the contours touch their surfaces run head-on, so they slam apart. Opposite
-  // spin: the surfaces run together, so the recoil is softer.
-  const same = a.dir === b.dir;
-  const Js = fresh ? K.spinRecoil * arena.hitPower * (a.stats.smash * a.omega + b.stats.smash * b.omega) * (same ? 1 : K.oppRecoil) : 0;
-  const Jn = J + Js;
-  if (Jn <= 0) {
+  if (vn >= 0) {
     // Resting contact: the contours grind, both slowly losing spin.
     a.omega = Math.max(0, a.omega - K.grindDrain * arena.spin * dt * b.omega);
     b.omega = Math.max(0, b.omega - K.grindDrain * arena.spin * dt * a.omega);
     const gk = `${key}g`;
     if ((contact.get(gk) ?? -1) <= h.simT) {
       contact.set(gk, h.simT + 0.12);
-      h.emit({ type: 'grind', x: Math.round(((a.x + b.x) / 2) * 100) / 100 });
+      h.emit({ type: 'grind', x: Math.round(hit.x * 100) / 100 });
     }
     return;
   }
-  // Sideways flick: each top's spinning contour throws the other along its own surface direction.
-  // Same spin: they're flung apart in opposite directions; opposite spin: they swing round together.
-  const Jt = K.sideKick * Jn;
-  const tx = -ny;
-  const ty = nx;
-  a.vx += (nx * Jn + tx * Jt * a.dir) / ma;
-  a.vy += (ny * Jn + ty * Jt * a.dir) / ma;
-  b.vx -= (nx * Jn + tx * Jt * b.dir) / mb;
-  b.vy -= (ny * Jn + ty * Jt * b.dir) / mb;
-  const fragility = (t: Top) => t.stats.fragility * (t.vsOpposite ? OPPOSITE[t.type].fragility : 1);
-  const drain = (self: Top, other: Top) => (K.hitDrain * arena.spin * Jn * (0.4 + other.stats.smash * other.omega) * fragility(self)) / self.stats.mass;
-  // How much spin a hit costs depends on exactly where the contours meet: a random share.
-  // Opposite spins: hits cost a bit more in rounds longer than usual (head-on meetings add up).
-  const k = same ? 1 : K.oppDrain * Math.max(1, 1 / arena.spin) ** K.oppLenExp;
-  const da = drain(a, b) * k * (0.3 + 1.4 * h.rng.next());
-  const db = drain(b, a) * k * (0.3 + 1.4 * h.rng.next());
-  a.omega = Math.max(0, a.omega - da);
-  b.omega = Math.max(0, b.omega - db);
-  if (!fresh) return;
+  const invM = 1 / ma + 1 / mb;
+  const e = (a.stats.restitution + b.stats.restitution) / 2;
+  const J = (-(1 + e) * vn) / invM;
+  // Friction: the scraping surfaces throw each other sideways.
+  let tx = rvx - vn * nx;
+  let ty = rvy - vn * ny;
+  const vt = Math.sqrt(tx * tx + ty * ty);
+  let Jt = 0;
+  if (vt > 1e-6) {
+    tx /= vt;
+    ty /= vt;
+    Jt = Math.min(K.mu * J, vt / invM);
+  }
+  const jx = nx * J - tx * Jt;
+  const jy = ny * J - ty * Jt;
+  a.vx += jx / ma;
+  a.vy += jy / ma;
+  b.vx -= jx / mb;
+  b.vy -= jy / mb;
+  // Every hit costs both tops spin (a random share: exactly how the contours bit).
+  const same = a.dir === b.dir;
+  const k = (same ? 1 : K.oppDrain * Math.max(1, 1 / arena.spin) ** K.oppLenExp) * K.hitDrain * arena.spin * (J + Jt);
+  const fragility = (t: Top) => t.stats.fragility * (t.vsOpposite ? OPPOSITE[t.type].fragility : 1) * (arena.points ? POINTS_MOD[t.type].fragility : 1);
+  a.omega = Math.max(0, a.omega - (k * fragility(a) * (0.5 + h.rng.next())) / ma);
+  b.omega = Math.max(0, b.omega - (k * fragility(b) * (0.5 + h.rng.next())) / mb);
+  // One clash event per contact (or a much harder hit within it).
+  const power = J + Jt;
+  const last = contact.get(`${key}p`) ?? 0;
+  if (power < 0.25 || ((contact.get(key) ?? -1) > h.simT && power < last * 2)) return;
   contact.set(key, h.simT + K.clashCooldown);
+  contact.set(`${key}p`, power);
   a.flash = 1;
   b.flash = 1;
-  const cx = (a.x * b.stats.radius + b.x * a.stats.radius) / minD;
-  const cy = (a.y * b.stats.radius + b.y * a.stats.radius) / minD;
   h.emit({
     type: 'clash',
     a: a.idx,
     b: b.idx,
-    power: Math.round(Jn * 100) / 100,
-    x: Math.round(cx * 1000) / 1000,
-    y: Math.round(cy * 1000) / 1000,
+    power: Math.round(power * 100) / 100,
+    x: Math.round(hit.x * 1000) / 1000,
+    y: Math.round(hit.y * 1000) / 1000,
+    nx: Math.round(nx * 1000) / 1000,
+    ny: Math.round(ny * 1000) / 1000,
     w: [Math.round(a.omega * 1000) / 1000, Math.round(b.omega * 1000) / 1000],
     opp: !same,
   });

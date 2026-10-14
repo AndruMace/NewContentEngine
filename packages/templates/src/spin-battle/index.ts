@@ -5,6 +5,7 @@ import { COLOR_TEAMS, COUNTRY_TEAMS, pickDistinctTeams } from '../fx';
 import { clamp01, gaussFit } from '../scoring';
 import { FALL_AT, HEAVY_HIT, K, escapeSpeed, inPocket, makeTop, stepTops, type Arena, type FinishKind, type Top } from './physics';
 import { MATCHUPS, NAMED_TOPS, TOPS, resolveMatchup } from './tops';
+import { pickDesign } from './designs';
 import { BEAT_S, DROP_S, VS_EXIT_S, VS_S, VS_SLAM, VS_TOP } from './intro';
 import { drawShowcase, drawView, screenOf } from './view3d';
 
@@ -17,7 +18,7 @@ export const spinBattleSchema = z.object({
   pockets: z.number().int().min(0).max(4).default(3).meta({ title: 'Rim pockets' }),
   bowlDepth: z.number().min(0.6).max(1.6).default(1).meta({ title: 'Bowl steepness', step: 0.05 }),
   launchPower: z.number().min(0.6).max(1.6).default(1).meta({ title: 'Launch power', step: 0.05 }),
-  roundLength: z.number().min(8).max(45).default(15).meta({ title: 'Typical round length, s (points rounds run ~60% of this)', step: 1 }),
+  roundLength: z.number().min(8).max(45).default(15).meta({ title: 'Typical round length, s (points rounds run ~50% of this)', step: 1 }),
   hitPower: z.number().min(0.5).max(1.8).default(1).meta({ title: 'Clash power', step: 0.05 }),
   wallLaunch: z.number().min(3).max(7).default(5).meta({ title: 'Speed to fly over the wall', step: 0.1 }),
   hitFreeze: z.number().min(0).max(0.12).default(0.05).meta({ title: 'Hit freeze (s)', step: 0.01 }),
@@ -80,7 +81,7 @@ export interface State {
   /** Camera target (stadium units) and zoom. */
   cam: { x: number; y: number; z: number };
   shake: number;
-  /** Recent clashes: sparks, and the replay's sounds. `nx, ny` is the line between the tops. */
+  /** Recent clashes: sparks, and the replay's sounds. `nx, ny` is the contact normal. */
   hits: Hit[];
   /** Visual only: recent top states by sim time, for the replay. */
   track: Snapshot[];
@@ -123,13 +124,13 @@ const REPLAY_PRE_S = 1.2;
 const REPLAY_POST_S = 0.45;
 
 const COUNT_S = BEAT_S * 3;
-const AFTER_S = 1.5;
+const AFTER_S = 1.2;
 const SLOW = 0.22;
 const MAX_THREATS = 2;
 /** How long a round lasts at spin rate 1 (sim seconds, median). */
 const BASE_ROUND_S = 15;
 /** Points rounds run shorter so a whole match fits in a Short. */
-const POINTS_ROUND = 0.6;
+const POINTS_ROUND = 0.5;
 /** Soft cap on a round, as a multiple of its typical length (spin then drains faster). */
 const SOFT_CAP = 1.7;
 /** Points format: after this many rounds the leader wins (draws can otherwise drag on). */
@@ -175,6 +176,7 @@ function startRound(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => void)
       outAt: -1,
       outSimT: -1,
       outKind: null,
+      spin: 0,
       tilt: 0,
       flash: 0,
     });
@@ -271,10 +273,7 @@ function simulate(s: State, sdt: number, t: number, emit: (e: Omit<SimEvent, 't'
       const power = e.power as number;
       if (power > 2.2) s.freezeUntil = Math.max(s.freezeUntil, t + p.hitFreeze * Math.min(1.6, power / 3));
       // Kept with or without visuals: the replay replays their sounds.
-      const a = s.tops[e.a as number];
-      const b = s.tops[e.b as number];
-      const d = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2) || 1;
-      s.hits.push({ t, simT: s.simT, x: e.x as number, y: e.y as number, nx: (b.x - a.x) / d, ny: (b.y - a.y) / d, power, opp: e.opp === true });
+      s.hits.push({ t, simT: s.simT, x: e.x as number, y: e.y as number, nx: e.nx as number, ny: e.ny as number, power, opp: e.opp === true });
       if (s.hits.length > 16) s.hits.shift();
       if (s.visual) s.shake = Math.min(power > HEAVY_HIT ? 34 : 26, s.shake + power * (power > HEAVY_HIT ? 5 : 3));
     }
@@ -545,7 +544,8 @@ function drawVsText(ctx: Ctx2D, s: State, theme: Theme, sl: VsSlide) {
     ctx.translate(o.x, o.y);
     const name = nameOf(top);
     textOutlined(ctx, name, x, y0, fitText(ctx, name, 66, 470), '#ffffff', align);
-    textOutlined(ctx, `${st.emoji} ${st.label.toUpperCase()}`, x, y0 + 74, 46, light, align);
+    const kind = `${st.emoji} ${st.label.toUpperCase()} · ${top.design.name.toUpperCase()}`;
+    textOutlined(ctx, kind, x, y0 + 74, fitText(ctx, kind, 46, 480), light, align);
     textOutlined(ctx, st.tagline, x, y0 + 130, 32, 'rgba(255,255,255,0.92)', align);
     textOutlined(ctx, top.dir > 0 ? 'RIGHT SPIN ↻' : 'LEFT SPIN ↺', x, y0 + 180, 28, theme.accent, align);
     ctx.restore();
@@ -600,7 +600,7 @@ export const spinBattle: Template<SpinBattleParams, State> = {
   name: 'Spin Top Battle',
   family: 'race',
   description:
-    'Rendered in 3D: two battle tops are launched into a bowl stadium after a 3-2-1 countdown and clash with sparks until one loses. A top loses by a spin finish (it runs out of spin, wobbles and topples) or an over finish (knocked out through a pocket in the rim or launched over the wall). Each top is a type: Attack (races around the rim, hits hardest, but burns its own spin), Defense (heavy, hard to knock out), Stamina (sits in the middle and outspins everything) or Balance (a bit of everything). Types change how a fight looks, but any type can win. Formats: a single duel, or a points match (spin finish 1 point, over finish 2, first to the target wins). Tops are colours, countries with their flag on top, or named tops (e.g. Ember Lynx, Frost Mammoth). Tops spin right (clockwise) or left: same-direction tops slam apart on contact, while opposite-direction tops curl round the bowl in opposite directions, meet head-on and swing round each other (with spins "random", which top spins which way is picked after you write). The deciding blow plays again as an instant replay from a low side angle. Live spin bars show each top\'s RPM. Length: roundLength sets how long a round typically lasts; a duel video runs about roundLength + 10 s, a points match about 3-4 rounds of (0.6 × roundLength + 3.3) s plus 8 s. It opens on a VS card showing both contenders (name, type, spin direction) for viewers to pick a side, then the tops hang in launchers for a 3-2-1 and drop in when the ripcords are pulled. Never use the word "Beyblade" (a trademark): call them spinning tops or battle tops.',
+    'Rendered in 3D: two battle tops are launched into a bowl stadium after a 3-2-1 countdown and clash with sparks until one loses. A top loses by a spin finish (it runs out of spin, wobbles and topples) or an over finish (knocked out through a pocket in the rim or launched over the wall). Each top is a type: Attack (races around the rim, hits hardest, but burns its own spin), Defense (heavy, hard to knock out), Stamina (sits in the middle and outspins everything) or Balance (a bit of everything), in one of three contour designs per type (e.g. Tri-Blade, Sickle and Starburst attack rings); the contours really collide, so hooked blades catch and smooth rims glance off. Types change how a fight looks, but any type can win. Formats: a single duel, or a points match (spin finish 1 point, over finish 2, first to the target wins). Tops are colours, countries with their flag on top, or named tops (e.g. Ember Lynx, Frost Mammoth). Tops spin right (clockwise) or left: same-direction tops slam apart on contact, while opposite-direction tops curl round the bowl in opposite directions, meet head-on and swing round each other (with spins "random", which top spins which way is picked after you write). The deciding blow plays again as an instant replay from a low side angle. Live spin bars show each top\'s RPM. Length: roundLength sets how long a round typically lasts; a duel video runs about roundLength + 10 s, a points match about 3-4 rounds of (0.5 × roundLength + 3) s plus 8 s. It opens on a VS card showing both contenders (name, type, spin direction) for viewers to pick a side, then the tops hang in launchers for a 3-2-1 and drop in when the ripcords are pulled. Never use the word "Beyblade" (a trademark): call them spinning tops or battle tops.',
   schema: spinBattleSchema,
   substeps: 4,
   glowScale: 0.4,
@@ -616,7 +616,7 @@ export const spinBattle: Template<SpinBattleParams, State> = {
     const types = resolveMatchup(p.matchup, rng);
     const first: 1 | -1 = rng.chance(0.5) ? 1 : -1;
     const dirs: (1 | -1)[] = p.spins === 'right' ? [1, 1] : p.spins === 'opposite' ? [first, -first as 1 | -1] : [first, rng.chance(0.5) ? 1 : -1];
-    const tops = types.map((type, i) => makeTop(i, type, teams[i], dirs[i]));
+    const tops = types.map((type, i) => makeTop(i, type, teams[i], dirs[i], pickDesign(type, rng)));
     for (const top of tops) top.vsOpposite = dirs[0] !== dirs[1];
     const pockets: number[] = [];
     const p0 = rng.range(0, Math.PI * 2);
@@ -626,7 +626,7 @@ export const spinBattle: Template<SpinBattleParams, State> = {
       rng,
       visual,
       tops,
-      arena: { G: K.bowl * p.bowlDepth, pockets, wallLaunch: p.wallLaunch, hold: p.format === 'points' ? K.pointsHold : 1, chaos: p.format === 'points' ? K.pointsChaos : 1, hitPower: p.hitPower, spin: BASE_ROUND_S / (p.roundLength * (p.format === 'points' ? POINTS_ROUND : 1)) },
+      arena: { G: K.bowl * p.bowlDepth, pockets, wallLaunch: p.wallLaunch, hold: p.format === 'points' ? K.pointsHold : 1, points: p.format === 'points', chaos: p.format === 'points' ? K.pointsChaos : 1, hitPower: p.hitPower, spin: BASE_ROUND_S / (p.roundLength * (p.format === 'points' ? POINTS_ROUND : 1)) },
       contact: new Map(),
       t: 0,
       simT: 0,
@@ -746,7 +746,6 @@ export const spinBattle: Template<SpinBattleParams, State> = {
         top.flash *= dm.exp(-9 * sdt);
         if (top.status === 'out') continue;
         const w = top.status === 'spinning' ? top.omega : 0;
-        top.spin += (5 + 30 * w) * sdt;
         const target = top.wobbling && top.status === 'spinning' ? 0.06 + 0.4 * clamp01((0.24 - top.omega) / 0.24) : 0.03;
         top.tilt += (target - top.tilt) * (1 - dm.exp(-sdt * 4));
         top.precess += (4 + 14 * (1 - w)) * sdt;
