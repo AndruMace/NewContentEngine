@@ -184,10 +184,10 @@ const MAX_LAG_Y = 520;
  * follows a held note's lob and drop. The spiral's orbit angle averages the landing path. Computed
  * from t alone, so any frame renders the same however the video is scrubbed.
  */
-function smoothFollow(s: State, t: number, half: number): { p: Pt; ang: number; extent: number } {
+function smoothFollow(s: State, t: number, half: number): { p: Pt; ang: number } {
   const N = 24;
   let w = 0;
-  const acc = { x: 0, y: 0, z: 0, ang: 0, extent: 0 };
+  const acc = { x: 0, y: 0, z: 0, ang: 0 };
   for (let k = -N; k <= N; k++) {
     const wk = 1 - Math.abs(k) / (N + 1);
     const tk = t + (k / N) * half;
@@ -196,18 +196,16 @@ function smoothFollow(s: State, t: number, half: number): { p: Pt; ang: number; 
     acc.y += b.y * wk;
     acc.z += b.z * wk;
     acc.ang += pathAt(s, tk).ang * wk;
-    acc.extent += hopExtent(s, tk) * wk;
     w += wk;
   }
   const p = { x: acc.x / w, y: acc.y / w, z: acc.z / w };
   const by = ballAt(s.arcs, s.onsets, t).y;
   p.y = Math.min(by + MAX_LAG_Y, Math.max(by - MAX_LAG_Y, p.y));
-  return { p, ang: acc.ang / w, extent: acc.extent / w };
+  return { p, ang: acc.ang / w };
 }
 
-/** How tall the hop in flight at t is (its rise plus its drop, px): big for a held note's lob. */
-function hopExtent(s: State, t: number): number {
-  const i = landedIndex(s.onsets, t);
+/** How tall hop i (from landing i to i+1) is: its rise plus its drop (px). Big for a held note. */
+function hopExtent(s: State, i: number): number {
   if (i < 0 || i + 1 >= s.arcs.length) return 0;
   const a = s.arcs[i + 1];
   const rise = a.vy < 0 ? (a.vy * a.vy) / (2 * a.g) : 0;
@@ -216,6 +214,30 @@ function hopExtent(s: State, t: number): number {
 
 /** Extra camera distance (three.js units) for a hop of this extent, so its destination stays in view. */
 const pullBack = (extent: number) => Math.min(22, (Math.max(0, extent - 500) / 100) * 0.9);
+
+/**
+ * How far the camera pulls back at t: each hop's pull-back blended over a window either side with
+ * a raised-cosine weight, integrated exactly. A hop's pull-back is constant across the hop and jumps
+ * between hops, so sampling it made the zoom step whenever a sample crossed a hop boundary; the
+ * exact blend changes smoothly instead.
+ */
+function smoothPullBack(s: State, t: number, half: number): number {
+  // Cumulative weight of the raised cosine (1 + cos(pi u)) / 2 on u in [-1, 1], normalised to 1.
+  const cdf = (u: number) => {
+    const c = Math.max(-1, Math.min(1, u));
+    return (c + 1) / 2 + Math.sin(Math.PI * c) / (2 * Math.PI);
+  };
+  const lo = t - half;
+  const hi = t + half;
+  let sum = 0;
+  const from = Math.max(0, landedIndex(s.onsets, lo));
+  for (let i = from; i + 1 < s.onsets.length && s.onsets[i].t < hi; i++) {
+    const a = Math.max(lo, s.onsets[i].t);
+    const b = Math.min(hi, s.onsets[i + 1].t);
+    if (b > a) sum += pullBack(hopExtent(s, i)) * (cdf((b - t) / half) - cdf((a - t) / half));
+  }
+  return sum;
+}
 
 /**
  * Each style's camera follows the ball's landings. Falling eases from landing to landing; the
@@ -238,10 +260,10 @@ function placeCamera(camera: THREE.PerspectiveCamera, sun: THREE.DirectionalLigh
   } else if (s.p.style === 'spiral') {
     const sm = smoothFollow(s, t, 0.9);
     const f = v3(sm.p);
+    const back = smoothPullBack(s, t, 1.2);
     // Orbit outside the tower, looking in at the column, aimed a little ahead: the block just left
     // has shattered, so what's on screen is what's next. Big hops pull the camera back (and the
     // fog with it) so the bar the ball is heading for stays in view.
-    const back = pullBack(sm.extent);
     const phi = sm.ang + 0.25;
     camera.position.set(Math.cos(phi) * (12.5 + back), f.y + 3.6 + back * 0.15, Math.sin(phi) * (12.5 + back));
     look.set(Math.cos(phi) * 2.3, f.y + 0.3 - back * 0.35, Math.sin(phi) * 2.3);
@@ -251,7 +273,7 @@ function placeCamera(camera: THREE.PerspectiveCamera, sun: THREE.DirectionalLigh
     const sm = smoothFollow(s, t, 0.8);
     const f = v3(sm.p);
     // In front and above, tilted down at the cascade, with a slow sway; pulled back for big hops.
-    const back = pullBack(sm.extent);
+    const back = smoothPullBack(s, t, 1.2);
     camera.position.set(f.x * 0.25 + 0.5 * Math.sin(t * 0.3), f.y + 3.2 + back * 0.15, 16.5 + back);
     look.set(f.x * 0.25, f.y + 0.5 - back * 0.35, 0);
     fog.near = near + back;
