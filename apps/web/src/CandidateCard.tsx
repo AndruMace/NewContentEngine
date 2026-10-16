@@ -3,14 +3,15 @@ import { THEMES } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { findTemplate } from '@sim/templates';
 import { REJECT_REASONS } from '@sim/analytics/reasons';
-import { api, exportFileUrl, previewVideoRef, type ReviewItem, type SocialCopy } from './api';
+import { PLATFORMS } from '@sim/planner/platforms';
+import { api, exportFileUrl, previewVideoRef, uploadPageHash, type ReviewItem, type SocialCopy } from './api';
 
 const SOURCE_LABEL: Record<string, string> = { claude: 'Claude', fallback: 'Template defaults', mock: 'Mock (dry run)', manual: 'You (Playground)' };
 const HOOK_STYLE_LABEL: Record<string, string> = { question: 'Question', challenge: 'Challenge', 'pick-a-side': 'Pick a side', curiosity: 'Curiosity' };
-const PLATFORM_LABEL = { youtube: 'YouTube', tiktok: 'TikTok', x: 'X' } as const;
+const PLATFORM_LABEL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram', x: 'X' } as const;
 const STAGE_LABEL: Record<string, string> = { frames: 'Rendering frames', audio: 'Rendering audio', mastering: 'Mastering', qc: 'Quality checks' };
 
-function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
   return (
     <button
@@ -56,6 +57,7 @@ function CopyEditor({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewIt
       {field('title', 'YouTube title', 1, 90)}
       {field('youtubeDescription', 'YouTube description', 2)}
       {field('tiktokCaption', 'TikTok caption', 3, 300)}
+      {field('instagramCaption', 'Instagram caption', 3, 500)}
       {field('xPost', 'X post', 3, 270)}
       <label className="param">
         <span>Hashtags</span>
@@ -89,17 +91,19 @@ function CopyEditor({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewIt
   );
 }
 
-function Posts({ item, onSaved }: { item: ReviewItem; onSaved: (r: ReviewItem) => void }) {
+export function Posts({ item, onSaved, open }: { item: ReviewItem; onSaved: (r: ReviewItem) => void; open?: boolean }) {
   const urls = Object.fromEntries(item.posts.map((p) => [p.platform, p.url]));
   const [vals, setVals] = useState<Record<string, string>>(urls);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => setVals(Object.fromEntries(item.posts.map((p) => [p.platform, p.url]))), [item.posts]);
   return (
-    <details className="posts" open={item.posts.length > 0}>
-      <summary>Posted ({item.posts.length}/3)</summary>
-      {(['youtube', 'tiktok', 'x'] as const).map((platform) => (
+    <details className="posts" open={open || item.posts.length > 0}>
+      <summary>
+        Posted ({item.posts.length}/{PLATFORMS.length})
+      </summary>
+      {PLATFORMS.map((platform) => (
         <label className="param" key={platform}>
-          <span>{platform === 'x' ? 'X' : platform === 'youtube' ? 'YouTube' : 'TikTok'} URL</span>
+          <span>{PLATFORM_LABEL[platform]} URL</span>
           <input
             value={vals[platform] ?? ''}
             placeholder="Paste the post URL after uploading"
@@ -292,7 +296,7 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
         {item.platformText && (
           <details className="captions-box">
             <summary>Captions</summary>
-            {(['youtube', 'tiktok', 'x'] as const).map((p) => (
+            {PLATFORMS.map((p) => (
               <div key={p} className="caption-full">
                 <div className="caption-full-head">
                   <span>{PLATFORM_LABEL[p]}</span>
@@ -332,29 +336,39 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
           </dl>
         </details>
 
-        {ready && (
+        {item.export || item.autoExport ? (
           <div className="export-box">
-            {item.export ? (
-              <>
-                <div className="row wrap">
-                  <a className="button primary" href={exportFileUrl(item.export.id, 'video.mp4')}>
-                    Download MP4
-                  </a>
+            <div className="row wrap">
+              <a className="button primary" href={uploadPageHash(item.id)}>
+                Open upload page
+              </a>
+              {item.export && (
+                <>
                   <a className="button" href={exportFileUrl(item.export.id, 'bundle.zip')}>
                     Bundle .zip
                   </a>
-                  <a className="button" href={exportFileUrl(item.export.id, 'cover.jpg')}>
-                    Cover
-                  </a>
                   <button onClick={() => api.reveal(item.export!.dir, 'exports')}>Show in Finder</button>
-                </div>
-              </>
-            ) : (
-              <button className="wide" disabled={!!busy} onClick={() => act('export', () => api.exportBundle(item.id))}>
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          ready && (
+            <div className="export-box">
+              <button
+                className="wide"
+                disabled={!!busy}
+                onClick={() =>
+                  act('export', async () => {
+                    await api.exportBundle(item.id);
+                    location.hash = uploadPageHash(item.id);
+                  })
+                }
+              >
                 {busy === 'export' ? 'Exporting…' : 'Export for upload (approves it)'}
               </button>
-            )}
-          </div>
+            </div>
+          )
         )}
 
         <CopyEditor item={item} onSaved={onChanged} />

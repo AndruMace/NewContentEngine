@@ -269,7 +269,7 @@ export function Playground() {
             </p>
           ))}
         </section>
-        <ExportPanel recipe={recipe} volume={muted ? 0 : volume} />
+        <ExportPanel recipe={recipe} />
       </aside>
     </main>
   );

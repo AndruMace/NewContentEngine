@@ -95,6 +95,8 @@ export interface RenderRow {
   /** Reject reasons chosen in Review (see REJECT_REASONS). */
   reasons: string[];
   note: string | null;
+  /** Write the upload bundle as soon as the render (and its copy) is ready: Playground exports. */
+  autoExport: boolean;
 }
 
 export interface ExportRow {
@@ -105,7 +107,8 @@ export interface ExportRow {
   createdAt: number;
 }
 
-export type Platform = 'youtube' | 'tiktok' | 'x';
+export type { Platform } from '@sim/planner/platforms';
+import type { Platform } from '@sim/planner/platforms';
 
 export interface PostRow {
   renderId: string;
@@ -166,6 +169,8 @@ const MIGRATIONS = [
   // Review feedback: why a candidate was rejected (reason ids) and an optional free-text note.
   `ALTER TABLE renders ADD COLUMN reasons TEXT NOT NULL DEFAULT '[]';
    ALTER TABLE renders ADD COLUMN note TEXT;`,
+  // Playground exports: bundle for upload once rendered.
+  `ALTER TABLE renders ADD COLUMN auto_export INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 {
@@ -293,15 +298,16 @@ const toRender = (r: any): RenderRow => ({
   prediction: json(r.prediction, null),
   reasons: json(r.reasons, []),
   note: r.note ?? null,
+  autoExport: Boolean(r.auto_export),
 });
 
 export function insertRender(
-  r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind' | 'recipe' | 'copy' | 'score' | 'scoreParts' | 'altSeeds' | 'rankScore'> & Partial<Pick<RenderRow, 'prediction'>>,
+  r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind' | 'recipe' | 'copy' | 'score' | 'scoreParts' | 'altSeeds' | 'rankScore'> & Partial<Pick<RenderRow, 'prediction' | 'decision' | 'autoExport'>>,
 ): RenderRow {
   const id = newId();
   db.prepare(
-    `INSERT INTO renders (id, batch_id, concept_id, kind, recipe, copy, score, score_parts, alt_seeds, status, rank_score, created_at, prediction)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+    `INSERT INTO renders (id, batch_id, concept_id, kind, recipe, copy, score, score_parts, alt_seeds, status, rank_score, created_at, prediction, decision, auto_export)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
   ).run(
     id,
     r.batchId,
@@ -315,6 +321,8 @@ export function insertRender(
     r.rankScore,
     Date.now(),
     r.prediction ? JSON.stringify(r.prediction) : null,
+    r.decision ?? 'pending',
+    r.autoExport ? 1 : 0,
   );
   return getRender(id)!;
 }
@@ -350,18 +358,17 @@ export function rendersForConcept(conceptId: string): RenderRow[] {
 
 /** Next render to work on: Playground exports first, then oldest. */
 export function nextQueuedRender(): RenderRow | undefined {
-  const r = db.prepare("SELECT * FROM renders WHERE status = 'queued' ORDER BY CASE kind WHEN 'export' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END, created_at LIMIT 1").get();
+  const r = db
+    .prepare("SELECT * FROM renders WHERE status = 'queued' ORDER BY CASE WHEN auto_export = 1 OR kind = 'export' THEN 0 WHEN kind = 'manual' THEN 1 ELSE 2 END, created_at LIMIT 1")
+    .get();
   return r ? toRender(r) : undefined;
-}
-
-export function listExportJobs(limit = 20): RenderRow[] {
-  return db.prepare("SELECT * FROM renders WHERE kind = 'export' ORDER BY created_at DESC LIMIT ?").all(limit).map(toRender);
 }
 
 const RENDER_COLS: Record<string, string> = {
   recipe: 'recipe', copy: 'copy', score: 'score', scoreParts: 'score_parts', altSeeds: 'alt_seeds', status: 'status', stage: 'stage',
   progress: 'progress', dir: 'dir', qc: 'qc', durationS: 'duration_s', rankScore: 'rank_score', error: 'error', startedAt: 'started_at',
   finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', prediction: 'prediction', reasons: 'reasons', note: 'note',
+  autoExport: 'auto_export',
 };
 const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc', 'prediction', 'reasons']);
 
@@ -372,9 +379,14 @@ export function updateRender(id: string, patch: Partial<RenderRow>) {
     const col = RENDER_COLS[k];
     if (!col) continue;
     cols.push(`${col} = ?`);
-    vals.push(v === null || v === undefined ? null : JSON_COLS.has(k) ? JSON.stringify(v) : (v as string | number));
+    vals.push(v === null || v === undefined ? null : JSON_COLS.has(k) ? JSON.stringify(v) : typeof v === 'boolean' ? Number(v) : (v as string | number));
   }
   if (cols.length) db.prepare(`UPDATE renders SET ${cols.join(', ')} WHERE id = ?`).run(...vals, id);
+}
+
+/** Rendered Playground exports whose upload bundle hasn't been written yet. */
+export function pendingAutoExports(): RenderRow[] {
+  return db.prepare("SELECT * FROM renders WHERE auto_export = 1 AND status = 'ready' AND id NOT IN (SELECT render_id FROM exports)").all().map(toRender);
 }
 
 /** Server restarted mid-render: put interrupted renders back in the queue. */

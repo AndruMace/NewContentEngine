@@ -1,5 +1,9 @@
 /** Small typed client for the local server. Types mirror apps/server/src/views.ts. */
 import type { Recipe } from '@sim/engine';
+import type { Platform } from '@sim/planner/platforms';
+
+export type { Platform };
+export type CopyTarget = Platform | 'cover';
 
 export interface SocialCopy {
   hook: string;
@@ -11,6 +15,13 @@ export interface SocialCopy {
   tiktokCaption: string;
   xPost: string;
   hashtags: string[];
+  instagramCaption?: string;
+  /** A first comment to pin per platform (on X, a reply to your own post). */
+  pinnedComments?: Partial<Record<Platform, string>>;
+  /** A few words for the TikTok / Instagram cover image. */
+  coverText?: string;
+  /** Emojis that fit this video, offered first in the emoji picker. */
+  emojis?: string[];
 }
 
 export interface BatchSettings {
@@ -57,6 +68,8 @@ export interface ReviewItem {
   error: string | null;
   createdAt: number;
   decision: 'pending' | 'approved' | 'rejected' | 'rerolled';
+  /** Playground export: bundled for upload as soon as it's rendered. */
+  autoExport: boolean;
   files: { final: string; cover: string; contact: string } | null;
   concept: {
     arm: { templateId: string; themeId: string; lengthBucket: string; hookStyle: string };
@@ -66,6 +79,8 @@ export interface ReviewItem {
     experiment: { reason: string } | null;
     /** Where the taste model got the settings (e.g. "near a video you approved"). */
     paramsSource: string | null;
+    /** Your notes for Claude (Playground exports). */
+    notes: string | null;
   } | null;
   /** Fit to your taste (approval chance 0..1) once the taste model has enough reviews. */
   taste: { chance: number } | null;
@@ -74,9 +89,11 @@ export interface ReviewItem {
   note: string | null;
   /** Learner's expected reward (z units vs the channel's average); null before it has enough data. */
   prediction: { mean: number; sd: number; modelVersion: number } | null;
-  platformText: { youtube: string; tiktok: string; x: string } | null;
+  platformText: Record<Platform, string> | null;
+  /** Claude writing upload text in the background (null when nothing has run since the server started). */
+  copyJob: { target: CopyTarget | 'all'; running: boolean; error: string | null } | null;
   export: { id: string; dir: string; createdAt: number } | null;
-  posts: { platform: 'youtube' | 'tiktok' | 'x'; url: string; postedAt: number }[];
+  posts: { platform: Platform; url: string; postedAt: number }[];
 }
 
 export interface Snapshot {
@@ -111,6 +128,9 @@ export const api = {
   exportBundle: (id: string) => call<ReviewItem>('POST', `/api/review/${id}/export`),
   setPost: (id: string, platform: string, url: string) => call<ReviewItem>('PUT', `/api/review/${id}/posts`, { platform, url }),
   addManual: (recipe: Recipe) => call<ReviewItem>('POST', '/api/manual', { recipe }),
+  startUpload: (recipe: Recipe, notes: string) => call<ReviewItem>('POST', '/api/uploads', { recipe, notes }),
+  item: (id: string) => call<ReviewItem>('GET', `/api/review/${id}`),
+  regenerateCopy: (id: string, target: CopyTarget | 'all', notes: string) => call<ReviewItem>('POST', `/api/review/${id}/copy/regenerate`, { target, notes }),
   storage: () => call<{ rendersBytes: number; exportsBytes: number }>('GET', '/api/storage'),
   housekeeping: (days: number) => call<{ deleted: number; freedBytes: number }>('POST', '/api/housekeeping', { days }),
   reveal: (path: string, root: 'renders' | 'exports' = 'renders') => call('POST', '/api/reveal', { path, root }),
@@ -210,7 +230,7 @@ export interface Upload {
 export interface PostView {
   renderId: string;
   batchId: string | null;
-  platform: 'youtube' | 'tiktok' | 'x';
+  platform: Platform;
   url: string;
   externalId: string | null;
   linkedBy: 'paste' | 'auto';
@@ -273,6 +293,9 @@ export const SOURCE_INFO: Record<RenderSource, { label: string; group: 'batch' |
 };
 
 export const exportFileUrl = (exportId: string, name: string) => `/api/exports/${exportId}/file?name=${encodeURIComponent(name)}`;
+
+/** The upload page for one video (under Batches & Review). */
+export const uploadPageHash = (renderId: string) => `#/review/upload/${renderId}`;
 
 export function formatBytes(n: number) {
   return n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`;

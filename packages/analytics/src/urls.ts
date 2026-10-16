@@ -1,4 +1,4 @@
-export type PlatformId = 'youtube' | 'tiktok' | 'x';
+export type PlatformId = 'youtube' | 'tiktok' | 'instagram' | 'x';
 
 /** The platform's id for a post URL, or null if the URL doesn't look like a post on that platform. */
 export function parsePostUrl(platform: PlatformId, url: string): string | null {
@@ -19,6 +19,7 @@ export function parsePostUrl(platform: PlatformId, url: string): string | null {
     return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
   }
   if (platform === 'tiktok') return /tiktok\.com$/.test(host) ? (u.pathname.match(/\/video\/(\d+)/)?.[1] ?? null) : null;
+  if (platform === 'instagram') return host === 'instagram.com' ? (u.pathname.match(/^\/(?:[^/]+\/)?(?:reels?|p)\/([A-Za-z0-9_-]+)/)?.[1] ?? null) : null;
   return host === 'x.com' || host === 'twitter.com' ? (u.pathname.match(/\/status\/(\d+)/)?.[1] ?? null) : null;
 }
 

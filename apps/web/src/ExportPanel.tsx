@@ -1,89 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { Recipe } from '@sim/engine';
 import { renderCommand } from './recipe';
-import { api } from './api';
+import { api, uploadPageHash } from './api';
 
-/** Mirrors JobView in apps/server/src/jobs.ts. */
-interface Job {
-  id: string;
-  recipe: Recipe;
-  status: 'queued' | 'searching' | 'frames' | 'audio' | 'mastering' | 'qc' | 'done' | 'error';
-  progress: number;
-  error?: string;
-  result?: {
-    durationS: number;
-    score: { total: number };
-    qc: { pass: boolean; problems: string[]; integratedLufs: number };
-    timings: { totalMs: number };
-    files: { final: string; cover: string; contact: string; dir: string };
-  };
-}
-
-const STAGE_LABEL: Record<Job['status'], string> = {
-  queued: 'Queued',
-  searching: 'Searching seeds',
-  frames: 'Rendering frames',
-  audio: 'Rendering audio',
-  mastering: 'Mastering',
-  qc: 'Quality checks',
-  done: 'Done',
-  error: 'Failed',
-};
-
-// Overall progress: frames dominate, the other stages are short.
-function overall(job: Job) {
-  switch (job.status) {
-    case 'frames':
-      return 0.05 + job.progress * 0.6;
-    case 'audio':
-      return 0.68;
-    case 'mastering':
-      return 0.78;
-    case 'qc':
-      return 0.9;
-    case 'done':
-      return 1;
-    default:
-      return 0.02;
-  }
-}
-
-export function ExportPanel({ recipe, volume }: { recipe: Recipe; volume: number }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [job, setJob] = useState<Job | null>(null);
+export function ExportPanel({ recipe }: { recipe: Recipe }) {
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const sourceRef = useRef<EventSource | null>(null);
-  const busy = job !== null && job.status !== 'done' && job.status !== 'error';
 
-  useEffect(() => () => sourceRef.current?.close(), []);
-
-  // Keep the exported-video preview at the same (preview-only) volume.
-  useEffect(() => {
-    if (videoRef.current) videoRef.current.volume = volume;
-  });
-
+  // Renders on the server and opens the upload page, where Claude's text appears while it renders.
   const exportVideo = async () => {
     setError(null);
+    setBusy(true);
     try {
-      const res = await fetch('/api/renders', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ recipe }),
-      });
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      const created: Job = await res.json();
-      setJob(created);
-      sourceRef.current?.close();
-      const es = new EventSource(`/api/renders/${created.id}/stream`);
-      sourceRef.current = es;
-      es.onmessage = (e) => {
-        const next: Job = JSON.parse(e.data);
-        setJob(next);
-        if (next.status === 'done' || next.status === 'error') es.close();
-      };
+      const item = await api.startUpload(recipe, notes);
+      setNotes('');
+      location.hash = uploadPageHash(item.id);
     } catch (e) {
       setError(`Could not reach the render server (${(e as Error).message}). Start everything with "npm run dev".`);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -98,9 +35,6 @@ export function ExportPanel({ recipe, volume }: { recipe: Recipe; volume: number
       setError(`Could not add to the review queue (${(e as Error).message}).`);
     }
   };
-
-  const reveal = (path: string) =>
-    fetch('/api/reveal', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) });
 
   const copyCommand = async () => {
     await navigator.clipboard.writeText(renderCommand(recipe));
@@ -117,53 +51,25 @@ export function ExportPanel({ recipe, volume }: { recipe: Recipe; volume: number
     URL.revokeObjectURL(a.href);
   };
 
-  const r = job?.result;
   return (
     <>
       <section>
         <h3>Export</h3>
-        <p className="hint">Renders exactly what you're previewing: 1080×1920 60fps MP4, audio mastered to -14 LUFS.</p>
+        <p className="hint">
+          Renders exactly what you're previewing (1080×1920 60fps, -14 LUFS), and Claude writes the title, captions and tags for YouTube, TikTok,
+          Instagram and X. Opens the upload page under Batches &amp; Review.
+        </p>
+        <label className="param">
+          <span>Notes for Claude (optional)</span>
+          <textarea rows={2} value={notes} placeholder="e.g. part 2 of the Japan vs Brazil series" onChange={(e) => setNotes(e.target.value)} />
+        </label>
         <button className="primary wide" disabled={busy} onClick={exportVideo}>
-          {busy ? 'Exporting…' : 'Export MP4'}
+          {busy ? 'Starting…' : 'Export for upload'}
         </button>
         <button className="wide" style={{ marginTop: 8 }} onClick={addToQueue}>
           {queued ? 'Added — see Batches & Review' : 'Add to review queue'}
         </button>
         {error && <p className="warn">{error}</p>}
-        {job && (
-          <div className="job">
-            <div className="job-head">
-              <span>{STAGE_LABEL[job.status]}</span>
-              {job.status === 'frames' && <span>{Math.round(job.progress * 100)}%</span>}
-            </div>
-            {job.status !== 'error' && (
-              <div className="progress">
-                <div style={{ width: `${Math.round(overall(job) * 100)}%` }} />
-              </div>
-            )}
-            {job.error && <pre className="cmd warn">{job.error}</pre>}
-            {r && (
-              <>
-                <video ref={videoRef} className="result-video" src={`/files/${r.files.final}`} controls playsInline />
-                <p className={r.qc.pass ? 'ok' : 'warn'}>
-                  QC {r.qc.pass ? 'passed' : 'failed'} · {r.durationS.toFixed(1)}s · {r.qc.integratedLufs} LUFS · took{' '}
-                  {(r.timings.totalMs / 1000).toFixed(0)}s
-                </p>
-                {!r.qc.pass && <p className="warn">{r.qc.problems.join('; ')}</p>}
-                <div className="row">
-                  <a className="button primary" href={`/api/download?path=${encodeURIComponent(r.files.final)}`}>
-                    Download MP4
-                  </a>
-                  <a className="button" href={`/api/download?path=${encodeURIComponent(r.files.cover)}`}>
-                    Cover
-                  </a>
-                  <button onClick={() => reveal(r.files.final)}>Show in Finder</button>
-                </div>
-                <p className="hint path">data/renders/{r.files.dir}</p>
-              </>
-            )}
-          </div>
-        )}
       </section>
       <section>
         <h3>CLI command</h3>

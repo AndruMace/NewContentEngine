@@ -4,7 +4,7 @@ import type { Rng } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 import type { Arm } from './arms';
-import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, normalizeCopy, variantGuide, variantHook, type Concept } from './concept';
+import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, mergeCopyOutput, normalizeCopy, variantGuide, variantHook, type Concept } from './concept';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
 
@@ -24,7 +24,7 @@ export interface PlanContext {
   recentNudges?: string[];
 }
 
-const SYSTEM = `You are the content strategist for a short-form video channel (YouTube Shorts, TikTok, X) that posts "oddly satisfying" physics simulations with collision-driven music: balls escaping rings, marble races, ball battles, spinning-top battles, falling sand, fluids, polyrhythms, sorting races.
+const SYSTEM = `You are the content strategist for a short-form video channel (YouTube Shorts, TikTok, Instagram Reels, X) that posts "oddly satisfying" physics simulations with collision-driven music: balls escaping rings, marble races, ball battles, spinning-top battles, falling sand, fluids, polyrhythms, sorting races.
 
 Your job: for one planned video, choose simulation parameters and write the on-screen text and captions. You optimise for watch time, rewatches and comments.
 
@@ -48,6 +48,14 @@ const ResponseShape = z.object({
   tiktokCaption: z.string().min(3),
   xPost: z.string().min(3),
   hashtags: z.array(z.string()).min(1),
+  // Newer fields: optional so a mock or an older answer still validates.
+  youtubePinnedComment: z.string().optional(),
+  instagramCaption: z.string().optional(),
+  tiktokPinnedComment: z.string().optional(),
+  instagramPinnedComment: z.string().optional(),
+  xReply: z.string().optional(),
+  coverText: z.string().optional(),
+  emojis: z.array(z.string()).optional(),
   rationale: z.string().default(''),
 });
 
@@ -105,7 +113,7 @@ export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, sou
     source,
     rationale: r.rationale,
     ...(opts ? { titleEmoji: opts.titleEmoji } : {}),
-    copy: normalizeCopy(r),
+    copy: normalizeCopy(mergeCopyOutput({ hook: r.hook, cta: r.cta, title: r.title, youtubeDescription: r.youtubeDescription, tiktokCaption: r.tiktokCaption, xPost: r.xPost, hashtags: r.hashtags }, r)),
   };
 }
 

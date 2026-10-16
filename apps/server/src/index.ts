@@ -5,7 +5,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import type { Recipe } from '@sim/engine';
 import { RENDERS_DIR, ROOT } from '@sim/render';
-import { claudeAvailable, type SocialCopy } from '@sim/planner';
+import { COPY_TARGETS, PLATFORMS, claudeAvailable, type CopyTarget, type Platform, type SocialCopy } from '@sim/planner';
 import { REWARD_PRESETS, parsePostUrl } from '@sim/analytics';
 import { tasteStatus } from './taste';
 
@@ -24,7 +24,6 @@ const {
   getRender,
   insertRender,
   listBatches,
-  listExportJobs,
   setKv,
   upsertPost,
   deletePost,
@@ -35,7 +34,7 @@ const { RenderScheduler } = await import('./scheduler');
 const { SearchPool } = await import('./searchPool');
 const { BatchRunner } = await import('./batch');
 const { ReviewActions, dirSize } = await import('./review');
-const { batchSnapshot, batchSummary, jobView, reviewItem } = await import('./views');
+const { batchSnapshot, batchSummary, reviewItem } = await import('./views');
 const { scanLibrary, deleteLibraryEntry } = await import('./library');
 const youtube = await import('./youtube');
 const { listPostViews, postDetail, refitLearner, learningStatus, analyticsSettings, setAnalyticsSettings } = await import('./analytics');
@@ -182,9 +181,9 @@ app.post<{ Params: { id: string } }>('/api/review/:id/export', async (req, reply
   }
 });
 
-app.put<{ Params: { id: string }; Body: { platform: 'youtube' | 'tiktok' | 'x'; url: string } }>('/api/review/:id/posts', async (req, reply) => {
+app.put<{ Params: { id: string }; Body: { platform: Platform; url: string } }>('/api/review/:id/posts', async (req, reply) => {
   const { platform, url } = req.body;
-  if (!['youtube', 'tiktok', 'x'].includes(platform)) return reply.code(400).send({ error: 'bad platform' });
+  if (!PLATFORMS.includes(platform)) return reply.code(400).send({ error: 'bad platform' });
   if (url?.trim()) {
     if (!/^https?:\/\//.test(url.trim())) return reply.code(400).send({ error: 'URL must start with http(s)://' });
     const externalId = parsePostUrl(platform, url);
@@ -205,10 +204,59 @@ app.post<{ Body: { recipe: Recipe } }>('/api/manual', async (req) => {
   return reviewItem(r);
 });
 
+// Playground "Export": tracked in today's Manual batch; Claude writes the upload text while it renders.
+app.post<{ Body: { recipe: Recipe; notes?: string } }>('/api/uploads', async (req) => {
+  const r = review.startUpload(req.body.recipe, req.body.notes);
+  changed(r);
+  return reviewItem(r);
+});
+
+app.get<{ Params: { id: string } }>('/api/review/:id', async (req, reply) => {
+  const r = getRender(req.params.id);
+  return r ? reviewItem(r) : reply.code(404).send({ error: 'not found' });
+});
+
+// One video's live state for the upload page (render progress, copy being written, export).
+app.get<{ Params: { id: string } }>('/api/review/:id/stream', (req, reply) => {
+  const first = getRender(req.params.id);
+  if (!first) return reply.code(404).send({ error: 'not found' });
+  sse(req, reply, (send) => {
+    let timer: NodeJS.Timeout | null = null;
+    const push = () => {
+      const r = getRender(req.params.id);
+      if (r) send(reviewItem(r));
+    };
+    const onChange = (batchId: string) => {
+      if (batchId !== first.batchId || timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        push();
+      }, 250);
+    };
+    batches.on('changed', onChange);
+    push();
+    return () => {
+      batches.off('changed', onChange);
+      if (timer) clearTimeout(timer);
+    };
+  });
+});
+
+app.post<{ Params: { id: string }; Body: { target: CopyTarget | 'all'; notes?: string } }>('/api/review/:id/copy/regenerate', async (req, reply) => {
+  const target = req.body.target;
+  if (target !== 'all' && !COPY_TARGETS.includes(target)) return reply.code(400).send({ error: 'bad target' });
+  try {
+    review.regenerateCopy(req.params.id, target, req.body.notes);
+    return reviewItem(getRender(req.params.id)!);
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
 app.get<{ Params: { id: string }; Querystring: { name: string; inline?: string } }>('/api/exports/:id/file', (req, reply) => {
   const ex = getExport(req.params.id);
   const name = req.query.name;
-  if (!ex || !['bundle.zip', 'video.mp4', 'cover.jpg', 'youtube.txt', 'tiktok.txt', 'x.txt'].includes(name)) return reply.code(404).send({ error: 'not found' });
+  if (!ex || !['bundle.zip', 'video.mp4', 'cover.jpg', ...PLATFORMS.map((p) => `${p}.txt`)].includes(name)) return reply.code(404).send({ error: 'not found' });
   const abs = safePath(EXPORTS_DIR, join(ex.dir, name));
   if (!abs || !existsSync(abs)) return reply.code(404).send({ error: 'missing' });
   const base = ex.dir.split(sep).pop();
@@ -227,39 +275,6 @@ app.delete<{ Querystring: { path: string } }>('/api/library', async (req, reply)
 });
 
 app.post<{ Body: { days?: number } }>('/api/housekeeping', async (req) => review.housekeeping(Math.max(0, Number(req.body?.days ?? 7))));
-
-// ---- Playground export jobs (same shape as before, now persisted) ---------------------------------
-
-app.post<{ Body: { recipe: Recipe } }>('/api/renders', async (req) => {
-  const r = insertRender({ batchId: null, conceptId: null, kind: 'export', recipe: req.body.recipe, copy: null, score: null, scoreParts: null, altSeeds: [], rankScore: null });
-  scheduler.notify();
-  return jobView(r);
-});
-
-app.get('/api/renders', async () => listExportJobs().map(jobView));
-
-app.get<{ Params: { id: string } }>('/api/renders/:id', async (req, reply) => {
-  const r = getRender(req.params.id);
-  return r ? jobView(r) : reply.code(404).send({ error: 'not found' });
-});
-
-app.get<{ Params: { id: string } }>('/api/renders/:id/stream', (req, reply) => {
-  const first = getRender(req.params.id);
-  if (!first) return reply.code(404).send({ error: 'not found' });
-  sse(req, reply, (send, end) => {
-    const onRender = (r: { id: string }) => {
-      if (r.id !== req.params.id) return;
-      const v = jobView(getRender(r.id)!);
-      send(v);
-      if (v.status === 'done' || v.status === 'error') setImmediate(end);
-    };
-    scheduler.on('render', onRender);
-    const v = jobView(first);
-    send(v);
-    if (v.status === 'done' || v.status === 'error') setImmediate(end);
-    return () => scheduler.off('render', onRender);
-  });
-});
 
 // ---- files ----------------------------------------------------------------------------------
 
@@ -386,6 +401,7 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 scheduler.start();
+review.startAutoExport();
 batches.resumeAll();
 await app.listen({ port: PORT, host: '127.0.0.1' });
 console.log(`Sim server on http://127.0.0.1:${PORT} (Claude ${claudeAvailable() ? 'enabled' : 'not configured'})`);

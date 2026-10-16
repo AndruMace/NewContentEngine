@@ -28,6 +28,11 @@ describe('parsePostUrl', () => {
     expect(parsePostUrl('tiktok', 'https://www.tiktok.com/@me/video/7312345678901234567')).toBe('7312345678901234567');
     expect(parsePostUrl('x', 'https://x.com/me/status/1801234567890123456')).toBe('1801234567890123456');
   });
+  it('handles Instagram reels and posts', () => {
+    for (const u of ['https://www.instagram.com/reel/C8aBc-12_x/', 'https://instagram.com/reels/C8aBc-12_x/?igsh=abc', 'https://www.instagram.com/someone/reel/C8aBc-12_x/', 'https://www.instagram.com/p/C8aBc-12_x/'])
+      expect(parsePostUrl('instagram', u)).toBe('C8aBc-12_x');
+    expect(parsePostUrl('instagram', 'https://www.instagram.com/someone/')).toBeNull();
+  });
 });
 
 describe('title matching', () => {

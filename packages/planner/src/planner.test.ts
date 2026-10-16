@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, paramsJsonSchema } from '@sim/engine';
 import { TEMPLATES, getTemplate } from '@sim/templates';
-import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText } from './index';
+import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema } from './index';
 
 describe('arm selection', () => {
   it('spreads arms across templates and respects the filters', () => {
@@ -215,5 +215,53 @@ describe('title emoji', () => {
     const raw = { params: {}, melodyId: 'ode-to-joy', hook: 'Wait for it', cta: 'Which color?', title: 'How many grains will it take?!', youtubeDescription: '', tiktokCaption: 'Watch the sand', xPost: 'Watch the sand', hashtags: ['#sand'], rationale: '' };
     expect(startsWithEmoji(conceptFromResponse(raw, arm, 30, 'claude', { titleEmoji: true, rng: new Rng(2) }).copy.title)).toBe(true);
     expect(conceptFromResponse({ ...raw, title: '🤯 How many grains will it take?!' }, arm, 30, 'claude', { titleEmoji: false, rng: new Rng(2) }).copy.title).toBe('How many grains will it take?!');
+  });
+});
+
+describe('upload text', () => {
+  const copy = normalizeCopy({
+    hook: 'Can it escape?',
+    cta: 'Did you call it?',
+    title: '😱 Can the ball escape 30 rings?',
+    youtubeDescription: 'A ball bounces out through 30 spinning rings.',
+    tiktokCaption: 'Wait for ring 30… #satisfying',
+    instagramCaption: 'Ring 30 is the hard one',
+    xPost: 'This ball had no business escaping #physics',
+    hashtags: ['satisfying', '#ringescape', '#AI'],
+    pinnedComments: { youtube: 'What ring did you think it would stop at?', x: 'Faster or slower next time?' },
+    coverText: 'Ring 30?! #satisfying',
+    emojis: ['😱', 'x', '🌀', '😱'],
+  });
+
+  it('normalizes the new fields', () => {
+    expect(copy.hashtags).toEqual(['#satisfying', '#ringescape']);
+    expect(copy.coverText).toBe('Ring 30?!');
+    expect(copy.emojis).toEqual(['😱', '🌀']);
+  });
+
+  it('builds paste-ready fields per platform and one block with everything', () => {
+    const t = uploadText(copy);
+    expect(t.youtube.fields.map((f) => f.id)).toEqual(['title', 'description', 'pinned']);
+    expect(t.youtube.fields[1].text).toBe('A ball bounces out through 30 spinning rings.\n\n#satisfying #ringescape #Shorts');
+    // Captions without hashtags of their own get the shared ones; ones with hashtags are left alone.
+    expect(t.instagram.fields[0].text).toBe('Ring 30 is the hard one #satisfying #ringescape');
+    expect(t.tiktok.fields[0].text).toBe('Wait for ring 30… #satisfying');
+    // Empty fields are left out (no TikTok pinned comment here).
+    expect(t.tiktok.fields.map((f) => f.id)).toEqual(['caption', 'cover']);
+    expect(t.x.all).toBe('This ball had no business escaping #physics\n\nReply to your post:\nFaster or slower next time?');
+    expect(platformText(copy).instagram).toBe(t.instagram.all);
+  });
+
+  it('merges a partial answer without touching other platforms', () => {
+    const next = mergeCopyOutput(copy, { tiktokCaption: 'New take #marblerace', tiktokPinnedComment: 'Pick a ring' });
+    expect(next.tiktokCaption).toBe('New take #marblerace');
+    expect(next.pinnedComments).toEqual({ ...copy.pinnedComments, tiktok: 'Pick a ring' });
+    expect(next.title).toBe(copy.title);
+    expect(next.instagramCaption).toBe(copy.instagramCaption);
+  });
+
+  it('asks the batch planner for every platform', () => {
+    const schema = conceptOutputSchema(getTemplate('ring-escape'));
+    for (const k of ['instagramCaption', 'youtubePinnedComment', 'xReply', 'coverText', 'emojis']) expect(schema.required).toContain(k);
   });
 });

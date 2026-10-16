@@ -2,6 +2,7 @@ import { paramsJsonSchema, type Rng, type Template } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { FOURIER_GUESS, getTemplate } from '@sim/templates';
 import { HOOK_STYLES, type Arm } from './arms';
+import { uploadText, type Platform } from './platforms';
 
 /** On-screen text plus per-platform copy for one video. */
 export interface SocialCopy {
@@ -14,6 +15,14 @@ export interface SocialCopy {
   tiktokCaption: string;
   xPost: string;
   hashtags: string[];
+  /** Instagram Reels caption (absent on videos planned before Instagram was added). */
+  instagramCaption?: string;
+  /** A first comment to pin on each platform (on X, a reply to your own post). */
+  pinnedComments?: Partial<Record<Platform, string>>;
+  /** A few words to put on the TikTok / Instagram cover image. */
+  coverText?: string;
+  /** Emojis that fit this video, offered first in the export page's emoji picker. */
+  emojis?: string[];
 }
 
 /** A planned video, everything except the seed (chosen by seed search). */
@@ -33,9 +42,11 @@ export interface Concept {
   titleEmoji?: boolean;
   /** Where the settings came from when the taste model chose them (e.g. "near a video you approved"). */
   paramsSource?: string;
+  /** Owner's notes for Claude when the copy was written (Playground exports). */
+  notes?: string;
 }
 
-export const LIMITS = { hook: 60, cta: 48, nudge: 44, title: 90, tiktok: 300, x: 270, hashtags: 6 };
+export const LIMITS = { hook: 60, cta: 48, nudge: 44, title: 90, tiktok: 300, instagram: 500, x: 270, hashtags: 6, pinned: 150, cover: 40, emojis: 12 };
 
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n - 1).trimEnd() + '…');
 
@@ -74,6 +85,12 @@ export function normalizeCopy(c: SocialCopy): SocialCopy {
     xPost: clip(stripBlockedTags(c.xPost), LIMITS.x),
     hashtags: tags,
     ...(c.nudge?.trim() ? { nudge: clip(c.nudge.trim(), LIMITS.nudge) } : {}),
+    ...(c.instagramCaption !== undefined ? { instagramCaption: clip(stripBlockedTags(c.instagramCaption), LIMITS.instagram) } : {}),
+    ...(c.pinnedComments
+      ? { pinnedComments: Object.fromEntries(Object.entries(c.pinnedComments).map(([k, v]) => [k, clip(stripBlockedTags(v ?? ''), LIMITS.pinned)])) }
+      : {}),
+    ...(c.coverText !== undefined ? { coverText: clip(c.coverText.replace(/#[\p{L}\p{N}_]+/gu, '').trim(), LIMITS.cover) } : {}),
+    ...(c.emojis ? { emojis: [...new Set(c.emojis.map((e) => e.trim()).filter((e) => e && startsWithEmoji(e)))].slice(0, LIMITS.emojis) } : {}),
   };
 }
 
@@ -327,14 +344,10 @@ export function applyTitleEmoji(title: string, lead: boolean, templateId: string
   return clip(`${rng.pick(TITLE_EMOJI[templateId] ?? DEFAULT_TITLE_EMOJI)} ${t}`, LIMITS.title);
 }
 
-/** Final per-platform text files, ready to paste. */
-export function platformText(c: SocialCopy) {
-  const tags = c.hashtags.join(' ');
-  return {
-    youtube: `${c.title} #Shorts\n\n${c.youtubeDescription}\n\n${tags} #Shorts`.trim(),
-    tiktok: c.tiktokCaption.includes('#') ? c.tiktokCaption : `${c.tiktokCaption} ${tags}`.trim(),
-    x: c.xPost,
-  };
+/** Final per-platform text (every field in one block), as written to the .txt files. */
+export function platformText(c: SocialCopy): Record<Platform, string> {
+  const t = uploadText(c);
+  return { youtube: t.youtube.all, tiktok: t.tiktok.all, instagram: t.instagram.all, x: t.x.all };
 }
 
 /**
@@ -423,9 +436,100 @@ export function fallbackConcept(arm: Arm, targetS: number, rng: Rng, opts: { tit
       title: applyTitleEmoji(`${name} — oddly satisfying`, titleEmoji, arm.templateId, rng),
       youtubeDescription: `${template.description}\nWatch till the end.`,
       tiktokCaption: `Wait for it… ${name.toLowerCase()} edition`,
+      instagramCaption: `Wait for the end of this ${name.toLowerCase()} 👀`,
       xPost: `${name} — watch till the end 👀`,
       hashtags: tags,
+      pinnedComments: { youtube: 'Did you call it? 👇', tiktok: 'Did you call it? 👇', instagram: 'Did you call it? 👇', x: 'Did you call it?' },
+      coverText: name,
+      emojis: [...(TITLE_EMOJI[arm.templateId] ?? DEFAULT_TITLE_EMOJI), '✨', '👀', '🔥', '😮‍💨'],
     }),
+  };
+}
+
+const str = (description: string) => ({ type: 'string', description });
+
+/**
+ * Structured-output properties for the published text, per platform. Shared by the batch planner
+ * and the export copy writer, which can also ask for one platform at a time.
+ */
+export const COPY_FIELDS = {
+  youtube: {
+    title: str(`YouTube Shorts title without #Shorts, following the request's instruction about a leading emoji. Front-load the words people search for. Max ${LIMITS.title} characters.`),
+    youtubeDescription: str(
+      'Published YouTube description, written to the viewer: 1-3 short lines saying what happens in this video, using words people search for (e.g. "marble race", "satisfying sand art"). No hashtags. Never mention retention, hooks, strategy or how it was made.',
+    ),
+    hashtags: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        '3-6 hashtags, without spaces, chosen to reach people who would enjoy this exact video: mix 1-2 broad ones (#satisfying, #oddlysatisfying) with specific ones for the format and subject (#marblerace, #sandart, #sortingalgorithms). Never tags about tools or AI (#claude, #ai).',
+    },
+    youtubePinnedComment: str(`A comment to pin under the YouTube Short that starts replies: a question about this video (a guess, a side, a rating). Don't repeat the on-screen CTA word for word. Max ${LIMITS.pinned} characters.`),
+  },
+  tiktok: {
+    tiktokCaption: str(`Published TikTok caption, written to the viewer, ending with 3-5 hashtags. Max ${LIMITS.tiktok} characters.`),
+    tiktokPinnedComment: str(`A comment to pin on TikTok that starts replies, different from the YouTube one. Max ${LIMITS.pinned} characters.`),
+  },
+  instagram: {
+    instagramCaption: str(
+      `Published Instagram Reels caption, written to the viewer. The first line shows before "more", so make it count; then at most a line or two, ending with 3-5 hashtags (Instagram allows no more than 5). Max ${LIMITS.instagram} characters.`,
+    ),
+    instagramPinnedComment: str(`A comment to pin on Instagram that starts replies, different from the others. Max ${LIMITS.pinned} characters.`),
+  },
+  x: {
+    xPost: str(`Published post for X, written to the viewer, with 1-2 hashtags. Max ${LIMITS.x} characters.`),
+    xReply: str(`A short reply to post under your own X post that invites replies (a question or a poll-style "A or B?"). No hashtags. Max ${LIMITS.pinned} characters.`),
+  },
+  cover: {
+    coverText: str(`Text for the TikTok / Instagram cover image: 2-5 punchy words that make people tap, no hashtags, never giving away the ending. Max ${LIMITS.cover} characters.`),
+  },
+  emojis: {
+    emojis: { type: 'array', items: { type: 'string' }, description: `8-${LIMITS.emojis} single emojis that fit this video's subject and mood, most fitting first, for the owner to use when editing.` },
+  },
+} as const;
+
+export type CopyGroup = keyof typeof COPY_FIELDS;
+
+/** Structured-output properties for some groups (all by default). */
+export function copyFieldProps(groups: readonly CopyGroup[] = Object.keys(COPY_FIELDS) as CopyGroup[]): Record<string, unknown> {
+  return Object.assign({}, ...groups.map((g) => COPY_FIELDS[g]));
+}
+
+/** The flat structured-output fields, as returned by the model (each optional when only some groups were asked for). */
+export interface CopyOutput {
+  title?: string;
+  youtubeDescription?: string;
+  hashtags?: string[];
+  youtubePinnedComment?: string;
+  tiktokCaption?: string;
+  tiktokPinnedComment?: string;
+  instagramCaption?: string;
+  instagramPinnedComment?: string;
+  xPost?: string;
+  xReply?: string;
+  coverText?: string;
+  emojis?: string[];
+}
+
+/** Merge flat model output into existing copy (only the fields present in `out` change). Not normalized. */
+export function mergeCopyOutput(base: SocialCopy, out: CopyOutput): SocialCopy {
+  const pinned = { ...base.pinnedComments };
+  if (out.youtubePinnedComment !== undefined) pinned.youtube = out.youtubePinnedComment;
+  if (out.tiktokPinnedComment !== undefined) pinned.tiktok = out.tiktokPinnedComment;
+  if (out.instagramPinnedComment !== undefined) pinned.instagram = out.instagramPinnedComment;
+  if (out.xReply !== undefined) pinned.x = out.xReply;
+  const pick = <K extends keyof SocialCopy>(k: K, v: SocialCopy[K] | undefined) => (v === undefined ? {} : { [k]: v });
+  return {
+    ...base,
+    ...pick('title', out.title),
+    ...pick('youtubeDescription', out.youtubeDescription),
+    ...pick('hashtags', out.hashtags),
+    ...pick('tiktokCaption', out.tiktokCaption),
+    ...pick('instagramCaption', out.instagramCaption),
+    ...pick('xPost', out.xPost),
+    ...pick('coverText', out.coverText),
+    ...pick('emojis', out.emojis),
+    ...(Object.keys(pinned).length ? { pinnedComments: pinned } : {}),
   };
 }
 
@@ -437,28 +541,17 @@ export function conceptOutputSchema(template: Template) {
     const desc = `${p.title ?? key}. ${p.enum ? '' : p.type === 'boolean' ? '' : `Range ${p.minimum} to ${p.maximum}. `}Default ${JSON.stringify(p.default)}.`;
     paramProps[key] = p.enum ? { type: 'string', enum: p.enum, description: desc } : { type: p.type === 'integer' ? 'integer' : p.type, description: desc };
   }
-  const str = (description: string) => ({ type: 'string', description });
+  const copyProps = copyFieldProps();
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['params', 'melodyId', 'hook', 'cta', 'title', 'youtubeDescription', 'tiktokCaption', 'xPost', 'hashtags', 'rationale'],
+    required: ['params', 'melodyId', 'hook', 'cta', ...Object.keys(copyProps), 'rationale'],
     properties: {
       params: { type: 'object', additionalProperties: false, required: Object.keys(paramProps), properties: paramProps },
       melodyId: { type: 'string', enum: MELODIES.map((m) => m.id) },
       hook: str(`On-screen hook shown in the first 2 seconds. Max ${LIMITS.hook} characters.`),
       cta: str(`On-screen call to action at the end. Max ${LIMITS.cta} characters.`),
-      title: str(`YouTube Shorts title without #Shorts, following the request's instruction about a leading emoji. Max ${LIMITS.title} characters.`),
-      youtubeDescription: str(
-        'Published YouTube description, written to the viewer: 1-3 short lines saying what happens in this video, using words people search for (e.g. "marble race", "satisfying sand art"). No hashtags. Never mention retention, hooks, strategy or how it was made.',
-      ),
-      tiktokCaption: str(`Published TikTok caption, written to the viewer, ending with 3-5 hashtags. Max ${LIMITS.tiktok} characters.`),
-      xPost: str(`Published post for X, written to the viewer, with 1-2 hashtags. Max ${LIMITS.x} characters.`),
-      hashtags: {
-        type: 'array',
-        items: { type: 'string' },
-        description:
-          '3-6 hashtags, without spaces, chosen to reach people who would enjoy this exact video: mix 1-2 broad ones (#satisfying, #oddlysatisfying) with specific ones for the format and subject (#marblerace, #sandart, #sortingalgorithms). Never tags about tools or AI (#claude, #ai).',
-      },
+      ...copyProps,
       rationale: str('Private note for the channel owner (never published): one sentence on why this concept should hold attention.'),
     },
   };

@@ -1,12 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Rng } from '@sim/engine';
 import { chooseArms, targetLength, type Arm, type ArmChoiceSettings, type ArmModel } from './arms';
-import { conceptFromClaude, conceptFromMock, PlannerRefusal, type PlanContext } from './claude';
+import { conceptFromClaude, conceptFromMock, type PlanContext } from './claude';
+import { claudeErrorReason } from './upload';
 import { CUES_SHARE, TITLE_EMOJI_SHARE, fallbackConcept, pickNudge, planVariants, type Concept } from './concept';
 
 export * from './arms';
 export * from './concept';
 export * from './claude';
+export * from './platforms';
+export * from './upload';
 
 export type Generator = 'claude' | 'fallback' | 'mock';
 
@@ -48,16 +51,7 @@ export async function planOne(
     try {
       return withSource({ concept: await conceptFromClaude(client, arm, targetS, ctx, { ...opts, rng }) });
     } catch (e) {
-      const reason =
-        e instanceof PlannerRefusal
-          ? e.message
-          : e instanceof Anthropic.AuthenticationError
-            ? 'API key rejected'
-            : e instanceof Anthropic.RateLimitError
-              ? 'rate limited'
-              : e instanceof Anthropic.APIError
-                ? `API error ${e.status}`
-                : (e as Error).message;
+      const reason = claudeErrorReason(e);
       return withSource({ concept: fallbackConcept(arm, targetS, rng, opts), warning: `Claude unavailable for this concept (${reason}); used template copy.` });
     }
   }

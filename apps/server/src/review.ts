@@ -3,7 +3,20 @@ import { join } from 'node:path';
 import { zipSync } from 'fflate';
 import { Rng } from '@sim/engine';
 import { RENDERS_DIR } from '@sim/render';
-import { claudeAvailable, normalizeCopy, planOne, platformText, type SocialCopy } from '@sim/planner';
+import {
+  PLATFORMS,
+  TITLE_EMOJI_SHARE,
+  claudeAvailable,
+  claudeErrorReason,
+  normalizeCopy,
+  planOne,
+  platformText,
+  startsWithEmoji,
+  uploadCopyFromClaude,
+  type Concept,
+  type CopyTarget,
+  type SocialCopy,
+} from '@sim/planner';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   EXPORTS_DIR,
@@ -11,6 +24,7 @@ import {
   exportForRender,
   getConcept,
   getRender,
+  pendingAutoExports,
   insertConcept,
   insertPredictionOnce,
   predictionFor,
@@ -34,6 +48,18 @@ import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
 import { fallbackConcept } from '@sim/planner';
 
+/** Claude writing upload text for a render, in the background. Only lives in memory. */
+export interface CopyJob {
+  target: CopyTarget | 'all';
+  running: boolean;
+  error: string | null;
+}
+
+const copyJobs = new Map<string, CopyJob>();
+
+/** The latest copy job for a render (running or finished since the server started), if any. */
+export const copyJobFor = (id: string): CopyJob | null => copyJobs.get(id) ?? null;
+
 /** Queue a replacement render and mark the original as superseded by it. */
 function supersede(old: RenderRow, next: RenderRow) {
   updateRender(old.id, { supersededBy: next.id, decision: old.decision === 'approved' ? 'approved' : 'rerolled' });
@@ -45,6 +71,17 @@ export class ReviewActions {
     private pool: SearchPool,
     private batches: BatchRunner,
   ) {}
+
+  /** Playground exports bundle themselves once rendered (and once any copy being written has landed). */
+  startAutoExport() {
+    this.scheduler.on('render', (r: RenderRow) => r.status === 'ready' && r.autoExport && void this.maybeAutoExport(r.id));
+    for (const r of pendingAutoExports()) void this.maybeAutoExport(r.id);
+  }
+
+  private changed(id: string) {
+    const r = getRender(id);
+    if (r?.batchId) this.batches.emit('changed', r.batchId);
+  }
 
   /** Approve / reject / undo. Reject reasons and a note teach the taste model why. */
   setDecision(id: string, decision: 'approved' | 'rejected' | 'pending', feedback: { reasons?: string[]; note?: string | null } = {}) {
@@ -149,6 +186,7 @@ export class ReviewActions {
     const onScreenChanged = copy.hook !== (r.copy?.hook ?? '') || copy.cta !== (r.copy?.cta ?? '') || (copy.nudge ?? '') !== (r.copy?.nudge ?? '');
     if (!onScreenChanged) {
       updateRender(id, { copy });
+      void this.refreshExportFiles(id);
       return getRender(id)!;
     }
     return this.rerenderWithCopy(r, copy);
@@ -174,18 +212,115 @@ export class ReviewActions {
   /** Playground "Add to review queue": render exactly this recipe into today's Manual batch. */
   addManual(recipe: RenderRow['recipe']): RenderRow {
     const batch = manualBatchForToday();
-    const base = fallbackConcept({ templateId: recipe.templateId, themeId: recipe.themeId, lengthBucket: 'medium', hookStyle: 'question' }, recipe.targetS ?? 30, new Rng(hashSeed(JSON.stringify(recipe))));
-    const concept = {
+    const concept = this.manualConcept(recipe, new Rng(hashSeed(JSON.stringify(recipe))));
+    const c = insertConcept(batch.id, conceptsForBatch(batch.id).length, concept);
+    const row = insertRender({ batchId: batch.id, conceptId: c.id, kind: 'manual', recipe: recipeFor(concept, recipe.seed), copy: concept.copy, score: null, scoreParts: null, altSeeds: [], rankScore: null });
+    this.scheduler.notify();
+    return row;
+  }
+
+  /**
+   * Playground "Export": render exactly this recipe into today's Manual batch, approved, and have
+   * Claude write the upload text while it renders. The bundle is written once both are done.
+   */
+  startUpload(recipe: RenderRow['recipe'], notes?: string): RenderRow {
+    const batch = manualBatchForToday();
+    const rng = new Rng((hashSeed(JSON.stringify(recipe)) + Date.now()) % 1e9);
+    const concept: Concept = { ...this.manualConcept(recipe, rng), titleEmoji: rng.chance(TITLE_EMOJI_SHARE), ...(notes?.trim() ? { notes: notes.trim() } : {}) };
+    const c = insertConcept(batch.id, conceptsForBatch(batch.id).length, concept);
+    const row = insertRender({
+      batchId: batch.id,
+      conceptId: c.id,
+      kind: 'manual',
+      recipe: recipeFor(concept, recipe.seed),
+      copy: concept.copy,
+      score: null,
+      scoreParts: null,
+      altSeeds: [],
+      rankScore: null,
+      decision: 'approved',
+      autoExport: true,
+    });
+    this.scheduler.notify();
+    this.writeCopy(row.id, 'all');
+    return row;
+  }
+
+  /** Rewrite one platform's text (or the cover text, or everything) with Claude, in the background. */
+  regenerateCopy(id: string, target: CopyTarget | 'all', notes?: string): CopyJob {
+    const r = mustRender(id);
+    if (!r.copy) throw new Error('This video has no copy');
+    if (copyJobs.get(id)?.running) throw new Error('Claude is already writing copy for this video');
+    if (!claudeAvailable()) throw new Error('Claude is not configured (set ANTHROPIC_API_KEY in .env)');
+    const c = r.conceptId ? getConcept(r.conceptId) : undefined;
+    if (c && notes !== undefined) updateConcept(c.id, { ...c.concept, notes: notes.trim() || undefined });
+    return this.writeCopy(id, target);
+  }
+
+  /** Start a copy job: Claude writes `target` (or everything), saved into the render and its concept. */
+  private writeCopy(id: string, target: CopyTarget | 'all'): CopyJob {
+    const job: CopyJob = { target, running: true, error: null };
+    if (!claudeAvailable()) {
+      job.running = false;
+      job.error = 'Claude is not configured (set ANTHROPIC_API_KEY in .env), so this uses template copy.';
+      copyJobs.set(id, job);
+      return job;
+    }
+    copyJobs.set(id, job);
+    this.changed(id);
+    void (async () => {
+      try {
+        const r = mustRender(id);
+        const c = r.conceptId ? getConcept(r.conceptId) : undefined;
+        const base = r.copy ?? emptyCopy();
+        const titleEmoji = target === 'all' ? (c?.concept.titleEmoji ?? true) : startsWithEmoji(base.title);
+        const copy = await uploadCopyFromClaude(
+          new Anthropic(),
+          { recipe: r.recipe, onScreen: { hook: base.hook, cta: base.cta, nudge: base.nudge }, notes: c?.concept.notes, titleEmoji },
+          base,
+          new Rng(Date.now() % 1e9),
+          target === 'all' ? null : target,
+        );
+        // Re-read: the owner may have edited other fields while Claude was writing.
+        const latest = getRender(id)?.copy ?? base;
+        const merged = target === 'all' ? copy : mergeTarget(latest, copy, target);
+        updateRender(id, { copy: merged });
+        const fresh = r.conceptId ? getConcept(r.conceptId) : undefined;
+        if (fresh) updateConcept(fresh.id, { ...fresh.concept, source: target === 'all' ? 'claude' : fresh.concept.source, copy: merged });
+      } catch (e) {
+        job.error = `Claude couldn't write this (${claudeErrorReason(e)}).${target === 'all' ? ' Showing template copy for now.' : ''}`;
+      } finally {
+        job.running = false;
+        await this.refreshExportFiles(id).catch(() => {});
+        await this.maybeAutoExport(id);
+        this.changed(id);
+      }
+    })();
+    return job;
+  }
+
+  /** Bundle a rendered Playground export once its copy is no longer being written. */
+  private async maybeAutoExport(id: string) {
+    const r = getRender(id);
+    if (!r?.autoExport || r.status !== 'ready' || exportForRender(id) || copyJobs.get(id)?.running) return;
+    try {
+      await this.exportBundle(id);
+    } catch (e) {
+      console.warn(`Auto-export of ${id} failed: ${(e as Error).message}`);
+    }
+    this.changed(id);
+  }
+
+  /** Concept for a Playground recipe: its own params and on-screen text, template copy until Claude writes some. */
+  private manualConcept(recipe: RenderRow['recipe'], rng: Rng): Concept {
+    const base = fallbackConcept({ templateId: recipe.templateId, themeId: recipe.themeId, lengthBucket: 'medium', hookStyle: 'question' }, recipe.targetS ?? 30, rng);
+    return {
       ...base,
       melodyId: recipe.melodyId,
       params: recipe.params,
       source: 'manual' as const,
       copy: normalizeCopy({ ...base.copy, hook: recipe.copy?.hook || base.copy.hook, cta: recipe.copy?.cta || base.copy.cta, nudge: recipe.copy?.nudge }),
     };
-    const c = insertConcept(batch.id, conceptsForBatch(batch.id).length, concept);
-    const row = insertRender({ batchId: batch.id, conceptId: c.id, kind: 'manual', recipe: recipeFor(concept, recipe.seed), copy: concept.copy, score: null, scoreParts: null, altSeeds: [], rankScore: null });
-    this.scheduler.notify();
-    return row;
   }
 
   /** Write an upload-ready bundle (video, cover, captions per platform, zip) and approve the video. */
@@ -201,22 +336,21 @@ export class ReviewActions {
     const src = join(RENDERS_DIR, r.dir);
     await copyFile(join(src, 'final.mp4'), join(dir, 'video.mp4'));
     await copyFile(join(src, 'cover.jpg'), join(dir, 'cover.jpg'));
-    const text = platformText(copy);
-    await writeFile(join(dir, 'youtube.txt'), text.youtube + '\n');
-    await writeFile(join(dir, 'tiktok.txt'), text.tiktok + '\n');
-    await writeFile(join(dir, 'x.txt'), text.x + '\n');
-    const features = predictionFor(id)?.features ?? postFeatures(r);
     await copyFile(join(src, 'events.json'), join(dir, 'events.json')).catch(() => {});
-    await writeFile(join(dir, 'meta.json'), JSON.stringify({ recipe: r.recipe, copy, score: r.score, qc: r.qc, features }, null, 2));
+    const features = predictionFor(id)?.features ?? postFeatures(r);
     // Frozen at first export: what we knew before any results came in.
     const pred = predictFeatures(features);
     insertPredictionOnce({ renderId: id, createdAt: Date.now(), modelVersion: pred?.modelVersion ?? null, mean: pred?.mean ?? null, sd: pred?.sd ?? null, experiment: features.experiment, features });
-    const files: Record<string, Uint8Array> = {};
-    for (const f of ['video.mp4', 'cover.jpg', 'youtube.txt', 'tiktok.txt', 'x.txt', 'meta.json']) files[f] = new Uint8Array(await readFile(join(dir, f)));
-    // Store only: the MP4 is already compressed.
-    await writeFile(join(dir, 'bundle.zip'), zipSync(files, { level: 0 }));
+    await writeUploadFiles(dir, r);
     if (r.decision === 'pending') updateRender(id, { decision: 'approved' });
     return insertExport(id, rel);
+  }
+
+  /** Copy changed after export: rewrite the text files, meta.json and zip so they match the page. */
+  private async refreshExportFiles(id: string) {
+    const ex = exportForRender(id);
+    const r = getRender(id);
+    if (ex && r) await writeUploadFiles(join(EXPORTS_DIR, ex.dir), r);
   }
 
   /** Delete renders of rejected, replaced or unreviewed videos older than `days`. Never approved or exported ones. */
@@ -238,6 +372,36 @@ export class ReviewActions {
       updateRender(row.id, { status: 'deleted', dir: null });
     }
     return { deleted: rows.length, freedBytes: freed };
+  }
+}
+
+/** Text files (one per platform, everything for it in one block), meta.json and the zip, from the current copy. */
+async function writeUploadFiles(dir: string, r: RenderRow) {
+  const copy = r.copy ?? emptyCopy();
+  const text = platformText(copy);
+  for (const p of PLATFORMS) await writeFile(join(dir, `${p}.txt`), text[p] + '\n');
+  const features = predictionFor(r.id)?.features ?? postFeatures(r);
+  await writeFile(join(dir, 'meta.json'), JSON.stringify({ recipe: r.recipe, copy, score: r.score, qc: r.qc, features }, null, 2));
+  const files: Record<string, Uint8Array> = {};
+  for (const f of ['video.mp4', 'cover.jpg', ...PLATFORMS.map((p) => `${p}.txt`), 'meta.json']) files[f] = new Uint8Array(await readFile(join(dir, f)));
+  // Store only: the MP4 is already compressed.
+  await writeFile(join(dir, 'bundle.zip'), zipSync(files, { level: 0 }));
+}
+
+/** Take only the target's fields from `fresh`, keeping everything else in `current`. */
+function mergeTarget(current: SocialCopy, fresh: SocialCopy, target: CopyTarget): SocialCopy {
+  const pinned = (p: 'youtube' | 'tiktok' | 'instagram' | 'x') => ({ pinnedComments: { ...current.pinnedComments, [p]: fresh.pinnedComments?.[p] ?? '' } });
+  switch (target) {
+    case 'youtube':
+      return { ...current, title: fresh.title, youtubeDescription: fresh.youtubeDescription, hashtags: fresh.hashtags, ...pinned('youtube') };
+    case 'tiktok':
+      return { ...current, tiktokCaption: fresh.tiktokCaption, ...pinned('tiktok') };
+    case 'instagram':
+      return { ...current, instagramCaption: fresh.instagramCaption, ...pinned('instagram') };
+    case 'x':
+      return { ...current, xPost: fresh.xPost, ...pinned('x') };
+    case 'cover':
+      return { ...current, coverText: fresh.coverText };
   }
 }
 

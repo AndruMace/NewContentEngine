@@ -15,9 +15,13 @@ npm run dev          # Playground at http://localhost:5173 (+ render API on :517
 npm test             # determinism, physics, sorting, melody and math tests
 ```
 
-In the Playground, **Export MP4** renders exactly what you're previewing through the same
-pipeline as the CLI, shows progress, and gives you Download / Cover / Show in Finder buttons.
-The equivalent CLI command is shown underneath for reference.
+In the Playground, **Export for upload** renders exactly what you're previewing through the same
+pipeline as the CLI and opens its upload page under **Batches & Review**. While it renders,
+Claude writes the title, description, hashtags, captions, cover text and a pinned comment for
+YouTube Shorts, TikTok, Instagram Reels and X (add optional notes for Claude first). Each field
+has a copy button, can be edited in place (with an emoji picker), and each platform can be
+regenerated on its own. The video is tracked in the day's Manual batch as approved, so you can
+paste post links and it counts in analytics. The equivalent CLI command is shown underneath.
 
 ## Daily workflow: batches and review
 
@@ -32,8 +36,9 @@ The equivalent CLI command is shown underneath for reference.
    idea, new copy, or a new concept), or edit the copy (changing the on-screen hook/CTA
    re-renders that video).
 4. **Export for upload** writes `data/exports/<date>/<slug>/` (video, cover, `youtube.txt`,
-   `tiktok.txt`, `x.txt`, `bundle.zip`) with download and copy buttons in the card.
-5. After posting, paste the post URLs into the card (used by analytics in Phase 5).
+   `tiktok.txt`, `instagram.txt`, `x.txt`, `bundle.zip`) and opens the same upload page, with
+   every platform's text ready to copy.
+5. After posting, paste the post URLs into the upload page or the card (used by analytics).
 
 From the terminal: `npm run batch` (uses the running server if there is one, so the UI sees
 it), with flags like `--posts 2 --factor 2 --templates ring-escape,marble-race --min 20 --max 35`.
