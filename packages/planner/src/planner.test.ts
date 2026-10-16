@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, paramsJsonSchema } from '@sim/engine';
 import { TEMPLATES, getTemplate } from '@sim/templates';
-import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema } from './index';
+import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema, summarizePerformance, uploadCopyFromClaude, variantHook } from './index';
 
 describe('arm selection', () => {
   it('spreads arms across templates and respects the filters', () => {
@@ -263,5 +263,49 @@ describe('upload text', () => {
   it('asks the batch planner for every platform', () => {
     const schema = conceptOutputSchema(getTemplate('ring-escape'));
     for (const k of ['instagramCaption', 'youtubePinnedComment', 'xReply', 'coverText', 'emojis']) expect(schema.required).toContain(k);
+  });
+});
+
+describe('performance summary', () => {
+  const post = (title: string, reward: number, extra: { views?: number; provisional?: boolean } = {}) => ({ title, hook: 'hook', templateName: 'Ring Escape', reward, provisional: false, ...extra });
+
+  it('says nothing until enough posts are scored', () => {
+    expect(summarizePerformance([post('a', 1), post('b', 0), post('c', -1)])).toBeUndefined();
+  });
+
+  it('lists the best first and the weakest separately, without overlap', () => {
+    const s = summarizePerformance([post('mid', 0.1), post('top', 1.5, { views: 12000 }), post('low', -1.2, { provisional: true }), post('ok', 0.6), post('bad', -0.4)])!;
+    const lines = s.split('\n');
+    expect(lines[1]).toBe('- "top" (Ring Escape; on-screen "hook"): +1.5 vs average, 12,000 views');
+    expect(lines.indexOf('Weakest:')).toBe(4);
+    expect(lines[5]).toContain('"low"');
+    expect(lines[5]).toContain('early numbers');
+    expect(s.match(/"mid"/g)).toHaveLength(1);
+  });
+});
+
+describe('mystery songs', () => {
+  it('never shows the copy writer which song a Bounce Keys video plays', async () => {
+    let prompt = '';
+    const client = {
+      beta: {
+        messages: {
+          create: async (req: { messages: { content: string }[] }) => {
+            prompt = req.messages[0].content;
+            return { stop_reason: 'refusal', stop_details: null, content: [] };
+          },
+        },
+      },
+    } as unknown as Parameters<typeof uploadCopyFromClaude>[0];
+    const recipe = { templateId: 'bounce-keys', seed: 1, params: { style: 'keys' }, themeId: 'neon-dark', melodyId: 'fur-elise', targetS: 32 };
+    const input = { recipe, onScreen: { hook: 'Guess the song 🎵', cta: 'It was {answer}! Did you get it? 🎵' }, titleEmoji: false };
+    await expect(uploadCopyFromClaude(client, input, {} as Parameters<typeof uploadCopyFromClaude>[2], new Rng(1))).rejects.toThrow();
+    expect(prompt).toContain('Bounce Keys');
+    expect(prompt).toContain('never name');
+    for (const leak of ['Für Elise', 'Elise', 'Beethoven', 'fur-elise']) expect(prompt).not.toContain(leak);
+  });
+
+  it('fixes the Bounce Keys hook to the question', () => {
+    for (const style of ['cascade', 'keys']) expect(variantHook('bounce-keys', { style })).toBe('Guess the song 🎵');
   });
 });

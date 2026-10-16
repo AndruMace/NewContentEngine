@@ -14,10 +14,11 @@ import { collidingBlocks } from './colliding-blocks';
 import { pathfindingRace } from './pathfinding-race';
 import { fourierDrawing, GUESS as FOURIER_GUESS } from './fourier-drawing';
 import { spinBattle } from './spin-battle';
+import { bounceKeys } from './bounce-keys';
 
-export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, FOURIER_GUESS };
+export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, FOURIER_GUESS };
 
-export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle];
+export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys];
 
 export function getTemplate(id: string): Template {
   const template = TEMPLATES.find((t) => t.id === id);

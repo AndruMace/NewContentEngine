@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import type { Rng } from './rng';
 import type { Theme } from './themes';
-import type { MelodyCursor } from './melody';
+import type { Melody, MelodyCursor } from './melody';
 
 export type Family = 'bounce' | 'race' | 'particles' | 'kinetic';
 
@@ -47,6 +47,8 @@ export interface InitCtx<P> {
   height: number;
   /** For templates whose sim state carries colours (e.g. mixing liquids). Never affects physics. */
   theme: Theme;
+  /** The video's melody (already transposed), for templates whose run is built from it. */
+  melody: Melody;
 }
 
 export interface StepCtx {
@@ -71,7 +73,7 @@ export interface DramaScore {
 
 export type OverlaySpec =
   /** y is the centre of the hook's last line; longer hooks grow upwards. */
-  | { kind: 'hook'; text: string; from?: number; to?: number; y?: number }
+  | { kind: 'hook'; text: string; from?: number; to?: number; y?: number; untilOutro?: boolean }
   | { kind: 'counter'; key: string; label?: string; y?: number; size?: number }
   | { kind: 'timer'; y?: number }
   | { kind: 'cta'; text: string; when: 'outro' | { from: number; to: number }; y?: number }
@@ -114,6 +116,8 @@ export interface Template<P = any, S = any> {
   searchBudget?: number;
   /** Template ignores the melody setting (e.g. uses its own scale). */
   ownMusic?: boolean;
+  /** The melody shapes the run itself (not just its sound), so changing it changes the video. */
+  melodyDriven?: boolean;
   /** Multiplier on the theme's bloom (solid fills like sand/liquid blow out at full glow). */
   glowScale?: number;
   /** The final state equals the first frame: renders drop the last frame so the video loops cleanly. */

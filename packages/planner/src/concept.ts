@@ -273,6 +273,17 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  'bounce-keys': [
+    {
+      param: 'style',
+      values: ['cascade', 'keys'],
+      guide: {
+        cascade: 'Style: cascade (fixed for this video). Glowing note blocks run down the screen; the ball drops from block to block, each one shattering as it plays. A mystery song plays note by note as a ball bounces; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
+        keys: 'Style: keys (fixed for this video). The ball hops across a piano keyboard, each key lighting up as it plays. A mystery song plays note by note as a ball bounces; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
+      },
+      hook: { cascade: 'Guess the song 🎵', keys: 'Guess the song 🎵' },
+    },
+  ],
   'snake-ai': [
     {
       param: 'ending',
@@ -329,6 +340,7 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'pathfinding-race': ['🧭', '🏁', '🤓'],
   'fourier-drawing': ['✏️', '🤯', '👀'],
   'spin-battle': ['🌀', '⚔️', '🔥'],
+  'bounce-keys': ['🎵', '🎹', '👀'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
 
@@ -388,6 +400,7 @@ export function describeTemplate(template: Template): string {
     `Default hook: "${template.defaultCopy.hook}"  Default CTA: "${template.defaultCopy.cta}"`,
     'Hook/CTA may use {paramName} placeholders (filled from params) and, in CTAs, {winner} where the template reports a winner.',
     template.ownMusic ? 'This template generates its own notes; the melody choice is ignored.' : '',
+    template.melodyDriven ? 'The melody is the hidden answer: it is assigned after you write, so never name or hint at any song.' : '',
     'Parameters:',
     ...params,
   ]
@@ -454,34 +467,44 @@ const str = (description: string) => ({ type: 'string', description });
  */
 export const COPY_FIELDS = {
   youtube: {
-    title: str(`YouTube Shorts title without #Shorts, following the request's instruction about a leading emoji. Front-load the words people search for. Max ${LIMITS.title} characters.`),
+    titleOptions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Scratch work, never published: 3 YouTube Shorts titles from clearly different angles (e.g. a guess to make, a side to pick, a challenge, a reaction). Each makes someone want to see the end; none describes the setup or restates the on-screen hook.',
+    },
+    title: str(
+      `The strongest of your titleOptions (improve it if you can), without #Shorts, following the request's instruction about a leading emoji. The first ~40 characters must work alone; aim for under 60 (hard max ${LIMITS.title}). A reason to watch, not a label of what's on screen.`,
+    ),
     youtubeDescription: str(
-      'Published YouTube description, written to the viewer: 1-3 short lines saying what happens in this video, using words people search for (e.g. "marble race", "satisfying sand art"). No hashtags. Never mention retention, hooks, strategy or how it was made.',
+      'YouTube description: one line in your own voice that adds intrigue (not a summary), then one natural sentence containing the phrase people would search for (e.g. "marble race", "satisfying ball escape"). No hashtags.',
     ),
     hashtags: {
       type: 'array',
       items: { type: 'string' },
       description:
-        '3-6 hashtags, without spaces, chosen to reach people who would enjoy this exact video: mix 1-2 broad ones (#satisfying, #oddlysatisfying) with specific ones for the format and subject (#marblerace, #sandart, #sortingalgorithms). Never tags about tools or AI (#claude, #ai).',
+        '3-6 hashtags, without spaces, to reach people who would enjoy this exact video: 1-2 broad ones (#satisfying, #oddlysatisfying) plus specific ones for the format and subject (#marblerace, #sandart, #sortingalgorithms). Nothing from an unrelated niche, nothing about tools or AI (#claude, #ai).',
     },
-    youtubePinnedComment: str(`A comment to pin under the YouTube Short that starts replies: a question about this video (a guess, a side, a rating). Don't repeat the on-screen CTA word for word. Max ${LIMITS.pinned} characters.`),
+    youtubePinnedComment: str(`Comment to pin under the Short: a question answerable in one word, number or emoji (a guess, a pick, a rating). Not the on-screen CTA reworded. Max ${LIMITS.pinned} characters.`),
   },
   tiktok: {
-    tiktokCaption: str(`Published TikTok caption, written to the viewer, ending with 3-5 hashtags. Max ${LIMITS.tiktok} characters.`),
-    tiktokPinnedComment: str(`A comment to pin on TikTok that starts replies, different from the YouTube one. Max ${LIMITS.pinned} characters.`),
+    tiktokCaption: str(
+      `TikTok caption: under about 100 characters before the hashtags, like a creator talking to camera (a challenge, a "POV", a question, a reaction), with one natural search keyword; then 3-5 hashtags. Max ${LIMITS.tiktok} characters.`,
+    ),
+    tiktokPinnedComment: str(`Comment to pin on TikTok, answerable in one word or emoji, different from the YouTube one. Max ${LIMITS.pinned} characters.`),
   },
   instagram: {
     instagramCaption: str(
-      `Published Instagram Reels caption, written to the viewer. The first line shows before "more", so make it count; then at most a line or two, ending with 3-5 hashtags (Instagram allows no more than 5). Max ${LIMITS.instagram} characters.`,
+      `Instagram Reels caption: the first line (under 125 characters) shows before "more" and must work alone as the reason to keep watching. Optionally one more line. End with 3-5 hashtags (Instagram allows no more than 5). Max ${LIMITS.instagram} characters.`,
     ),
-    instagramPinnedComment: str(`A comment to pin on Instagram that starts replies, different from the others. Max ${LIMITS.pinned} characters.`),
+    instagramPinnedComment: str(`Comment to pin on Instagram, answerable in one word or emoji, different from the others. Max ${LIMITS.pinned} characters.`),
   },
   x: {
-    xPost: str(`Published post for X, written to the viewer, with 1-2 hashtags. Max ${LIMITS.x} characters.`),
-    xReply: str(`A short reply to post under your own X post that invites replies (a question or a poll-style "A or B?"). No hashtags. Max ${LIMITS.pinned} characters.`),
+    xPost: str(`X post (the video is attached): one or two short lines that read like a person's opinion or question, something people want to reply to or quote. One hashtag at most. Max ${LIMITS.x} characters.`),
+    xReply: str(`Reply to post under your own X post: an easy question or an "A or B?" that invites replies. No hashtags. Max ${LIMITS.pinned} characters.`),
   },
   cover: {
-    coverText: str(`Text for the TikTok / Instagram cover image: 2-5 punchy words that make people tap, no hashtags, never giving away the ending. Max ${LIMITS.cover} characters.`),
+    coverText: str(`TikTok / Instagram cover text: 2-5 words readable at thumbnail size that make people tap (a question, a stake or a dare, not how the video works), different from the title, never giving away the ending. No hashtags. Max ${LIMITS.cover} characters.`),
   },
   emojis: {
     emojis: { type: 'array', items: { type: 'string' }, description: `8-${LIMITS.emojis} single emojis that fit this video's subject and mood, most fitting first, for the owner to use when editing.` },

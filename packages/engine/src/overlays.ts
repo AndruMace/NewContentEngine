@@ -111,7 +111,10 @@ export function drawOverlays(
         const to = spec.to ?? 2.2;
         if (t < from || t > to) break;
         const pop = easeOutBack(clamp01((t - from) / 0.18));
-        const fade = clamp01((to - t) / 0.25);
+        // A hook that stays up until the outro makes way for the CTA (same spot) when it starts.
+        const outroFade = spec.untilOutro && state.outroAt !== null ? clamp01(1 - (t - state.outroAt) / 0.25) : 1;
+        const fade = clamp01((to - t) / 0.25) * outroFade;
+        if (fade <= 0) break;
         strokedText(ctx, theme, fillCopy(spec.text, hud), cx, height * (spec.y ?? 0.15), 78, {
           scale: 0.6 + 0.4 * pop,
           alpha: fade,

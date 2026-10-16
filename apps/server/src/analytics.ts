@@ -5,7 +5,7 @@
 import { join } from 'node:path';
 import { scoreRecipe } from '@sim/render/search';
 import { findTemplate } from '@sim/templates';
-import { flatArmModel, type ArmModel } from '@sim/planner';
+import { flatArmModel, summarizePerformance, type ArmModel, type PostResult } from '@sim/planner';
 import {
   DEFAULT_REWARD_WEIGHTS,
   READY_AT,
@@ -267,3 +267,23 @@ export function postDetail(renderId: string, platform: Platform = 'youtube') {
   if (!p) return null;
   return { ...postView(p, rewards()), history: snapshotsFor(renderId, platform), curve: retentionFor(renderId, platform)?.points ?? [] };
 }
+
+/** Best and weakest YouTube posts as prompt lines for the copy writers (undefined until enough are scored). */
+export function copyPerformance(): string | undefined {
+  const rows: PostResult[] = listPostViews('youtube').flatMap((p) =>
+    p.reward && p.reward.reward !== null && p.title
+      ? [
+          {
+            title: p.title,
+            hook: p.hook,
+            templateName: findTemplate(p.templateId)?.name ?? p.templateId,
+            reward: p.reward.reward,
+            views: p.metrics.views,
+            provisional: p.reward.provisional,
+          },
+        ]
+      : [],
+  );
+  return summarizePerformance(rows);
+}
+

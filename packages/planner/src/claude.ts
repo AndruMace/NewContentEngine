@@ -4,6 +4,7 @@ import type { Rng } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 import type { Arm } from './arms';
+import { COPY_GUIDE, PLATFORM_GUIDE } from './copyGuide';
 import { applyTitleEmoji, coerceParams, conceptOutputSchema, describeTemplate, fallbackConcept, hookStyleGuide, mergeCopyOutput, normalizeCopy, variantGuide, variantHook, type Concept } from './concept';
 
 export const PLANNER_MODEL = 'claude-opus-5-5';
@@ -22,6 +23,8 @@ export interface PlanContext {
   chooseParams?: (arm: Arm, targetS: number, fixed: Record<string, unknown>, rng: Rng) => { params: Record<string, unknown>; source: string };
   /** Comment prompts used recently (newest first); picks are added here so a batch varies them. */
   recentNudges?: string[];
+  /** Recent titles on the channel (newest first), so new ones vary their structure. */
+  recentTitles?: string[];
 }
 
 const SYSTEM = `You are the content strategist for a short-form video channel (YouTube Shorts, TikTok, Instagram Reels, X) that posts "oddly satisfying" physics simulations with collision-driven music: balls escaping rings, marble races, ball battles, spinning-top battles, falling sand, fluids, polyrhythms, sorting races.
@@ -32,9 +35,13 @@ What works on this channel:
 - The hook appears in the first 2 seconds and creates an open question the video answers at the very end. Short, concrete, no clickbait the video can't pay off.
 - Stakes and progress are visible (rings left, who's still in, HP). Pick parameters that make the outcome uncertain and the climax land late.
 - The CTA invites a comment (a guess, a rating, a side) rather than asking for likes.
-- Titles, descriptions and captions are published as-is, so write them to the viewer about what happens in the video: casual, human, and using the words people actually search for. Keep strategy talk (retention, hooks, "viewers", stakes) out of them; that belongs only in the private rationale.
-- Hashtags exist to reach people who would enjoy this exact video: one or two broad tags plus specific ones for the format and subject. Never tag the tools used to make it (no #claude, #ai, #anthropic).
 - Never claim something the simulation might not show (e.g. "it fails at the end"); the outcome is decided by real physics.
+
+The titles, descriptions and captions are published as-is (strategy talk belongs only in the private rationale).
+
+${COPY_GUIDE}
+
+${PLATFORM_GUIDE}
 
 Parameter guidance: stay near the defaults unless you have a reason; extreme values can make simulations that never finish. Choose values so the video plausibly runs close to the requested length.`;
 
@@ -88,6 +95,7 @@ function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOp
     `Melody: assigned separately for variety; return "${MELODIES[0].id}" as melodyId.`,
     ctx.recentHooks.length ? `Recent hooks to avoid repeating:\n${ctx.recentHooks.slice(0, 20).map((h) => `- ${h}`).join('\n')}` : '',
     ctx.performanceSummary ? `What has been performing:\n${ctx.performanceSummary}` : '',
+    ctx.recentTitles?.length ? `Recent titles on the channel (vary the structure from these):\n${ctx.recentTitles.slice(0, 12).map((t) => `- ${t}`).join('\n')}` : '',
     ctx.notes ? `Notes from the channel owner for today: ${ctx.notes}` : '',
     previousError ? `Your previous answer could not be used: ${previousError}. Return a corrected answer.` : '',
   ]

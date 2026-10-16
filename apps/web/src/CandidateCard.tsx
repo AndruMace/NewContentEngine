@@ -277,7 +277,7 @@ export function CandidateCard({ item, rank, onChanged }: { item: ReviewItem; ran
             <option value="">{busy === 'reroll' ? 'Re-rolling…' : 'Re-roll…'}</option>
             <option value="seed">Different run (same idea)</option>
             <option value="copy">New copy (same run)</option>
-            {template && !template.ownMusic && <option value="melody">New melody (same run)</option>}
+            {template && !template.ownMusic && <option value="melody">{template.melodyDriven ? 'New song (new run)' : 'New melody (same run)'}</option>}
             <option value="concept">New concept</option>
           </select>
         </div>

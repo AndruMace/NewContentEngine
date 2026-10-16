@@ -421,6 +421,15 @@ export function recentHooks(limit = 30): string[] {
     .filter((h): h is string => Boolean(h));
 }
 
+/** Titles of recently exported videos (newest first): what the channel actually published. */
+export function recentTitles(limit = 12): string[] {
+  return db
+    .prepare('SELECT r.copy FROM exports e JOIN renders r ON r.id = e.render_id WHERE r.copy IS NOT NULL ORDER BY e.created_at DESC LIMIT ?')
+    .all(limit)
+    .map((r: any) => json<SocialCopy | null>(r.copy, null)?.title)
+    .filter((t): t is string => Boolean(t));
+}
+
 // ---- exports & posts -----------------------------------------------------------------------
 
 export function insertExport(renderId: string, dir: string): ExportRow {

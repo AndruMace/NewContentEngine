@@ -33,13 +33,14 @@ import {
   manualBatchForToday,
   conceptsForBatch,
   recentHooks,
+  recentTitles,
   updateConcept,
   updateRender,
   type RenderRow,
 } from './db';
 import { ALL_MELODY_IDS, chooseMelody, hashSeed, recipeFor, type BatchRunner } from './batch';
 import { getTemplate } from '@sim/templates';
-import { postFeatures, predictFeatures } from './analytics';
+import { copyPerformance, postFeatures, predictFeatures } from './analytics';
 import { chooseParams } from './taste';
 import { REJECT_REASONS } from '@sim/analytics';
 
@@ -120,7 +121,7 @@ export class ReviewActions {
     return next;
   }
 
-  /** Same run and copy, a different melody (one not used elsewhere in the batch). Melody only changes the sound. */
+  /** Same run and copy, a different melody (one not used elsewhere in the batch). Melody only changes the sound, except for melody-driven templates. */
   async rerollMelody(id: string): Promise<RenderRow> {
     const r = mustRender(id);
     if (getTemplate(r.recipe.templateId).ownMusic) throw new Error('This template makes its own notes; it has no melody to change');
@@ -128,15 +129,24 @@ export class ReviewActions {
     const melodyId = r.batchId ? chooseMelody(r.batchId, r.recipe.templateId, rng, [r.recipe.melodyId]) : rng.pick(ALL_MELODY_IDS.filter((m) => m !== r.recipe.melodyId));
     const c = r.conceptId ? getConcept(r.conceptId) : undefined;
     if (c) updateConcept(c.id, { ...c.concept, melodyId });
+    // Where the melody shapes the run (e.g. Bounce Keys), a new song is a new run: search and score it afresh.
+    let run = { seed: r.recipe.seed, score: r.score, scoreParts: r.scoreParts, altSeeds: r.altSeeds };
+    const template = getTemplate(r.recipe.templateId);
+    if (template.melodyDriven) {
+      const results = await this.pool.search({ ...r.recipe, melodyId, seed: 0 }, { count: template.searchBudget ?? 6, targetS: r.recipe.targetS ?? 30, start: r.recipe.seed });
+      const ok = results.filter((x) => !x.timedOut);
+      if (!ok.length) throw new Error('This melody did not produce a usable run');
+      run = { seed: ok[0].seed, score: ok[0].total, scoreParts: ok[0].parts, altSeeds: ok.slice(1).map((x) => x.seed) };
+    }
     const next = insertRender({
       batchId: r.batchId,
       conceptId: r.conceptId,
       kind: r.kind,
-      recipe: { ...r.recipe, melodyId },
+      recipe: { ...r.recipe, melodyId, seed: run.seed },
       copy: r.copy,
-      score: r.score,
-      scoreParts: r.scoreParts,
-      altSeeds: r.altSeeds,
+      score: run.score,
+      scoreParts: run.scoreParts,
+      altSeeds: run.altSeeds,
       rankScore: r.rankScore,
     });
     supersede(r, next);
@@ -152,7 +162,7 @@ export class ReviewActions {
     const client = claudeAvailable() ? new Anthropic() : undefined;
     // Same simulation, so the new copy is written for the settings already on screen.
     const keep = () => ({ params: c.concept.params, source: c.concept.paramsSource ?? 'kept' });
-    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams: keep }, new Rng(Date.now() % 1e9), client);
+    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams: keep, recentTitles: recentTitles(), performanceSummary: copyPerformance() }, new Rng(Date.now() % 1e9), client);
     // Keep the video's comment prompt (or its absence): only the written copy is being replaced.
     const { nudge: _drop, ...fresh } = planned.concept.copy;
     const copy = { ...fresh, ...(c.concept.copy.nudge ? { nudge: c.concept.copy.nudge } : {}) };
@@ -166,7 +176,7 @@ export class ReviewActions {
     const c = r.conceptId ? getConcept(r.conceptId) : undefined;
     if (!c || !r.batchId) throw new Error('This video has no concept to replace');
     const client = claudeAvailable() ? new Anthropic() : undefined;
-    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams }, new Rng(Date.now() % 1e9), client);
+    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams, recentTitles: recentTitles(), performanceSummary: copyPerformance() }, new Rng(Date.now() % 1e9), client);
     if (c.concept.experiment) planned.concept.experiment = c.concept.experiment;
     planned.concept.melodyId = chooseMelody(r.batchId, planned.concept.templateId, new Rng(Date.now() % 1e9));
     const concept = insertConcept(r.batchId, conceptsForBatch(r.batchId).length, planned.concept);
@@ -276,7 +286,14 @@ export class ReviewActions {
         const titleEmoji = target === 'all' ? (c?.concept.titleEmoji ?? true) : startsWithEmoji(base.title);
         const copy = await uploadCopyFromClaude(
           new Anthropic(),
-          { recipe: r.recipe, onScreen: { hook: base.hook, cta: base.cta, nudge: base.nudge }, notes: c?.concept.notes, titleEmoji },
+          {
+            recipe: r.recipe,
+            onScreen: { hook: base.hook, cta: base.cta, nudge: base.nudge },
+            notes: c?.concept.notes,
+            titleEmoji,
+            performance: copyPerformance(),
+            recentTitles: recentTitles().filter((t) => t !== base.title),
+          },
           base,
           new Rng(Date.now() % 1e9),
           target === 'all' ? null : target,

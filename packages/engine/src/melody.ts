@@ -6,7 +6,18 @@ export interface Melody {
   /** Composition status AND transcription status. Only 'public-domain' or 'cc0' allowed in the library. */
   license: 'public-domain' | 'cc0' | 'generated';
   steps: number[][];
+  /** Timed melodies: each step's length in units (the time until the next step starts). */
+  beats?: number[];
+  /** Timed melodies: index of the first step of each phrase (one source line each). */
+  phrases?: number[];
+  /** Timed melodies: tempo in quarter notes per minute. */
+  bpm?: number;
+  /** Quarter notes per unit of `beats` (0.5 = eighth-note units, 0.25 = sixteenths). Default 1. */
+  unit?: number;
 }
+
+/** Seconds per unit of `beats` at the melody's own tempo. */
+export const unitSeconds = (m: Melody) => (60 / (m.bpm ?? 100)) * (m.unit ?? 1);
 
 const NOTE_INDEX: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 
@@ -21,13 +32,44 @@ export function noteToMidi(name: string): number {
 
 /**
  * Parse a compact melody string: whitespace-separated steps, chords joined with "+",
- * e.g. "E5 D#5 E5 A3+C4+E4". "|" bar lines are ignored.
+ * e.g. "E5 D#5 E5 A3+C4+E4". "|" bar lines are ignored. Timing marks (see parseMelody) are
+ * ignored too, so untimed templates step through the same notes either way.
  */
 export function parseSteps(src: string): number[][] {
-  return src
-    .split(/\s+/)
-    .filter((tok) => tok && tok !== '|')
-    .map((tok) => tok.split('+').map(noteToMidi));
+  return parseMelody(src).steps;
+}
+
+/**
+ * Parse a timed melody string. A "*n" suffix sets a step's length in units ("E5*2", "C5+A3*1.5",
+ * default 1); a rest "r*n" (or "r", 1 unit) lengthens the step before it. Each line is a phrase.
+ */
+export function parseMelody(src: string): { steps: number[][]; beats: number[]; phrases: number[] } {
+  const steps: number[][] = [];
+  const beats: number[] = [];
+  const phrases: number[] = [];
+  for (const line of src.split('\n')) {
+    const toks = line.split(/\s+/).filter((tok) => tok && tok !== '|');
+    if (!toks.length) continue;
+    phrases.push(steps.length);
+    for (const tok of toks) {
+      const [notes, len = '1'] = tok.split('*');
+      const n = Number(len);
+      if (!(n > 0)) throw new Error(`Bad length in ${tok}`);
+      if (notes === 'r') {
+        if (!beats.length) throw new Error('A melody cannot start with a rest');
+        beats[beats.length - 1] += n;
+        continue;
+      }
+      steps.push(notes.split('+').map(noteToMidi));
+      beats.push(n);
+    }
+  }
+  return { steps, beats, phrases };
+}
+
+/** The melody moved by `semitones` (timing unchanged). */
+export function transposeMelody(m: Melody, semitones: number): Melody {
+  return semitones ? { ...m, steps: m.steps.map((s) => s.map((n) => n + semitones)) } : m;
 }
 
 export class MelodyCursor {

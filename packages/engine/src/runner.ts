@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Rng } from './rng';
-import { MelodyCursor, type Melody } from './melody';
+import { MelodyCursor, transposeMelody, type Melody } from './melody';
 import type { Theme } from './themes';
 import type { AudioEvent, Copy, Ctx2D, DramaScore, OverlaySpec, SimEvent, Template } from './types';
 import { drawOverlays, fillCopy, newOverlayState, type OverlayState } from './overlays';
@@ -86,6 +86,7 @@ export class Runner<P = any, S = any> {
       width: VIDEO_WIDTH,
       height: VIDEO_HEIGHT,
       theme: opts.theme,
+      melody: transposeMelody(opts.melody, opts.transpose ?? 0),
     });
     // Field by field, so a field present but undefined (a cleared input) still falls back to the default.
     const copy: Copy = {

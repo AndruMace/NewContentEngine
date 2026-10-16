@@ -9,6 +9,7 @@ export * from './arms';
 export * from './concept';
 export * from './claude';
 export * from './platforms';
+export * from './copyGuide';
 export * from './upload';
 
 export type Generator = 'claude' | 'fallback' | 'mock';

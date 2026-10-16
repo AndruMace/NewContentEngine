@@ -15,6 +15,7 @@ import {
   recentHooks,
   recentMelodies,
   recentNudges,
+  recentTitles,
   rendersForBatch,
   updateBatch,
   updateRender,
@@ -26,7 +27,7 @@ import {
 import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
 import { refreshYouTube, youtubeStatus } from './youtube';
-import { lastPostedAt, planningModel, predictInput, refitLearner } from './analytics';
+import { copyPerformance, lastPostedAt, planningModel, predictInput, refitLearner } from './analytics';
 import { chooseParams, tasteArmPlanningModel, tastePredict } from './taste';
 
 const TERMINAL = new Set(['ready', 'failed', 'cancelled', 'deleted']);
@@ -161,7 +162,7 @@ export class BatchRunner extends EventEmitter {
         seed: hashSeed(batchId) + existing.length,
       },
       model,
-      { recentHooks: recentHooks(), notes: s.notes || undefined, chooseParams, recentNudges: recentNudges() },
+      { recentHooks: recentHooks(), notes: s.notes || undefined, chooseParams, recentNudges: recentNudges(), recentTitles: recentTitles(), performanceSummary: copyPerformance() },
       (planned) => {
         if (this.cancelled.has(batchId)) return;
         const concept = planned.concept;
