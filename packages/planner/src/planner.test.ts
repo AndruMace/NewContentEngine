@@ -306,6 +306,6 @@ describe('mystery songs', () => {
   });
 
   it('fixes the Bounce Keys hook to the question', () => {
-    for (const style of ['cascade', 'keys']) expect(variantHook('bounce-keys', { style })).toBe('Guess the song 🎵');
+    for (const style of ['cascade', 'keys', 'cascade-3d', 'spiral', 'falling']) expect(variantHook('bounce-keys', { style })).toBe('Guess the song 🎵');
   });
 });

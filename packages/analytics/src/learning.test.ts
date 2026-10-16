@@ -216,7 +216,11 @@ describe('learner', () => {
     const noise = 1;
     const settings = { count: perDay, templateIds: [], themeIds: [], minLengthS: 15, maxLengthS: 60 };
     const run = (policy: 'learner' | 'uniform' | 'beta', seed: number) => {
+      // The policy's choices and the world's reward noise draw from separate streams, so a model
+      // whose draws consume more random numbers (e.g. more catalog features) still faces the same
+      // world, and policies are compared on identical luck.
       const rng = new Rng(seed);
+      const world = new Rng(seed * 7919 + 17);
       const rows: TrainingRow[] = [];
       const beta = new Map<string, { a: number; b: number }>();
       let late = 0;
@@ -239,7 +243,7 @@ describe('learner', () => {
         } else arms = Array.from({ length: perDay }, () => randomArm(rng));
         for (const arm of arms) {
           const v = trueValue(arm);
-          const reward = v + noise * gauss(rng);
+          const reward = v + noise * gauss(world);
           rows.push({ input: { arm }, reward, weight: 1 });
           const k = JSON.stringify(arm);
           const s = beta.get(k) ?? { a: 1, b: 1 };

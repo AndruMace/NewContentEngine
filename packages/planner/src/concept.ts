@@ -276,12 +276,15 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   'bounce-keys': [
     {
       param: 'style',
-      values: ['cascade', 'keys'],
+      values: ['cascade', 'keys', 'cascade-3d', 'spiral', 'falling'],
       guide: {
         cascade: 'Style: cascade (fixed for this video). Glowing note blocks run down the screen; the ball drops from block to block, each one shattering as it plays. A mystery song plays note by note as a ball bounces; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
         keys: 'Style: keys (fixed for this video). The ball hops across a piano keyboard, each key lighting up as it plays. A mystery song plays note by note as a ball bounces; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
+        'cascade-3d': 'Style: 3D cascade (fixed for this video). Glossy 3D note blocks run down and back into the screen; the ball bounces from block to block, each one shattering as it plays. A mystery song plays note by note as a ball bounces; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
+        spiral: 'Style: spiral tower (fixed for this video). Glossy note blocks spiral down around a glowing column while the camera orbits with the ball; each block shatters as it plays. A mystery song plays note by note as a ball bounces; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
+        falling: 'Style: falling (fixed for this video). Seen from above, the ball drops through layers of note blocks that rush toward the camera, each one shattering as it plays. A mystery song plays note by note as a ball bounces; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
       },
-      hook: { cascade: 'Guess the song 🎵', keys: 'Guess the song 🎵' },
+      hook: { cascade: 'Guess the song 🎵', keys: 'Guess the song 🎵', 'cascade-3d': 'Guess the song 🎵', spiral: 'Guess the song 🎵', falling: 'Guess the song 🎵' },
     },
   ],
   'snake-ai': [

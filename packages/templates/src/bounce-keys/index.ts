@@ -4,14 +4,19 @@ import * as dm from '@sim/physics/math';
 import { burst, drawSparks, updateSparks, type Spark } from '../fx';
 import { drawAnswer, drawCommentPrompt } from '../guess';
 import { gaussFit } from '../scoring';
-import { arcAt, buildTimeline, riseFor, solveArc, type Arc, type Onset } from './timeline';
+import { arcAt, bounceNormal, buildTimeline, riseFor, solveArc, type Arc, type Onset, type Pt } from './timeline';
+import { drawCascade3D } from './view3d';
 
-export const BOUNCE_KEYS_STYLES = ['cascade', 'keys'] as const;
+export const BOUNCE_KEYS_STYLES = ['cascade', 'keys', 'cascade-3d', 'spiral', 'falling'] as const;
+export type BounceKeysStyle = (typeof BOUNCE_KEYS_STYLES)[number];
+/** Styles drawn with three.js (the sim is the same; only the layout and the view differ). */
+export const is3D = (style: BounceKeysStyle) => style === 'cascade-3d' || style === 'spiral' || style === 'falling';
 
 export const bounceKeysSchema = z.object({
   style: z.enum(BOUNCE_KEYS_STYLES).default('cascade').meta({ title: 'Style' }),
   durationS: z.number().min(18).max(60).default(32).meta({ title: 'Length (s)' }),
-  bassBall: z.boolean().default(true).meta({ title: 'Bass ball (joins halfway)' }),
+  bassBall: z.boolean().default(true).meta({ title: 'Bass ball' }),
+  bassEntry: z.enum(['half', 'quarter']).default('half').meta({ title: 'Bass ball joins' }),
   voice: z.enum(['theme', 'marimba', 'bell', 'pluck', 'glass']).default('theme').meta({ title: 'Voice' }),
 });
 
@@ -25,7 +30,7 @@ const REVEAL_S = 3.6;
 /** The CTA replaces the question this long after the reveal starts. */
 const OUTRO_DELAY_S = 1.0;
 
-const BALL_R = 26;
+export const BALL_R = 26;
 const BASS_R = 30;
 /** Keys: top of the keyboard (where the ball lands). */
 const KEY_TOP = 1080;
@@ -35,10 +40,14 @@ const BLACK_H = 135;
 const ANCHOR = 980;
 /** Cascade: how far the blocks step down per second of music. */
 const DROP_PER_S = 250;
-const BLOCK_W = 118;
-const BLOCK_H = 30;
+export const BLOCK_W = 118;
+export const BLOCK_H = 30;
+/** The steepest a bar tilts from flat to bounce the ball on toward the next note. */
+const MAX_TILT = 0.6;
+/** 3D styles: how far the blocks step down per second of music. */
+const DROP_3D: Record<string, number> = { 'cascade-3d': 250, spiral: 230, falling: 320 };
 /** Cascade: blocks shatter this long after the ball lands on them. */
-const BREAK_DELAY_S = 0.07;
+export const BREAK_DELAY_S = 0.07;
 /** The bass rail along the bottom (top of its pads). */
 const BASS_Y = 1560;
 const PAD_W = 74;
@@ -67,13 +76,30 @@ interface BassNote {
   x: number;
 }
 
-interface State {
+/** A 3D spark (sim space, y down), for the three.js styles. */
+export interface Spark3 {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  life: number;
+  maxLife: number;
+  col: RGB;
+}
+
+export interface State {
   p: BounceKeysParams;
   title: string;
   composer: string;
   onsets: Onset[];
   /** Ball centre at each landing (world coordinates; the cascade scrolls, keys don't). */
-  lands: { x: number; y: number }[];
+  lands: Pt[];
+  /** Surface normal of each landing's bar, tilted to bounce the ball on toward the next note. */
+  normals: Pt[];
+  /** Spiral: angle round the column of each landing (unwrapped, increasing). */
+  theta: number[];
   /** arcs[i] ends on landing i (arcs[0] is the drop-in). */
   arcs: Arc[];
   bass: BassNote[];
@@ -101,13 +127,14 @@ interface State {
   /** For spark colours only. */
   theme: Theme;
   sparks: Spark[];
-  ripples: { x: number; y: number; t0: number; midi: number }[];
+  sparks3: Spark3[];
+  ripples: { x: number; y: number; t0: number; midi: number; a: number }[];
   lastHit: Map<number, number>;
   lastBassHit: Map<number, number>;
 }
 
 /** Pitch-class colour: ordered round the circle of fifths so neighbouring notes contrast. */
-function noteColor(theme: Theme, s: State, midi: number): RGB {
+export function noteColor(theme: Theme, s: State, midi: number): RGB {
   const k = (((midi % 12) * 7) % 12 + s.hueShift) % 12;
   return paletteAt(theme.palette, k / 11);
 }
@@ -128,7 +155,7 @@ function keyX(kb: Keyboard, midi: number): number {
 }
 
 /** The latest landing at or before t (-1 before the first). Onsets are sorted. */
-function landedIndex(onsets: { t: number }[], t: number): number {
+export function landedIndex(onsets: { t: number }[], t: number): number {
   let lo = 0;
   let hi = onsets.length;
   while (lo < hi) {
@@ -140,20 +167,36 @@ function landedIndex(onsets: { t: number }[], t: number): number {
 }
 
 /** Ball centre (world coordinates) at time t: on an arc, or resting after its last landing. */
-function ballAt(arcs: Arc[], onsets: { t: number }[], t: number) {
+export function ballAt(arcs: Arc[], onsets: { t: number }[], t: number) {
   const i = landedIndex(onsets, t);
   return i + 1 < arcs.length ? arcAt(arcs[i + 1], t) : arcAt(arcs[arcs.length - 1], Infinity);
 }
 
-/** Cascade camera: eases from one landing's height to the next during each hop. */
+/**
+ * Where the camera follows: eases from one landing to the next during each hop (`k` = 0 at the
+ * landing, 1 at the next), so the view glides instead of tracking every bounce.
+ */
+export function followAt(s: State, t: number): { i: number; e: number } {
+  const i = landedIndex(s.onsets, t);
+  if (i < 0) return { i: 0, e: 0 };
+  if (i + 1 >= s.lands.length) return { i, e: 0 };
+  const u = Math.min(1, (t - s.onsets[i].t) / s.onsets[i].dur);
+  return { i, e: u * u * (3 - 2 * u) };
+}
+
+/** 2D cascade camera offset (keys don't scroll). */
 function cameraY(s: State, t: number): number {
   if (s.p.style !== 'cascade') return 0;
-  const i = landedIndex(s.onsets, t);
-  if (i < 0) return s.lands[0].y - ANCHOR;
-  if (i + 1 >= s.lands.length) return s.lands[i].y - ANCHOR;
-  const u = Math.min(1, (t - s.onsets[i].t) / s.onsets[i].dur);
-  const e = u * u * (3 - 2 * u);
-  return s.lands[i].y + (s.lands[i + 1].y - s.lands[i].y) * e - ANCHOR;
+  const { i, e } = followAt(s, t);
+  const j = Math.min(s.lands.length - 1, i + 1);
+  return s.lands[i].y + (s.lands[j].y - s.lands[i].y) * e - ANCHOR;
+}
+
+/** Where the ball touches landing i's bar (ball centre minus the radius along the bar's normal). */
+export function contactAt(s: State, i: number): Pt {
+  const c = s.lands[i];
+  const n = s.normals[i];
+  return { x: c.x - n.x * BALL_R, y: c.y - n.y * BALL_R, z: c.z - n.z * BALL_R };
 }
 
 export const bounceKeys: Template<BounceKeysParams, State> = {
@@ -161,7 +204,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
   name: 'Bounce Keys',
   family: 'bounce',
   description:
-    'A mystery tune played by a bouncing ball: every landing is the next note, exactly on the beat, hopping between note blocks running down the screen (cascade) or across a piano keyboard (keys). Longer notes fly higher. Halfway through, a second ball joins on the bass line. The title of the song is revealed at the end.',
+    'A mystery tune played by a bouncing ball: every landing is the next note, exactly on the beat. Styles: note blocks running down the screen (cascade), a piano keyboard (keys), glossy 3D blocks receding into depth (3D cascade), blocks spiralling down a glowing column with an orbiting camera (spiral), or a top-down drop through layers of blocks (falling). Bars lean so each bounce carries the ball on to the next note, and longer notes fly higher. Partway through, a second ball joins on the bass line. The title of the song is revealed at the end.',
   schema: bounceKeysSchema,
   lengthParam: { param: 'durationS', offsetS: 0 },
   // No physics; 240 Hz keeps every landing within ~4 ms of its beat.
@@ -187,29 +230,61 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
     const durs = onsets.map((o) => o.dur).sort((a, b) => a - b);
     const refDt = durs[durs.length >> 1];
     const kb = p.style === 'keys' ? keyboardFor(lo - 1, hi + 1) : null;
-    const xOf = (midi: number) => (kb ? keyX(kb, midi) : hi === lo ? 540 : 170 + ((midi - lo) / (hi - lo)) * 740);
+    /** Pitch as a 0..1 fraction of the song's range. */
+    const frac = (midi: number) => (hi === lo ? 0.5 : (midi - lo) / (hi - lo));
 
-    // Landing points: on the keys, or on blocks stepping down in proportion to the time between them.
-    const lands: { x: number; y: number }[] = [];
+    // Landing points. Keys: on the keyboard. The cascades step down in proportion to the time
+    // between notes (so the camera scrolls steadily), with pitch across the screen; the spiral puts
+    // pitch on the distance from the column and turns with time; falling puts pitch up the screen
+    // (seen from above) and zigzags across it.
+    const lands: Pt[] = [];
+    const theta: number[] = [];
     let y = 0;
+    let angle = rng.range(0, Math.PI * 2);
+    const drop = DROP_3D[p.style] ?? DROP_PER_S;
     onsets.forEach((o, i) => {
-      if (kb) y = KEY_TOP - BALL_R;
-      else if (i > 0) y += Math.max(60, DROP_PER_S * onsets[i - 1].dur * rng.range(0.8, 1.2));
-      lands.push({ x: xOf(o.midi), y });
+      if (kb) {
+        lands.push({ x: keyX(kb, o.midi), y: KEY_TOP - BALL_R, z: 0 });
+        return;
+      }
+      if (i > 0) y += Math.max(60, drop * onsets[i - 1].dur * rng.range(0.8, 1.2));
+      const f = frac(o.midi);
+      if (p.style === 'spiral') {
+        if (i > 0) angle += Math.min(1.4, Math.max(0.3, 1.1 * onsets[i - 1].dur));
+        const r = 170 + 180 * f;
+        theta.push(angle);
+        lands.push({ x: 540 + r * Math.cos(angle), y, z: r * Math.sin(angle) });
+      } else if (p.style === 'falling') {
+        const side = i % 2 ? 1 : -1;
+        lands.push({ x: 540 + side * rng.range(50, 150), y, z: 330 - 660 * f });
+      } else if (p.style === 'cascade-3d') {
+        lands.push({ x: 170 + 740 * f, y, z: rng.range(-150, 150) });
+      } else {
+        lands.push({ x: 170 + 740 * f, y, z: 0 });
+      }
     });
 
     // Hops: the drop-in from above the screen, then one arc per note, rising more for longer notes.
-    const maxRise = kb ? 500 : 420;
+    // Falling looks straight down the drop, so hops toward the camera stay lower.
+    const maxRise = kb ? 500 : p.style === 'falling' ? 240 : 420;
     let clamped = 0;
     const top = kb ? -60 : lands[0].y - ANCHOR - 60;
-    const arcs: Arc[] = [solveArc(lands[0].x, top, lands[0].x, lands[0].y, 0, LEAD_S, top)];
+    const arcs: Arc[] = [solveArc({ ...lands[0], y: top }, lands[0], 0, LEAD_S, top)];
     for (let i = 1; i < onsets.length; i++) {
       const a = lands[i - 1];
       const b = lands[i];
       const r = riseFor(onsets[i - 1].dur, refDt, 150, 22, maxRise);
       if (r.clamped) clamped++;
-      arcs.push(solveArc(a.x, a.y, b.x, b.y, onsets[i - 1].t, onsets[i - 1].dur, Math.min(a.y, b.y) - r.rise));
+      arcs.push(solveArc(a, b, onsets[i - 1].t, onsets[i - 1].dur, Math.min(a.y, b.y) - r.rise));
     }
+    // Each bar leans so the ball bounces off it toward the next note, as a real bounce would (the
+    // keyboard stays flat, and so does the last bar, where the ball comes to rest).
+    const normals = lands.map((_, i): Pt => {
+      if (kb || i + 1 >= arcs.length) return { x: 0, y: -1, z: 0 };
+      const vin = arcAt(arcs[i], Infinity);
+      const out = arcs[i + 1];
+      return bounceNormal(vin, { x: out.vx, y: out.vy, z: out.vz }, MAX_TILT);
+    });
 
     // The bass ball joins on the second time through the tune, or halfway if it plays once.
     const bass: BassNote[] = [];
@@ -219,7 +294,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
     const bassPads = bassMidis.map((midi, i) => ({ midi, x: bassMidis.length === 1 ? 540 : 200 + (i / (bassMidis.length - 1)) * 680 }));
     if (p.bassBall && bassPads.length) {
       const second = onsets.find((o) => o.pass === 1);
-      const from = second ? second.t : LEAD_S + span * 0.45;
+      const from = p.bassEntry === 'quarter' ? LEAD_S + span * 0.22 : second ? second.t : LEAD_S + span * 0.45;
       const timed = onsets.filter((o) => o.bass.length && o.t >= from + 0.6);
       timed.forEach((o, i) => {
         const end = i + 1 < timed.length ? timed[i + 1].t : o.t + o.dur;
@@ -228,11 +303,11 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       if (bass.length) {
         const padY = BASS_Y - BASS_R;
         bassEnterAt = bass[0].t - 0.7;
-        bassArcs.push(solveArc(bass[0].x, -80, bass[0].x, padY, bassEnterAt, 0.7, -80));
+        bassArcs.push(solveArc({ x: bass[0].x, y: -80, z: 0 }, { x: bass[0].x, y: padY, z: 0 }, bassEnterAt, 0.7, -80));
         const bassRef = [...bass].sort((a, b) => a.dur - b.dur)[bass.length >> 1].dur;
         for (let i = 1; i < bass.length; i++) {
           const r = riseFor(bass[i - 1].dur, bassRef, 110, 30, 200);
-          bassArcs.push(solveArc(bass[i - 1].x, padY, bass[i].x, padY, bass[i - 1].t, bass[i - 1].dur, padY - r.rise));
+          bassArcs.push(solveArc({ x: bass[i - 1].x, y: padY, z: 0 }, { x: bass[i].x, y: padY, z: 0 }, bass[i - 1].t, bass[i - 1].dur, padY - r.rise));
         }
       }
     }
@@ -244,6 +319,8 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       composer: melody.composer,
       onsets,
       lands,
+      normals,
+      theta,
       arcs,
       bass,
       bassArcs,
@@ -266,6 +343,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       fxRng,
       theme,
       sparks: [],
+      sparks3: [],
       ripples: [],
       lastHit: new Map(),
       lastBassHit: new Map(),
@@ -285,8 +363,13 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       emit({ type: 'land', i: s.next, midi: o.midi, dur: o.dur, accent: o.bass.length > 0, pan: ((at.x - 540) / 540) * 0.6, ...voice });
       if (s.visual) {
         s.lastHit.set(o.midi, o.t);
-        s.ripples.push({ x: at.x, y: at.y + BALL_R, t0: o.t, midi: o.midi });
-        burst(s.sparks, s.fxRng, at.x, at.y + BALL_R, o.bass.length ? 12 : 7, 360, rgbToCss(lighten(noteColor(s.theme, s, o.midi), 0.3)), 7);
+        const c = contactAt(s, s.next);
+        const col = lighten(noteColor(s.theme, s, o.midi), 0.3);
+        if (is3D(s.p.style)) burst3(s, c, o.bass.length ? 14 : 8, 380, () => col);
+        else {
+          s.ripples.push({ x: c.x, y: c.y, t0: o.t, midi: o.midi, a: tiltOf(s.normals[s.next]) });
+          burst(s.sparks, s.fxRng, c.x, c.y, o.bass.length ? 12 : 7, 360, rgbToCss(col), 7);
+        }
       }
       s.next++;
     }
@@ -305,21 +388,33 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       emit({ type: 'reveal' });
       if (s.visual) {
         const at = s.lands[s.lands.length - 1];
-        burst(s.sparks, s.fxRng, at.x, at.y, 90, 1300, () => rgbToCss(paletteAt(s.theme.palette, s.fxRng.next())), 9);
+        if (is3D(s.p.style)) burst3(s, at, 140, 1300, () => paletteAt(s.theme.palette, s.fxRng.next()));
+        else burst(s.sparks, s.fxRng, at.x, at.y, 90, 1300, () => rgbToCss(paletteAt(s.theme.palette, s.fxRng.next())), 9);
       }
     }
     if (s.visual) {
       // Cascade blocks shatter just after the ball leaves them.
-      if (s.p.style === 'cascade') {
+      if (s.p.style !== 'keys') {
         // (Not the last one: the ball comes to rest there.)
         while (s.nextBreak < s.onsets.length - 1 && s.onsets[s.nextBreak].t + BREAK_DELAY_S < end) {
-          const at = s.lands[s.nextBreak];
-          const col = rgbToCss(noteColor(s.theme, s, s.onsets[s.nextBreak].midi));
-          burst(s.sparks, s.fxRng, at.x, at.y + BALL_R + BLOCK_H / 2, 16, 420, col, 11);
+          const c = contactAt(s, s.nextBreak);
+          const col = noteColor(s.theme, s, s.onsets[s.nextBreak].midi);
+          if (is3D(s.p.style)) burst3(s, { ...c, y: c.y + BLOCK_H / 2 }, 22, 420, () => col);
+          else burst(s.sparks, s.fxRng, c.x, c.y + BLOCK_H / 2, 16, 420, rgbToCss(col), 11);
           s.nextBreak++;
         }
       }
       s.sparks = updateSparks(s.sparks, dt, 1700);
+      if (s.sparks3.length) {
+        for (const q of s.sparks3) {
+          q.vy += 1700 * dt;
+          q.x += q.vx * dt;
+          q.y += q.vy * dt;
+          q.z += q.vz * dt;
+          q.life -= dt;
+        }
+        if (s.sparks3.some((q) => q.life <= 0)) s.sparks3 = s.sparks3.filter((q) => q.life > 0);
+      }
       if (s.ripples.length && end - s.ripples[0].t0 > 0.6) s.ripples.shift();
     }
     s.t = end;
@@ -346,7 +441,9 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
     const sy = (y: number) => y - cam;
     const revealK = t >= s.revealAt ? t - s.revealAt : -1;
 
-    if (s.kb) drawKeyboard(ctx, theme, s, t, revealK);
+    const three = is3D(s.p.style);
+    if (three) drawCascade3D(ctx, theme, s, t, revealK);
+    else if (s.kb) drawKeyboard(ctx, theme, s, t, revealK);
     else drawBlocks(ctx, theme, s, t, cam, revealK);
     drawBassRail(ctx, theme, s, t);
 
@@ -357,7 +454,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       ctx.strokeStyle = rgbToCss(lighten(noteColor(theme, s, r.midi), 0.3), 0.7 * (1 - u));
       ctx.lineWidth = 6 * (1 - u) + 1;
       ctx.beginPath();
-      ctx.ellipse(r.x, sy(r.y), 24 + 90 * u, 8 + 26 * u, 0, 0, Math.PI * 2);
+      ctx.ellipse(r.x, sy(r.y), 24 + 90 * u, 8 + 26 * u, r.a, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.save();
@@ -365,7 +462,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
     drawSparks(ctx, s.sparks);
     ctx.restore();
 
-    drawBall(ctx, theme, s, s.arcs, s.onsets, t, cam, BALL_R, true);
+    if (!three) drawBall(ctx, theme, s, s.arcs, s.onsets, t, cam, BALL_R, true);
     if (t >= s.bassEnterAt) drawBall(ctx, theme, s, s.bassArcs, s.bass, t, 0, BASS_R, false);
 
     if (revealK >= 0 && revealK < 0.6) {
@@ -458,8 +555,24 @@ function splitTitle(title: string): string[] {
   return best < 0 ? [title] : [title.slice(0, best), title.slice(best + 1)];
 }
 
+/** A 2D bar's clockwise rotation for its normal (0 = flat). */
+const tiltOf = (n: Pt) => Math.atan2(n.x, -n.y);
+
+/** 3D spark burst at p (sim space), for the three.js styles. Visual only. */
+function burst3(s: State, p: Pt, n: number, power: number, color: () => RGB) {
+  for (let k = 0; k < n; k++) {
+    // A random direction on the sphere, biased upward so bursts spray off the bar.
+    const u = s.fxRng.range(-1, 0.4);
+    const a = s.fxRng.range(0, Math.PI * 2);
+    const h = Math.sqrt(1 - u * u);
+    const v = s.fxRng.range(0.25, 1) * power;
+    const life = s.fxRng.range(0.5, 1.3);
+    s.sparks3.push({ x: p.x, y: p.y, z: p.z, vx: h * Math.cos(a) * v, vy: u * v, vz: h * Math.sin(a) * v, life, maxLife: life, col: color() });
+  }
+}
+
 /** How lit a key/block is: a flash when struck, fading over ~0.4 s. */
-const glow = (since: number) => (since < 0 ? 0 : Math.exp(-since * 6));
+export const glow = (since: number) => (since < 0 ? 0 : Math.exp(-since * 6));
 
 function drawKeyboard(ctx: Ctx2D, theme: Theme, s: State, t: number, revealK: number) {
   const kb = s.kb!;
@@ -505,8 +618,8 @@ function drawBlocks(ctx: Ctx2D, theme: Theme, s: State, t: number, cam: number, 
   for (let i = Math.max(0, nextIdx - 2); i < s.onsets.length; i++) {
     const o = s.onsets[i];
     if (t > o.t + BREAK_DELAY_S && i < s.onsets.length - 1) continue;
-    const at = s.lands[i];
-    const y = at.y + BALL_R - cam;
+    const c = contactAt(s, i);
+    const y = c.y - cam;
     if (y > 1500) break;
     // Fade in from the bottom, clear of the bass rail.
     const fade = Math.min(1, Math.max(0, (1500 - y) / 160));
@@ -514,14 +627,18 @@ function drawBlocks(ctx: Ctx2D, theme: Theme, s: State, t: number, cam: number, 
     let l = glow(t - o.t);
     if (i === nextIdx) l = Math.max(l, 0.25 + 0.15 * dm.sin(t * 10));
     if (revealK >= 0) l = Math.max(l, 0.8 * Math.exp(-revealK));
+    // The bar's top surface passes through the contact point, leaning along its normal.
+    ctx.save();
     ctx.globalAlpha = fade;
+    ctx.translate(c.x, y);
+    ctx.rotate(tiltOf(s.normals[i]));
     ctx.fillStyle = rgbToCss(lighten(col, 0.1 + 0.6 * l), 0.82 + 0.18 * l);
     ctx.beginPath();
-    ctx.roundRect(at.x - BLOCK_W / 2, y, BLOCK_W, BLOCK_H, 9);
+    ctx.roundRect(-BLOCK_W / 2, 0, BLOCK_W, BLOCK_H, 9);
     ctx.fill();
     ctx.fillStyle = rgbToCss(lighten(col, 0.65), 0.9);
-    ctx.fillRect(at.x - BLOCK_W / 2 + 8, y + 3, BLOCK_W - 16, 4);
-    ctx.globalAlpha = 1;
+    ctx.fillRect(-BLOCK_W / 2 + 8, 3, BLOCK_W - 16, 4);
+    ctx.restore();
   }
 }
 

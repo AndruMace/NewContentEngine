@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Runner, getTheme } from '@sim/engine';
 import { MELODIES, getMelody } from '@sim/audio';
 import { bounceKeys } from './index';
-import { arcAt, buildTimeline, solveArc, tonicOf } from './timeline';
+import { BOUNCE_KEYS_STYLES } from './index';
+import { arcAt, bounceNormal, buildTimeline, solveArc, tonicOf } from './timeline';
 
 const theme = getTheme('neon-dark');
 const run = (melodyId: string, params: Record<string, unknown> = {}, seed = 1) =>
@@ -22,17 +23,45 @@ describe('timeline', () => {
   });
 
   it('solves hops that land exactly on target and peak above both ends', () => {
-    const a = solveArc(100, 900, 400, 1000, 2, 0.4, 700);
+    const a = solveArc({ x: 100, y: 900, z: -50 }, { x: 400, y: 1000, z: 70 }, 2, 0.4, 700);
     const end = arcAt(a, 2.4);
     expect(end.x).toBeCloseTo(400, 6);
     expect(end.y).toBeCloseTo(1000, 6);
+    expect(end.z).toBeCloseTo(70, 6);
     const apexT = -a.vy / a.g;
     expect(a.y0 + a.vy * apexT + 0.5 * a.g * apexT * apexT).toBeCloseTo(700, 6);
   });
 });
 
+describe('bar tilt', () => {
+  const reflect = (d: { x: number; y: number; z: number }, n: { x: number; y: number; z: number }) => {
+    const k = 2 * (d.x * n.x + d.y * n.y + d.z * n.z);
+    return { x: d.x - k * n.x, y: d.y - k * n.y, z: d.z - k * n.z };
+  };
+  const unit = (d: { x: number; y: number; z: number }) => {
+    const l = Math.hypot(d.x, d.y, d.z);
+    return { x: d.x / l, y: d.y / l, z: d.z / l };
+  };
+
+  it('mirrors the incoming direction onto the outgoing one', () => {
+    const vin = { x: 300, y: 900, z: 120 };
+    const vout = { x: 250, y: -700, z: -40 };
+    const out = unit(reflect(unit(vin), bounceNormal(vin, vout, 1.2)));
+    const want = unit(vout);
+    expect(out.x).toBeCloseTo(want.x, 9);
+    expect(out.y).toBeCloseTo(want.y, 9);
+    expect(out.z).toBeCloseTo(want.z, 9);
+  });
+
+  it('stays flat for a straight down-and-up bounce and never leans past the limit', () => {
+    expect(bounceNormal({ x: 0, y: 800, z: 0 }, { x: 0, y: -800, z: 0 }, 0.6)).toEqual({ x: 0, y: -1, z: 0 });
+    const steep = bounceNormal({ x: 900, y: 100, z: 0 }, { x: -900, y: -100, z: 0 }, 0.6);
+    expect(Math.acos(-steep.y)).toBeCloseTo(0.6, 9);
+  });
+});
+
 describe('bounce keys', () => {
-  it.each(['cascade', 'keys'])('lands every note on its beat (%s)', (style) => {
+  it.each([...BOUNCE_KEYS_STYLES])('lands every note on its beat (%s)', (style) => {
     for (const m of MELODIES) {
       const r = run(m.id, { style });
       const onsets = r.state.onsets;
@@ -47,13 +76,14 @@ describe('bounce keys', () => {
     }
   });
 
-  it.each(['cascade', 'keys'])('hops end on the landing points and rise above them (%s)', (style) => {
+  it.each([...BOUNCE_KEYS_STYLES])('hops end on the landing points and rise above them (%s)', (style) => {
     for (const id of ['fur-elise', 'toccata', 'saints']) {
       const s = run(id, { style }).state;
       s.arcs.forEach((a, i) => {
         const end = arcAt(a, a.t0 + a.dt);
         expect(end.x).toBeCloseTo(s.lands[i].x, 6);
         expect(end.y).toBeCloseTo(s.lands[i].y, 6);
+        expect(end.z).toBeCloseTo(s.lands[i].z, 6);
         const apexT = Math.max(0, -a.vy / a.g);
         const apexY = a.y0 + a.vy * apexT + 0.5 * a.g * apexT * apexT;
         expect(apexY).toBeLessThanOrEqual(Math.min(a.y0, s.lands[i].y) + 1e-6);
@@ -87,6 +117,28 @@ describe('bounce keys', () => {
     expect(bass.length).toBeGreaterThan(3);
     expect(bass[0].t).toBeGreaterThan(r.durationS * 0.3);
     expect(run('ode-to-joy', { bassBall: false }).events.some((e) => e.type === 'bassLand')).toBe(false);
+  });
+
+  it('can bring the bass ball in a quarter of the way through', () => {
+    for (const id of ['ode-to-joy', 'jingle-bells', 'twinkle']) {
+      const half = run(id).events.find((e) => e.type === 'bassLand')!;
+      const quarter = run(id, { bassEntry: 'quarter' }).events.find((e) => e.type === 'bassLand')!;
+      expect(quarter.t, id).toBeLessThan(half.t);
+      expect(quarter.t, id).toBeLessThan(32 * 0.35);
+    }
+  });
+
+  it('tilts cascade bars but keeps the keyboard flat', () => {
+    const tilted = run('fur-elise', { style: 'cascade' }).state.normals.filter((n) => Math.abs(n.x) > 0.05).length;
+    expect(tilted).toBeGreaterThan(10);
+    expect(run('fur-elise', { style: 'keys' }).state.normals.every((n) => n.x === 0 && n.y === -1)).toBe(true);
+  });
+
+  it('spreads the 3D layouts into depth', () => {
+    for (const style of ['cascade-3d', 'spiral', 'falling']) {
+      const zs = run('ode-to-joy', { style }).state.lands.map((l) => l.z);
+      expect(Math.max(...zs) - Math.min(...zs), style).toBeGreaterThan(150);
+    }
   });
 
   it('plays the chosen voice, or the theme\'s', () => {
