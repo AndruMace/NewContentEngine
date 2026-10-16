@@ -17,7 +17,7 @@ const TRAIL = 12;
 const rgb = (c: RGB, k = 1) => new THREE.Color((c[0] / 255) * k, (c[1] / 255) * k, (c[2] / 255) * k);
 
 /** Fog range (three.js units from the camera) per style: upcoming blocks fade into the background. */
-const FOG: Record<string, [number, number]> = { 'cascade-3d': [14, 32], spiral: [11, 25], falling: [13, 29] };
+const FOG: Record<string, [number, number]> = { 'cascade-3d': [14, 32], spiral: [10, 19], falling: [13, 29] };
 
 const view = sceneCache((s: State, theme: Theme) => {
   const scene = new THREE.Scene();
@@ -51,7 +51,8 @@ const view = sceneCache((s: State, theme: Theme) => {
     const along = s.p.style === 'spiral' ? new THREE.Vector3(-Math.sin(s.theta[i]), 0, Math.cos(s.theta[i])) : new THREE.Vector3(1, 0, 0);
     const xAxis = along.sub(up.clone().multiplyScalar(along.dot(up))).normalize();
     const zAxis = new THREE.Vector3().crossVectors(xAxis, up);
-    const m = new THREE.Matrix4().makeBasis(xAxis, up, zAxis);
+    // Short notes get short bars (scaled along their length only).
+    const m = new THREE.Matrix4().makeBasis(xAxis.multiplyScalar(s.sizes[i]), up, zAxis);
     m.setPosition(v3(contactAt(s, i)).sub(up.clone().multiplyScalar(BLOCK_H / U / 2)));
     matrices.push(m);
     blocks.setMatrixAt(i, m);
@@ -158,33 +159,102 @@ export function drawCascade3D(ctx: Ctx2D, theme: Theme, s: State, t: number, rev
   pos.needsUpdate = true;
   cols.needsUpdate = true;
 
-  placeCamera(v.camera, v.sun, s, t);
+  placeCamera(v.camera, v.sun, v.scene.fog as THREE.Fog, s, t);
   draw3D(ctx, v.scene, v.camera);
 }
 
-/** Each style's camera glides from landing to landing (never tracking every bounce). */
-function placeCamera(camera: THREE.PerspectiveCamera, sun: THREE.DirectionalLight, s: State, t: number) {
-  const { i, e } = followAt(s, t);
-  const j = Math.min(s.lands.length - 1, i + 1);
+/** Where the camera follows at time t: straight along the landings in time (no easing at each). */
+function pathAt(s: State, t: number): { p: Pt; ang: number } {
+  const n = s.lands.length;
+  const i = Math.max(0, Math.min(n - 1, landedIndex(s.onsets, t)));
+  const j = Math.min(n - 1, i + 1);
+  const u = t <= s.onsets[0].t || j === i ? 0 : Math.min(1, (t - s.onsets[i].t) / s.onsets[i].dur);
   const a = s.lands[i];
   const b = s.lands[j];
-  const f = v3({ x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, z: a.z + (b.z - a.z) * e });
+  const ang = s.theta.length ? s.theta[i] + (s.theta[j] - s.theta[i]) * u : 0;
+  return { p: { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, z: a.z + (b.z - a.z) * u }, ang };
+}
+
+/** The most the camera's height may trail the ball's (px), so long lobs and drops stay in frame. */
+const MAX_LAG_Y = 520;
+
+/**
+ * The ball's actual flight averaged over a window either side of t (triangular weights), so the
+ * camera glides through runs and held notes alike instead of stopping at every landing, and still
+ * follows a held note's lob and drop. The spiral's orbit angle averages the landing path. Computed
+ * from t alone, so any frame renders the same however the video is scrubbed.
+ */
+function smoothFollow(s: State, t: number, half: number): { p: Pt; ang: number; extent: number } {
+  const N = 24;
+  let w = 0;
+  const acc = { x: 0, y: 0, z: 0, ang: 0, extent: 0 };
+  for (let k = -N; k <= N; k++) {
+    const wk = 1 - Math.abs(k) / (N + 1);
+    const tk = t + (k / N) * half;
+    const b = ballAt(s.arcs, s.onsets, tk);
+    acc.x += b.x * wk;
+    acc.y += b.y * wk;
+    acc.z += b.z * wk;
+    acc.ang += pathAt(s, tk).ang * wk;
+    acc.extent += hopExtent(s, tk) * wk;
+    w += wk;
+  }
+  const p = { x: acc.x / w, y: acc.y / w, z: acc.z / w };
+  const by = ballAt(s.arcs, s.onsets, t).y;
+  p.y = Math.min(by + MAX_LAG_Y, Math.max(by - MAX_LAG_Y, p.y));
+  return { p, ang: acc.ang / w, extent: acc.extent / w };
+}
+
+/** How tall the hop in flight at t is (its rise plus its drop, px): big for a held note's lob. */
+function hopExtent(s: State, t: number): number {
+  const i = landedIndex(s.onsets, t);
+  if (i < 0 || i + 1 >= s.arcs.length) return 0;
+  const a = s.arcs[i + 1];
+  const rise = a.vy < 0 ? (a.vy * a.vy) / (2 * a.g) : 0;
+  return rise + Math.max(0, s.lands[i + 1].y - s.lands[i].y);
+}
+
+/** Extra camera distance (three.js units) for a hop of this extent, so its destination stays in view. */
+const pullBack = (extent: number) => Math.max(0, extent - 500) / 100 * 0.9;
+
+/**
+ * Each style's camera follows the ball's landings. Falling eases from landing to landing; the
+ * spiral and the 3D cascade glide on a smoothed path, since their sideways and orbiting motion
+ * looks jerky when it stops at every note.
+ */
+function placeCamera(camera: THREE.PerspectiveCamera, sun: THREE.DirectionalLight, fog: THREE.Fog, s: State, t: number) {
+  const [near, far] = FOG[s.p.style] ?? [10, 30];
   const look = new THREE.Vector3();
-  if (s.p.style === 'spiral') {
-    // Orbit outside the tower, looking in at the column.
-    const ang = s.theta[i] + (s.theta[j] - s.theta[i]) * e;
-    // Aimed about one note ahead: the block just left has shattered, so what's on screen is what's next.
-    const phi = ang + 0.5;
-    camera.position.set(Math.cos(phi) * 12.5, f.y + 3.6, Math.sin(phi) * 12.5);
-    look.set(Math.cos(phi) * 2.3, f.y + 0.3, Math.sin(phi) * 2.3);
-  } else if (s.p.style === 'falling') {
+  if (s.p.style === 'falling') {
+    const { i, e } = followAt(s, t);
+    const j = Math.min(s.lands.length - 1, i + 1);
+    const a = s.lands[i];
+    const b = s.lands[j];
+    const f = v3({ x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, z: a.z + (b.z - a.z) * e });
     // High above, looking down the drop: blocks rush up toward the lens as the camera descends.
     camera.position.set(f.x * 0.3, f.y + 12, f.z * 0.3 + 0.8);
     look.set(f.x * 0.3, f.y - 3, f.z * 0.3);
+  } else if (s.p.style === 'spiral') {
+    const sm = smoothFollow(s, t, 0.9);
+    const f = v3(sm.p);
+    // Orbit outside the tower, looking in at the column, aimed a little ahead: the block just left
+    // has shattered, so what's on screen is what's next. Big hops pull the camera back (and the
+    // fog with it) so the bar the ball is heading for stays in view.
+    const back = pullBack(sm.extent);
+    const phi = sm.ang + 0.25;
+    camera.position.set(Math.cos(phi) * (12.5 + back), f.y + 3.6 + back * 0.15, Math.sin(phi) * (12.5 + back));
+    look.set(Math.cos(phi) * 2.3, f.y + 0.3 - back * 0.35, Math.sin(phi) * 2.3);
+    fog.near = near + back;
+    fog.far = far + back;
   } else {
-    // In front and above, tilted down at the cascade, with a slow sway.
-    camera.position.set(f.x * 0.25 + 0.5 * Math.sin(t * 0.3), f.y + 3.2, 16.5);
-    look.set(f.x * 0.25, f.y + 0.5, 0);
+    const sm = smoothFollow(s, t, 0.8);
+    const f = v3(sm.p);
+    // In front and above, tilted down at the cascade, with a slow sway; pulled back for big hops.
+    const back = pullBack(sm.extent);
+    camera.position.set(f.x * 0.25 + 0.5 * Math.sin(t * 0.3), f.y + 3.2 + back * 0.15, 16.5 + back);
+    look.set(f.x * 0.25, f.y + 0.5 - back * 0.35, 0);
+    fog.near = near + back;
+    fog.far = far + back;
   }
   camera.lookAt(look);
   sun.position.copy(look).add(new THREE.Vector3(3, 7, 4));

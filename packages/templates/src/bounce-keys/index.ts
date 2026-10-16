@@ -4,7 +4,8 @@ import * as dm from '@sim/physics/math';
 import { burst, drawSparks, updateSparks, type Spark } from '../fx';
 import { drawAnswer, drawCommentPrompt } from '../guess';
 import { gaussFit } from '../scoring';
-import { arcAt, bounceNormal, buildTimeline, riseFor, solveArc, type Arc, type Onset, type Pt } from './timeline';
+import { arcAt, buildTimeline, type Arc, type Onset, type Pt } from './timeline';
+import { layoutCascade, layoutLevel } from './hops';
 import { drawCascade3D } from './view3d';
 
 export const BOUNCE_KEYS_STYLES = ['cascade', 'keys', 'cascade-3d', 'spiral', 'falling'] as const;
@@ -38,14 +39,10 @@ const WHITE_H = 220;
 const BLACK_H = 135;
 /** Cascade: where the current landing sits on screen; blocks scroll up past it. */
 const ANCHOR = 980;
-/** Cascade: how far the blocks step down per second of music. */
-const DROP_PER_S = 250;
 export const BLOCK_W = 118;
 export const BLOCK_H = 30;
 /** The steepest a bar tilts from flat to bounce the ball on toward the next note. */
-const MAX_TILT = 0.6;
-/** 3D styles: how far the blocks step down per second of music. */
-const DROP_3D: Record<string, number> = { 'cascade-3d': 250, spiral: 230, falling: 320 };
+const MAX_TILT = 0.35;
 /** Cascade: blocks shatter this long after the ball lands on them. */
 export const BREAK_DELAY_S = 0.07;
 /** The bass rail along the bottom (top of its pads). */
@@ -102,6 +99,10 @@ export interface State {
   theta: number[];
   /** arcs[i] ends on landing i (arcs[0] is the drop-in). */
   arcs: Arc[];
+  /** Gravity of each hop after a note (one per song, drifting slowly). */
+  gravity: number[];
+  /** Bar length per landing (share of full): short notes get short bars. */
+  sizes: number[];
   bass: BassNote[];
   bassArcs: Arc[];
   /** When the bass ball starts dropping in (Infinity: never). */
@@ -227,64 +228,76 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
     const pitches = onsets.map((o) => o.midi);
     const lo = Math.min(...pitches);
     const hi = Math.max(...pitches);
-    const durs = onsets.map((o) => o.dur).sort((a, b) => a - b);
-    const refDt = durs[durs.length >> 1];
     const kb = p.style === 'keys' ? keyboardFor(lo - 1, hi + 1) : null;
     /** Pitch as a 0..1 fraction of the song's range. */
     const frac = (midi: number) => (hi === lo ? 0.5 : (midi - lo) / (hi - lo));
 
-    // Landing points. Keys: on the keyboard. The cascades step down in proportion to the time
-    // between notes (so the camera scrolls steadily), with pitch across the screen; the spiral puts
-    // pitch on the distance from the column and turns with time; falling puts pitch up the screen
-    // (seen from above) and zigzags across it.
-    const lands: Pt[] = [];
-    const theta: number[] = [];
-    let y = 0;
-    let angle = rng.range(0, Math.PI * 2);
-    const drop = DROP_3D[p.style] ?? DROP_PER_S;
-    onsets.forEach((o, i) => {
-      if (kb) {
-        lands.push({ x: keyX(kb, o.midi), y: KEY_TOP - BALL_R, z: 0 });
-        return;
-      }
-      if (i > 0) y += Math.max(60, drop * onsets[i - 1].dur * rng.range(0.8, 1.2));
-      const f = frac(o.midi);
+    // Where pitch would like each landing (the physics decides where it really lands). The cascades
+    // put pitch across the screen (3D adds a slow drift in depth); the spiral puts it on the
+    // distance from the column while turning round it; falling puts it up the screen as seen from
+    // above, zigzagging across.
+    const phase = rng.range(0, Math.PI * 2);
+    const pitchX = (i: number) => 170 + 740 * frac(onsets[i].midi);
+    const target = (i: number, at: Pt, dt: number): { x: number; z: number } => {
+      const f = frac(onsets[i].midi);
       if (p.style === 'spiral') {
-        if (i > 0) angle += Math.min(1.4, Math.max(0.3, 1.1 * onsets[i - 1].dur));
+        const a = dm.atan2(at.z, at.x - 540) + Math.min(1.4, Math.max(0.3, 1.1 * dt));
         const r = 170 + 180 * f;
-        theta.push(angle);
-        lands.push({ x: 540 + r * Math.cos(angle), y, z: r * Math.sin(angle) });
-      } else if (p.style === 'falling') {
-        const side = i % 2 ? 1 : -1;
-        lands.push({ x: 540 + side * rng.range(50, 150), y, z: 330 - 660 * f });
-      } else if (p.style === 'cascade-3d') {
-        lands.push({ x: 170 + 740 * f, y, z: rng.range(-150, 150) });
-      } else {
-        lands.push({ x: 170 + 740 * f, y, z: 0 });
+        return { x: 540 + r * dm.cos(a), z: r * dm.sin(a) };
       }
-    });
+      if (p.style === 'falling') return { x: 540 + (i % 2 ? 110 : -110), z: 330 - 660 * f };
+      if (p.style === 'cascade-3d') return { x: pitchX(i), z: 150 * dm.sin(i * 0.35 + phase) };
+      return { x: pitchX(i), z: 0 };
+    };
+    const startAt = (): Pt => {
+      if (p.style === 'spiral') {
+        const r = 170 + 180 * frac(onsets[0].midi);
+        return { x: 540 + r * dm.cos(phase), y: 0, z: r * dm.sin(phase) };
+      }
+      const t0 = target(0, { x: 540, y: 0, z: 0 }, 0.5);
+      return { x: t0.x, y: 0, z: t0.z };
+    };
 
-    // Hops: the drop-in from above the screen, then one arc per note, rising more for longer notes.
-    // Falling looks straight down the drop, so hops toward the camera stay lower.
-    const maxRise = kb ? 500 : p.style === 'falling' ? 240 : 420;
-    let clamped = 0;
-    const top = kb ? -60 : lands[0].y - ANCHOR - 60;
-    const arcs: Arc[] = [solveArc({ ...lands[0], y: top }, lands[0], 0, LEAD_S, top)];
-    for (let i = 1; i < onsets.length; i++) {
-      const a = lands[i - 1];
-      const b = lands[i];
-      const r = riseFor(onsets[i - 1].dur, refDt, 150, 22, maxRise);
-      if (r.clamped) clamped++;
-      arcs.push(solveArc(a, b, onsets[i - 1].t, onsets[i - 1].dur, Math.min(a.y, b.y) - r.rise));
+    // Hops under one slowly drifting gravity. The keyboard can't move, so its hops are level; the
+    // cascades are laid out by the ball's own flight (falling looks down the drop, so it hops lower).
+    const layout = kb
+      ? layoutLevel(onsets, onsets.map((o) => ({ x: keyX(kb, o.midi), y: KEY_TOP - BALL_R, z: 0 })), LEAD_S, 500)
+      : layoutCascade(onsets, startAt(), LEAD_S, {
+          target,
+          bounds: p.style === 'spiral' ? { x: [150, 930], z: [-390, 390] } : p.style === 'falling' ? { x: [320, 760], z: [-360, 360] } : { x: [120, 960], z: [-180, 180] },
+          maxTilt: MAX_TILT,
+          // The spiral's targets already step round the column at a steady pace: follow them.
+          // Falling is seen from above, where only sideways travel shows, so it keeps moving sideways.
+          cruise: p.style === 'spiral' ? 900 : p.style === 'falling' ? 700 : undefined,
+          minShare: p.style === 'falling' ? 0.75 : undefined,
+          maxRadius: p.style === 'spiral' ? 400 : undefined,
+          // Fast runs ping round the column on the spiral, and across the screen elsewhere.
+          zigAxis:
+            p.style === 'spiral'
+              ? (at) => {
+                  const x = at.x - 540;
+                  const r = Math.sqrt(x * x + at.z * at.z) || 1;
+                  return { x: -at.z / r, z: x / r };
+                }
+              : undefined,
+          zigTurn: p.style === 'falling' ? Math.PI / 2 : undefined,
+          topDown: p.style === 'falling',
+          fastStep: p.style === 'falling' ? 150 : undefined,
+          keepRadius: p.style === 'spiral',
+          maxApex: p.style === 'falling' ? 240 : 420,
+        });
+    const { lands, normals, arcs, gravity, sizes } = layout;
+    const clamped = layout.capped;
+    // Spiral: each landing's angle round the column, unwrapped so the camera turns smoothly.
+    const theta: number[] = [];
+    if (p.style === 'spiral') {
+      for (const l of lands) {
+        let a = dm.atan2(l.z, l.x - 540);
+        if (theta.length) while (a < theta[theta.length - 1] - Math.PI) a += Math.PI * 2;
+        if (theta.length) while (a > theta[theta.length - 1] + Math.PI) a -= Math.PI * 2;
+        theta.push(a);
+      }
     }
-    // Each bar leans so the ball bounces off it toward the next note, as a real bounce would (the
-    // keyboard stays flat, and so does the last bar, where the ball comes to rest).
-    const normals = lands.map((_, i): Pt => {
-      if (kb || i + 1 >= arcs.length) return { x: 0, y: -1, z: 0 };
-      const vin = arcAt(arcs[i], Infinity);
-      const out = arcs[i + 1];
-      return bounceNormal(vin, { x: out.vx, y: out.vy, z: out.vz }, MAX_TILT);
-    });
 
     // The bass ball joins on the second time through the tune, or halfway if it plays once.
     const bass: BassNote[] = [];
@@ -301,14 +314,9 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
         bass.push({ t: o.t, dur: end - o.t, midi: o.bass[0], x: bassPads.find((b) => b.midi === o.bass[0])!.x });
       });
       if (bass.length) {
-        const padY = BASS_Y - BASS_R;
+        const bassLayout = layoutLevel(bass, bass.map((b) => ({ x: b.x, y: BASS_Y - BASS_R, z: 0 })), 0.7, 200);
         bassEnterAt = bass[0].t - 0.7;
-        bassArcs.push(solveArc({ x: bass[0].x, y: -80, z: 0 }, { x: bass[0].x, y: padY, z: 0 }, bassEnterAt, 0.7, -80));
-        const bassRef = [...bass].sort((a, b) => a.dur - b.dur)[bass.length >> 1].dur;
-        for (let i = 1; i < bass.length; i++) {
-          const r = riseFor(bass[i - 1].dur, bassRef, 110, 30, 200);
-          bassArcs.push(solveArc({ x: bass[i - 1].x, y: padY, z: 0 }, { x: bass[i].x, y: padY, z: 0 }, bass[i - 1].t, bass[i - 1].dur, padY - r.rise));
-        }
+        bassArcs.push(...bassLayout.arcs);
       }
     }
 
@@ -322,6 +330,8 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       normals,
       theta,
       arcs,
+      gravity,
+      sizes,
       bass,
       bassArcs,
       bassEnterAt,
@@ -634,10 +644,11 @@ function drawBlocks(ctx: Ctx2D, theme: Theme, s: State, t: number, cam: number, 
     ctx.rotate(tiltOf(s.normals[i]));
     ctx.fillStyle = rgbToCss(lighten(col, 0.1 + 0.6 * l), 0.82 + 0.18 * l);
     ctx.beginPath();
-    ctx.roundRect(-BLOCK_W / 2, 0, BLOCK_W, BLOCK_H, 9);
+    const w = BLOCK_W * s.sizes[i];
+    ctx.roundRect(-w / 2, 0, w, BLOCK_H, 9);
     ctx.fill();
     ctx.fillStyle = rgbToCss(lighten(col, 0.65), 0.9);
-    ctx.fillRect(-BLOCK_W / 2 + 8, 3, BLOCK_W - 16, 4);
+    ctx.fillRect(-w / 2 + 8, 3, w - 16, 4);
     ctx.restore();
   }
 }

@@ -120,17 +120,18 @@ export function arcAt(a: Arc, t: number): Pt & { vx: number; vy: number; vz: num
  * directions. Tilted no further than maxTilt from straight up, so bars never stand on end.
  */
 export function bounceNormal(vin: Pt, vout: Pt, maxTilt: number): Pt {
-  const li = Math.hypot(vin.x, vin.y, vin.z) || 1;
-  const lo = Math.hypot(vout.x, vout.y, vout.z) || 1;
+  // Only sqrt and arithmetic here, plus the deterministic trig: the layout must match in every engine.
+  const li = Math.sqrt(vin.x * vin.x + vin.y * vin.y + vin.z * vin.z) || 1;
+  const lo = Math.sqrt(vout.x * vout.x + vout.y * vout.y + vout.z * vout.z) || 1;
   let n = { x: vout.x / lo - vin.x / li, y: vout.y / lo - vin.y / li, z: vout.z / lo - vin.z / li };
-  const ln = Math.hypot(n.x, n.y, n.z);
+  const ln = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
   if (ln < 1e-9 || n.y >= 0) return { x: 0, y: -1, z: 0 };
   n = { x: n.x / ln, y: n.y / ln, z: n.z / ln };
   // Up is -y. Past maxTilt, keep the lean's direction but limit how far it leans.
-  if (-n.y >= Math.cos(maxTilt)) return n;
-  const h = Math.hypot(n.x, n.z);
-  const k = Math.sin(maxTilt) / h;
-  return { x: n.x * k, y: -Math.cos(maxTilt), z: n.z * k };
+  if (-n.y >= dm.cos(maxTilt)) return n;
+  const h = Math.sqrt(n.x * n.x + n.z * n.z);
+  const k = dm.sin(maxTilt) / h;
+  return { x: n.x * k, y: -dm.cos(maxTilt), z: n.z * k };
 }
 
 /**

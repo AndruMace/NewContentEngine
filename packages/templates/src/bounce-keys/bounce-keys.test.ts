@@ -4,6 +4,7 @@ import { MELODIES, getMelody } from '@sim/audio';
 import { bounceKeys } from './index';
 import { BOUNCE_KEYS_STYLES } from './index';
 import { arcAt, bounceNormal, buildTimeline, solveArc, tonicOf } from './timeline';
+import { FAST_TILT, GRAVITY_RATE } from './hops';
 
 const theme = getTheme('neon-dark');
 const run = (melodyId: string, params: Record<string, unknown> = {}, seed = 1) =>
@@ -126,6 +127,96 @@ describe('bounce keys', () => {
       expect(quarter.t, id).toBeLessThan(half.t);
       expect(quarter.t, id).toBeLessThan(32 * 0.35);
     }
+  });
+
+  it.each([...BOUNCE_KEYS_STYLES])('hops under one slowly drifting gravity, landing on top of gently tilted bars (%s)', (style) => {
+    const speedChanges: number[] = [];
+    const tilts: number[] = [];
+    for (const m of MELODIES) {
+      const s = run(m.id, { style }).state;
+      for (let i = 1; i < s.gravity.length; i++) expect(Math.abs(Math.log(s.gravity[i] / s.gravity[i - 1])), m.id).toBeLessThanOrEqual(GRAVITY_RATE + 1e-9);
+      // Bars lean gently; only in fast runs may they lean steeply to send the ball back and forth.
+      for (const n of s.normals) tilts.push(Math.acos(Math.min(1, -n.y)));
+      for (const n of s.normals) expect(Math.acos(Math.min(1, -n.y)), m.id).toBeLessThanOrEqual(FAST_TILT + 1e-6);
+      const ends = s.arcs.slice(1).map((a) => arcAt(a, Infinity));
+      // Every landing comes down onto its bar, never up into it.
+      for (const e of ends) expect(e.vy, m.id).toBeGreaterThan(0);
+      const sp = ends.map((e) => Math.hypot(e.vx, e.vy, e.vz));
+      for (let i = 1; i < sp.length; i++) speedChanges.push(Math.max(sp[i] / sp[i - 1], sp[i - 1] / sp[i]));
+      if (style === 'spiral') for (const l of s.lands) expect(Math.hypot(l.x - 540, l.z), m.id).toBeLessThanOrEqual(400 + 1e-6);
+      if (style === 'cascade') for (const l of s.lands) expect(l.x, m.id).toBeGreaterThanOrEqual(120 - 1e-6), expect(l.x, m.id).toBeLessThanOrEqual(960 + 1e-6);
+    }
+    // Speed follows the rhythm (that's physics), but a typical hop stays close to the last one.
+    speedChanges.sort((a, b) => a - b);
+    expect(speedChanges[speedChanges.length >> 1]).toBeLessThan(1.35);
+    // Most bars lean gently. (Falling is seen from straight above, where only sideways spacing keeps
+    // bars apart, so most of its hops use the steep fast-run bars.)
+    tilts.sort((a, b) => a - b);
+    if (style !== 'falling') expect(tilts[tilts.length >> 1]).toBeLessThanOrEqual(0.35 + 1e-6);
+  });
+
+  it.each(['cascade', 'cascade-3d', 'spiral', 'falling'])('keeps nearby bars from piling up, even in fast runs (%s)', (style) => {
+    // Bars overlap on screen when close sideways and (except seen from above) at about the same height.
+    let stacked = 0;
+    let pairs = 0;
+    for (const m of MELODIES) {
+      const s = run(m.id, { style }).state;
+      const ahead = style === 'falling' ? 3 : 6;
+      const before = stacked;
+      for (let i = 0; i < s.lands.length; i++) {
+        for (let j = i + 1; j <= Math.min(s.lands.length - 1, i + ahead); j++) {
+          const a = s.lands[i];
+          const b = s.lands[j];
+          const w = (118 * (s.sizes[i] + s.sizes[j])) / 2;
+          const [du, dv] = style === 'falling' ? [a.x - b.x, a.z - b.z] : [Math.hypot(a.x - b.x, a.z - b.z), a.y - b.y];
+          pairs++;
+          if (Math.abs(du) < w && Math.abs(dv) < 36) stacked++;
+        }
+      }
+      if ((style === 'cascade' || style === 'cascade-3d') && (m.id === 'turkish-march' || m.id === 'fur-elise')) expect(stacked - before, m.id).toBe(0);
+    }
+    expect(stacked / pairs).toBeLessThan(style === 'falling' ? 0.08 : 0.01);
+  });
+
+  it.each(['cascade', 'cascade-3d', 'spiral'])('zigzags fast runs back and forth between facing bars (%s)', (style) => {
+    for (const id of ['turkish-march', 'entertainer', 'toccata']) {
+      const s = run(id, { style }).state;
+      const steep = s.normals.map((n) => Math.acos(Math.min(1, -n.y)) > 0.36);
+      let pairs = 0;
+      let reversed = 0;
+      for (let i = 2; i < s.arcs.length; i++) {
+        if (!steep[i - 1] || !steep[i - 2]) continue;
+        // Each hop in a run heads back the opposite way to the one before.
+        const a = s.arcs[i - 1];
+        const b = s.arcs[i];
+        pairs++;
+        if (a.vx * b.vx + a.vz * b.vz < 0) reversed++;
+      }
+      if (id === 'turkish-march') expect(pairs).toBeGreaterThan(50);
+      // Rondo's runs always zigzag. The Entertainer's and Toccata's sit beside held notes, where
+      // gravity is low and a hard turn would need a bar on end, so some hops carry on instead: a
+      // few in the flat cascades, more on the spiral, where they circle on round the column.
+      if (!pairs) continue;
+      if (id === 'turkish-march') expect(reversed / pairs, id).toBe(1);
+      else if (style !== 'spiral') expect(reversed / pairs, id).toBeGreaterThanOrEqual(0.9);
+    }
+  });
+
+  it('gives short notes shorter bars', () => {
+    const s = run('toccata', { style: 'cascade' }).state;
+    const short = s.onsets.map((o, i) => ({ o, size: s.sizes[i] })).filter(({ o }) => o.dur < 0.15);
+    expect(short.length).toBeGreaterThan(3);
+    for (const { size } of short) expect(size).toBeLessThan(1);
+    expect(Math.min(...s.sizes)).toBeGreaterThanOrEqual(0.55);
+  });
+
+  it('puts short notes on bars close by and long notes further away', () => {
+    const s = run('fur-elise', { style: 'cascade' }).state;
+    const hops = s.arcs.slice(1).map((a, i) => ({ dt: a.dt, dist: Math.hypot(s.lands[i + 1].x - s.lands[i].x, s.lands[i + 1].y - s.lands[i].y) }));
+    const short = hops.filter((h) => h.dt < 0.3);
+    const long = hops.filter((h) => h.dt > 0.6);
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    expect(mean(long.map((h) => h.dist))).toBeGreaterThan(2 * mean(short.map((h) => h.dist)));
   });
 
   it('tilts cascade bars but keeps the keyboard flat', () => {
