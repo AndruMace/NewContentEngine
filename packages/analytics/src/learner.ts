@@ -139,8 +139,11 @@ function rawValues(x: LearnerInput, c: Catalog): Map<string, number> {
     v.set(`cta:${x.copy.ctaStyle}`, 1);
   }
   for (const variant of c.variants ?? []) {
-    const [, templateId, param, value] = /^(.+?)\.(.+?)=(.+)$/.exec(variant) ?? [];
-    if (templateId === x.arm.templateId && x.params && param in x.params) v.set(`variant:${variant}`, x.params[param] === value ? 1 : 0);
+    // "template.param=value", optionally "?otherParam=a,b": only applies when otherParam is a or b.
+    const [, templateId, param, value, whenParam, whenValues] = /^(.+?)\.(.+?)=([^?]+)(?:\?(.+?)=(.+))?$/.exec(variant) ?? [];
+    if (templateId !== x.arm.templateId || !x.params || !(param in x.params)) continue;
+    if (whenParam && !whenValues.split(',').includes(String(x.params[whenParam]))) continue;
+    v.set(`variant:${variant}`, x.params[param] === value ? 1 : 0);
   }
   if (x.params) {
     for (const spec of c.params ?? []) {

@@ -6,7 +6,7 @@
 import type { Rng } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import type { Team } from '../fx';
-import { OPPOSITE, POINTS_MOD, TOPS, type TopStats, type TopType } from './tops';
+import { FFA_MOD, OPPOSITE, POINTS_MOD, TOPS, type TopStats, type TopType } from './tops';
 import { POLY_N, contourPolygon, getDesign, type Design } from './designs';
 
 export type TopStatus = 'spinning' | 'down' | 'out';
@@ -60,8 +60,10 @@ export interface Arena {
   /** Extra resistance to knockouts, and extra randomness (points format). */
   hold: number;
   chaos: number;
-  /** Points format (per-type knockout resistance applies). */
+  /** Points format / free-for-all (their per-type tuning applies). */
   points: boolean;
+  /** Free-for-all tuning strength: 0 (duel/points), 0.5 (3 tops), 1 (4 tops). */
+  ffa: number;
   hitPower: number;
   /** Multiplier on every spin loss (decay, hits, grinding): sets how long rounds last without
    * changing who tends to win. */
@@ -178,7 +180,7 @@ export function inPocket(arena: Arena, x: number, y: number, extra = 0): boolean
 
 /** Outward speed that would carry this top out of the stadium at (x, y). */
 export function escapeSpeed(arena: Arena, t: Top, x: number, y: number): number {
-  const k = Math.sqrt(t.stats.mass) * t.stats.hold * (t.vsOpposite ? OPPOSITE[t.type].hold : 1) * (arena.points ? POINTS_MOD[t.type].hold : 1);
+  const k = Math.sqrt(t.stats.mass) * t.stats.hold * (t.vsOpposite ? OPPOSITE[t.type].hold : 1) * (arena.points ? POINTS_MOD[t.type].hold : 1) * (1 + (FFA_MOD[t.type].hold - 1) * arena.ffa);
   return (inPocket(arena, x, y) ? K.pocketLip : arena.wallLaunch) * k * arena.hold * arena.spin ** -K.holdExp;
 }
 
@@ -206,7 +208,19 @@ export function stepTops(tops: Top[], arena: Arena, dt: number, contact: Map<str
       uy = t.x / r;
     }
     let turn = K.curl * t.omega * t.dir;
-    const foe = live.find((o) => o !== t);
+    // Aggressive tops hunt the nearest opponent.
+    let foe: Top | undefined;
+    let fd2 = Infinity;
+    for (const o of live) {
+      if (o === t) continue;
+      const ex = o.x - t.x;
+      const ey = o.y - t.y;
+      const d2 = ex * ex + ey * ey;
+      if (d2 < fd2) {
+        fd2 = d2;
+        foe = o;
+      }
+    }
     if (foe && t.stats.aggression > 0) {
       const fx = foe.x - t.x;
       const fy = foe.y - t.y;
@@ -428,7 +442,7 @@ function collide(a: Top, b: Top, arena: Arena, dt: number, contact: Map<string, 
   // Every hit costs both tops spin (a random share: exactly how the contours bit).
   const same = a.dir === b.dir;
   const k = (same ? 1 : K.oppDrain * Math.max(1, 1 / arena.spin) ** K.oppLenExp) * K.hitDrain * arena.spin * (J + Jt);
-  const fragility = (t: Top) => t.stats.fragility * (t.vsOpposite ? OPPOSITE[t.type].fragility : 1) * (arena.points ? POINTS_MOD[t.type].fragility : 1);
+  const fragility = (t: Top) => t.stats.fragility * (t.vsOpposite ? OPPOSITE[t.type].fragility : 1) * (arena.points ? POINTS_MOD[t.type].fragility : 1) * (1 + (FFA_MOD[t.type].fragility - 1) * arena.ffa);
   a.omega = Math.max(0, a.omega - (k * fragility(a) * (0.5 + h.rng.next())) / ma);
   b.omega = Math.max(0, b.omega - (k * fragility(b) * (0.5 + h.rng.next())) / mb);
   // One clash event per contact (or a much harder hit within it).

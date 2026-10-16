@@ -177,6 +177,24 @@ describe('learner', () => {
     expect(predict(m, { arm: ring, params: { teams: 'countries' } }).mean).toBeCloseTo(predict(m, { arm: ring }).mean, 6);
   });
 
+  it('learns conditional variants only where they apply (player count in a free-for-all)', () => {
+    expect(catalog.variants).toContain('spin-battle.players=3?format=ffa');
+    const rng = new Rng(12);
+    const rows: TrainingRow[] = Array.from({ length: 80 }, () => {
+      const arm = { ...randomArm(rng), templateId: 'spin-battle' };
+      const format = rng.chance(0.5) ? 'ffa' : 'duel';
+      const players = rng.chance(0.5) ? '3' : '4';
+      const bonus = format === 'ffa' && players === '3' ? 0.8 : 0;
+      return { input: { arm, params: { format, players } }, reward: bonus + 0.8 * gauss(rng), weight: 1 };
+    });
+    const m = fitLearner(rows, catalog, { matured: 80 });
+    const arm = { templateId: 'spin-battle', themeId: 'sunset', lengthBucket: 'medium' as const, hookStyle: 'question' as const };
+    const p = (format: string, players: string) => predict(m, { arm, params: { format, players } }).mean;
+    expect(p('ffa', '3')).toBeGreaterThan(p('ffa', '4') + 0.2);
+    // In a duel the player count is just the unused default: it never moves the prediction.
+    expect(p('duel', '3')).toBeCloseTo(p('duel', '4'), 6);
+  });
+
   it('chooses experiments and is reproducible with a fixed seed', () => {
     const rng = new Rng(3);
     const rows: TrainingRow[] = Array.from({ length: 20 }, () => {

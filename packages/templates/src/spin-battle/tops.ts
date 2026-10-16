@@ -67,6 +67,18 @@ export const POINTS_MOD: Record<TopType, { fragility: number; hold: number }> = 
   balance: { fragility: 1, hold: 1 },
 };
 
+/**
+ * Free-for-all: with several opponents a top sitting in the middle gets hit from every side, and a
+ * heavy one soaks it all up, so types get their own spin cost per hit and knockout resistance there.
+ * Values are for 4 tops; with 3 (less crossfire) they apply at half strength.
+ */
+export const FFA_MOD: Record<TopType, { fragility: number; hold: number }> = {
+  attack: { fragility: 1, hold: 1 },
+  defense: { fragility: 1.3, hold: 1 },
+  stamina: { fragility: 0.6, hold: 1 },
+  balance: { fragility: 1, hold: 1 },
+};
+
 export function resolveMatchup(m: Matchup, rng: Rng): [TopType, TopType] {
   let pair: [TopType, TopType];
   if (m === 'random') {

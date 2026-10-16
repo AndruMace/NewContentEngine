@@ -65,6 +65,41 @@ describe('spin battle', () => {
     }
   }, 120_000);
 
+  it.each(['3', '4'])('free-for-all with %s tops: eliminated one at a time, deterministic', (players) => {
+    for (const seed of [1, 2, 3]) {
+      const a = run({ format: 'ffa', players }, seed, true);
+      const b = run({ format: 'ffa', players }, seed, false);
+      expect(a.timedOut).toBe(false);
+      expect(hashString(JSON.stringify(a.events))).toBe(hashString(JSON.stringify(b.events)));
+      expect(a.state.tops).toHaveLength(Number(players));
+      const elims = a.events.filter((e) => e.type === 'elim').map((e) => e.who);
+      const win = a.events.find((e) => e.type === 'win')!;
+      // Everyone but the winner goes out, once each (the last one with the final finish).
+      const last = a.events.find((e) => e.type === 'finish')!.loser;
+      expect(new Set([...elims, last]).size).toBe(Number(players) - 1);
+      expect([...elims, last]).not.toContain(win.who);
+    }
+  });
+
+  it('gives every type a fair chance in a 4-top free-for-all', () => {
+    const wins: Record<string, number> = {};
+    const games: Record<string, number> = {};
+    for (let seed = 0; seed < 300; seed++) {
+      const r = run({ format: 'ffa', players: '4' }, seed);
+      const win = r.events.find((e) => e.type === 'win')!;
+      r.state.tops.forEach((t, i) => {
+        games[t.type] = (games[t.type] ?? 0) + 1;
+        if (win.who === i) wins[t.type] = (wins[t.type] ?? 0) + 1;
+      });
+    }
+    // A fair share is 0.25.
+    for (const type of TOP_TYPES) {
+      const rate = (wins[type] ?? 0) / games[type];
+      expect(rate, type).toBeGreaterThan(0.14);
+      expect(rate, type).toBeLessThan(0.36);
+    }
+  }, 120_000);
+
   it('replays the deciding moment before the outro', () => {
     const on = run({ format: 'duel', replay: true }, 4);
     const off = run({ format: 'duel', replay: false }, 4);

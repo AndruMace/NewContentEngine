@@ -104,7 +104,16 @@ export interface PlannedVariant {
   guide: Record<string, string>;
   /** On-screen hook used verbatim for a value (overrides whatever the model writes). */
   hook?: Record<string, string>;
+  /**
+   * Only planned (and only learned from) when an earlier variant took one of these values, e.g. the
+   * player count only for a free-for-all. Unplanned, the param keeps its default.
+   */
+  when?: { param: string; values: readonly string[] };
 }
+
+/** Analytics key for one value of a planned variant (with its condition, if any). */
+export const variantKey = (templateId: string, v: PlannedVariant, value: string) =>
+  `${templateId}.${v.param}=${value}${v.when ? `?${v.when.param}=${v.when.values.join(',')}` : ''}`;
 
 export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   'ball-battle': [
@@ -203,16 +212,27 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   'spin-battle': [
     {
       param: 'format',
-      values: ['duel', 'points'],
+      values: ['duel', 'points', 'ffa'],
       guide: {
         duel: 'Format: duel (fixed for this video). One fight: the last top still spinning (or still in the stadium) wins.',
         points:
           'Format: points (fixed for this video). Several rounds: a spin finish (the loser runs out of spin) scores 1, an over finish (knocked out of the stadium) scores 2, first to {targetPoints} wins. "Who gets to {targetPoints} first?" angles work; in the CTA, {score} is the final score.',
+        ffa: 'Format: free-for-all (fixed for this video). Several tops in one stadium, knocked out or spun out one at a time until only one is left spinning. Their types are random (two of a kind can meet) and picked after you write, so don\'t name types; "last one spinning wins" and "pick your top" angles work. Never predict the winner.',
+      },
+    },
+    {
+      param: 'players',
+      values: ['4', '3'],
+      when: { param: 'format', values: ['ffa'] },
+      guide: {
+        '4': 'Players: 4 tops in the free-for-all (fixed for this video).',
+        '3': 'Players: 3 tops in the free-for-all (fixed for this video).',
       },
     },
     {
       param: 'matchup',
       values: ['attack-defense', 'attack-stamina', 'defense-stamina', 'mirror', 'random'],
+      when: { param: 'format', values: ['duel', 'points'] },
       guide: {
         'attack-defense':
           'Matchup: Attack vs Defense (fixed for this video). Attack races around and smashes into its rival; Defense is heavy and tries to absorb hits. Which colour/name gets which type is picked after you write, so name the types, not the tops. Never predict the winner.',
@@ -252,16 +272,25 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
 
 /** Seeded choice of every planned variant for a template ({} when it has none, consuming no randomness). */
 export function planVariants(templateId: string, rng: Rng): Record<string, string> {
-  return Object.fromEntries((PLANNED_VARIANTS[templateId] ?? []).map((v) => [v.param, rng.pick(v.values)]));
+  const out: Record<string, string> = {};
+  for (const v of PLANNED_VARIANTS[templateId] ?? []) {
+    if (v.when && !v.when.values.includes(out[v.when.param])) continue;
+    out[v.param] = rng.pick(v.values);
+  }
+  return out;
 }
 
 /** A hook fixed by one of the chosen variants, if any. */
 export const variantHook = (templateId: string, chosen: Record<string, unknown>): string | undefined =>
-  (PLANNED_VARIANTS[templateId] ?? []).map((v) => v.hook?.[chosen[v.param] as string]).find(Boolean);
+  applicableVariants(templateId, chosen).map((v) => v.hook?.[chosen[v.param] as string]).find(Boolean);
 
 /** Prompt lines describing the fixed variant choices. */
 export const variantGuide = (templateId: string, chosen: Record<string, unknown>): string[] =>
-  (PLANNED_VARIANTS[templateId] ?? []).flatMap((v) => (typeof chosen[v.param] === 'string' && v.guide[chosen[v.param] as string] ? [v.guide[chosen[v.param] as string]] : []));
+  applicableVariants(templateId, chosen).flatMap((v) => (typeof chosen[v.param] === 'string' && v.guide[chosen[v.param] as string] ? [v.guide[chosen[v.param] as string]] : []));
+
+/** The template's planned variants that apply given these params (conditions met). */
+const applicableVariants = (templateId: string, chosen: Record<string, unknown>) =>
+  (PLANNED_VARIANTS[templateId] ?? []).filter((v) => !v.when || v.when.values.includes(String(chosen[v.when.param])));
 
 /** Share of titles that lead with an emoji. The rest keep a comparison group for the analytics. */
 export const TITLE_EMOJI_SHARE = 0.75;

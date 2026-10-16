@@ -8,7 +8,7 @@ import { clamp01 } from '../scoring';
 import type { Team } from '../fx';
 import { HEAVY_HIT, POCKET_HALF, RIM, type Top } from './physics';
 import type { State, VsSlide } from './index';
-import { BEAT_S, DROP_S, VS_TOP } from './intro';
+import { BEAT_S, DROP_S, vsLayout } from './intro';
 
 /** Visual bowl depth: floor height = BOWL_H * r². */
 const BOWL_H = 0.16;
@@ -135,7 +135,6 @@ const LAUNCH_H = 0.46;
 /** Gap between the launcher and the top hanging from it. */
 const HANG = 0.115;
 const SHOWCASE_Y = 10;
-const SHOWCASE_D = 2.4;
 
 /** A launcher: body, pistol grip, the socket the top hangs from, and a toothed ripcord. */
 function buildLauncher(top: Top) {
@@ -323,7 +322,7 @@ const view = sceneCache((s: State, theme: Theme) => {
   });
   // The VS card's camera: far above the stadium (which is hidden then), looking straight ahead.
   const showcaseCam = new THREE.PerspectiveCamera(40, 1080 / 1920, 0.05, 20);
-  showcaseCam.position.set(0, SHOWCASE_Y, SHOWCASE_D);
+  showcaseCam.position.set(0, SHOWCASE_Y, 2.4);
   showcaseCam.lookAt(0, SHOWCASE_Y, 0);
   showcaseCam.updateMatrixWorld();
   return { scene, camera, tops, halo, sparks, impact, flash, stadium, launchers, shocks, showcaseCam };
@@ -437,6 +436,13 @@ function drawTops(v: View, s: State) {
       tilt = 0.25 + 0.95 * clamp01(sinceOut / 0.35);
       // Lying on its side it rests on the contour's edge, not the tip: lift it out of the floor.
       y += top.stats.radius * 0.75 * Math.sin(tilt);
+      // Free-for-all: a fallen top sinks away so the others don't spin through it (and the winner
+      // stays where it is to the end).
+      if (s.p.format === 'ffa' && top.idx !== s.winner) {
+        const sink = clamp01((sinceOut - 1) / 0.5);
+        y -= 0.3 * sink;
+        g.visible = g.visible && sink < 1;
+      }
     }
     g.position.set(x, y, z);
     tmpAxis.set(Math.cos(top.precess), 0, Math.sin(top.precess));
@@ -509,18 +515,25 @@ export function drawShowcase(ctx: Ctx2D, s: State, theme: Theme, sl: VsSlide) {
   for (const l of v.launchers) l.group.visible = false;
   for (const m of v.shocks) m.visible = false;
   const tanY = Math.tan((20 * Math.PI) / 180);
+  const layout = vsLayout(s.tops.length);
   s.tops.forEach((top, k) => {
     v.tops.forEach((tv, j) => (tv.group.visible = j === k));
     const tv = v.tops[k];
-    const c = VS_TOP[k];
-    const x = ((c.x - 540) / 540) * SHOWCASE_D * tanY * (1080 / 1920);
-    const y = SHOWCASE_Y + ((960 - c.y) / 960) * SHOWCASE_D * tanY;
+    const strip = layout.strips[k];
+    const c = strip.top;
+    // The camera distance sizes the top for its strip (smaller strips, smaller tops).
+    const d = strip.camD;
+    v.showcaseCam.position.set(0, SHOWCASE_Y, d);
+    v.showcaseCam.lookAt(0, SHOWCASE_Y, 0);
+    v.showcaseCam.updateMatrixWorld();
+    const x = ((c.x - 540) / 540) * d * tanY * (1080 / 1920);
+    const y = SHOWCASE_Y + ((960 - c.y) / 960) * d * tanY;
     tv.group.position.set(x, y - 0.06, 0);
     tv.group.rotation.set(0.95 + 0.04 * Math.sin(s.t * 3 + k), 0, 0);
     tv.spinner.quaternion.setFromAxisAngle(UP, -top.dir * s.t * 2.4);
     (tv.blur.material as THREE.MeshBasicMaterial).opacity = 0;
     tv.metal.emissiveIntensity = 0;
-    const o = k === 0 ? sl.a : sl.b;
+    const o = sl.o[k];
     ctx.save();
     ctx.translate(o.x, o.y);
     draw3D(ctx, v.scene, v.showcaseCam);

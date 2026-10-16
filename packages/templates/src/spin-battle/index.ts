@@ -4,16 +4,17 @@ import * as dm from '@sim/physics/math';
 import { COLOR_TEAMS, COUNTRY_TEAMS, pickDistinctTeams } from '../fx';
 import { clamp01, gaussFit } from '../scoring';
 import { FALL_AT, HEAVY_HIT, K, escapeSpeed, inPocket, makeTop, stepTops, type Arena, type FinishKind, type Top } from './physics';
-import { MATCHUPS, NAMED_TOPS, TOPS, resolveMatchup } from './tops';
+import { MATCHUPS, NAMED_TOPS, TOPS, TOP_TYPES, resolveMatchup } from './tops';
 import { pickDesign } from './designs';
-import { BEAT_S, DROP_S, VS_EXIT_S, VS_S, VS_SLAM, VS_TOP } from './intro';
+import { BEAT_S, DROP_S, VS_EXIT_S, VS_S, VS_SLAM, vsLayout } from './intro';
 import { drawShowcase, drawView, screenOf } from './view3d';
 
 export const spinBattleSchema = z.object({
-  format: z.enum(['duel', 'points']).default('duel').meta({ title: 'Format (one duel, or rounds to a points target)' }),
-  matchup: z.enum(MATCHUPS).default('random').meta({ title: 'Matchup (top types)' }),
+  format: z.enum(['duel', 'points', 'ffa']).default('duel').meta({ title: 'Format (one duel, rounds to a points target, or a 3-4 top free-for-all)' }),
+  players: z.enum(['3', '4']).default('4').meta({ title: 'Tops in a free-for-all' }),
+  matchup: z.enum(MATCHUPS).default('random').meta({ title: 'Matchup (top types; duel and points)' }),
   identity: z.enum(['colors', 'countries', 'named']).default('colors').meta({ title: 'Tops (colours, country flags or named tops)' }),
-  spins: z.enum(['random', 'right', 'opposite']).default('random').meta({ title: 'Spin directions (random per top, both right, or one each way)' }),
+  spins: z.enum(['random', 'right', 'opposite']).default('random').meta({ title: 'Spin directions (random per top, all right, or alternating)' }),
   targetPoints: z.number().int().min(2).max(5).default(3).meta({ title: 'Points to win (points format)' }),
   pockets: z.number().int().min(0).max(4).default(3).meta({ title: 'Rim pockets' }),
   bowlDepth: z.number().min(0.6).max(1.6).default(1).meta({ title: 'Bowl steepness', step: 0.05 }),
@@ -35,6 +36,9 @@ interface Banner {
   kind: FinishKind | 'draw';
   points: number;
   winner: number;
+  /** Free-for-all: the top that was just eliminated (-1 otherwise), and how many are left. */
+  out: number;
+  left: number;
   at: number;
 }
 
@@ -52,6 +56,10 @@ export interface State {
   fightT: number;
   round: number;
   score: [number, number];
+  /** The round has been decided (the survivor spins on, silently). */
+  roundOver: boolean;
+  /** Free-for-all: tops in the order they were eliminated. */
+  eliminated: number[];
   phase: Phase;
   phaseAt: number;
   /** Countdown beats emitted this round (3, 2, 1, GO). */
@@ -139,8 +147,8 @@ const PANEL_TOP = 1920 * 0.155;
 const POINTS: Record<FinishKind, number> = { spin: 1, pocket: 2, wall: 2 };
 export const MAX_RPM = 9800;
 
-const otherOf = (s: State, t: Top) => s.tops[1 - t.idx];
-const roundLive = (s: State) => s.phase === 'fight' && s.banner === null;
+const roundLive = (s: State) => s.phase === 'fight' && !s.roundOver;
+const ffa = (s: State) => s.p.format === 'ffa';
 const nameOf = (t: Top) => `${t.team.icon ? t.team.icon + ' ' : ''}${t.team.label}`;
 
 function startRound(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => void) {
@@ -152,13 +160,16 @@ function startRound(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => void)
   s.beats = 0;
   s.fightT = 0;
   s.banner = null;
+  s.roundOver = false;
   s.threatsThisRound = 0;
   s.inThreat = false;
   s.leader = -1;
   s.contact.clear();
   const a0 = rng.range(0, Math.PI * 2);
+  // Launch spots spread evenly round the bowl (opposite sides for a duel).
+  const n = s.tops.length;
   s.tops.forEach((top, i) => {
-    const a = a0 + i * Math.PI + (i ? rng.range(-0.5, 0.5) : 0);
+    const a = a0 + (i * Math.PI * 2) / n + (i ? rng.range(-0.5, 0.5) * (2 / n) : 0);
     const d = rng.range(0.45, 0.62);
     const sp = K.launch * p.launchPower * rng.range(0.85, 1.15);
     // Launched roughly along the bowl (the way it curls: counter-clockwise for right spin), with a
@@ -189,6 +200,28 @@ function resolveRound(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => voi
   const { p } = s;
   const done = s.pending;
   s.pending = [];
+  if (ffa(s)) {
+    const alive = s.tops.filter((x) => x.status === 'spinning');
+    for (const d of done) s.eliminated.push(d.top.idx);
+    if (alive.length >= 2) {
+      // Eliminations: a banner and a moment of slow motion, and the rest fight on.
+      for (const d of done) emit({ type: 'elim', who: d.top.idx, kind: d.kind, left: alive.length, x: Math.round(d.top.x * 100) / 100 });
+      const last = done[done.length - 1];
+      s.banner = { kind: last.kind, points: 0, winner: -1, out: last.top.idx, left: alive.length, at: t };
+      if (p.slowMotion) {
+        s.slowHoldUntil = Math.max(s.slowHoldUntil, t + 0.55);
+        s.focusX = last.top.x;
+        s.focusY = last.top.y;
+      }
+      s.inThreat = false;
+      return;
+    }
+    // The last one standing wins (if the last two went down together, the one with more spin).
+    const champ = alive[0] ?? [...done].sort((a, b) => b.top.omega - a.top.omega || a.top.idx - b.top.idx)[0].top;
+    const loser = done.find((d) => d.top !== champ) ?? done[0];
+    finishMatch(s, t, emit, champ.idx, loser.top, loser.kind);
+    return;
+  }
   let winner: number;
   let kind: FinishKind | 'draw';
   if (done.length >= 2 || s.tops.every((x) => x.status !== 'spinning')) {
@@ -206,7 +239,8 @@ function resolveRound(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => voi
   }
   const points = kind === 'draw' ? 0 : POINTS[kind];
   if (winner >= 0) s.score[winner] += points;
-  s.banner = { kind, points, winner, at: t };
+  s.banner = { kind, points, winner, out: -1, left: 1, at: t };
+  s.roundOver = true;
   const loser = winner >= 0 ? s.tops[1 - winner] : done[0].top;
   if (p.slowMotion) {
     s.slowTarget = SLOW;
@@ -220,26 +254,48 @@ function resolveRound(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => voi
   const capped = s.round >= MAX_ROUNDS && (s.score[0] !== s.score[1] || s.round >= MAX_ROUNDS + 2);
   const over = p.format === 'duel' || Math.max(...s.score) >= p.targetPoints || capped;
   if (over) {
-    s.phase = 'over';
-    s.winner = p.format === 'duel' || s.score[0] === s.score[1] ? Math.max(0, winner) : s.score[0] > s.score[1] ? 0 : 1;
-    s.slowHoldUntil = t + (p.slowMotion ? 1.1 : 0);
-    s.finishAt = t;
-    s.finishSimT = s.simT;
-    // The replay looks between the two tops at the deciding moment.
-    s.finishX = (s.tops[0].x + s.tops[1].x) / 2;
-    s.finishY = (s.tops[0].y + s.tops[1].y) / 2;
-    if (p.replay) {
-      s.replayAt = t + LIVE_TAIL_S;
-      s.replayRt = s.simT - REPLAY_PRE_S;
-      s.endAt = s.replayAt + REPLAY_S;
-    } else s.endAt = t + (p.slowMotion ? 0.6 : 0.15);
-    const champ = s.tops[s.winner];
-    emit({ type: 'win', who: s.winner, kind, format: p.format, score: [...s.score], rpm: Math.round(champ.omega * 1000) / 1000 });
+    const champ = p.format === 'duel' || s.score[0] === s.score[1] ? Math.max(0, winner) : s.score[0] > s.score[1] ? 0 : 1;
+    endMatch(s, t, emit, champ, loser, kind);
   } else {
     s.phase = 'after';
     s.phaseAt = t;
     s.slowHoldUntil = t + (p.slowMotion ? 0.7 : 0);
   }
+}
+
+/** Free-for-all: the last elimination decides it. */
+function finishMatch(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => void, winner: number, loser: Top, kind: FinishKind) {
+  s.banner = { kind, points: 0, winner, out: loser.idx, left: 1, at: t };
+  s.roundOver = true;
+  if (s.p.slowMotion) {
+    s.slowTarget = SLOW;
+    s.focusX = loser.x;
+    s.focusY = loser.y;
+  }
+  s.inThreat = false;
+  const w = s.tops[winner];
+  emit({ type: 'finish', kind, winner, loser: loser.idx, points: 0, score: [0, 0], rpm: Math.round(w.omega * 1000) / 1000, round: s.round, x: Math.round(loser.x * 100) / 100 });
+  endMatch(s, t, emit, winner, loser, kind);
+}
+
+/** The match is decided: slow motion, then the replay (if on) and the outro. */
+function endMatch(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => void, winner: number, loser: Top, kind: FinishKind | 'draw') {
+  const { p } = s;
+  s.phase = 'over';
+  s.winner = winner;
+  s.slowHoldUntil = t + (p.slowMotion ? 1.1 : 0);
+  s.finishAt = t;
+  s.finishSimT = s.simT;
+  // The replay looks between the winner and the last top it beat, at the deciding moment.
+  const champ = s.tops[winner];
+  s.finishX = (champ.x + loser.x) / 2;
+  s.finishY = (champ.y + loser.y) / 2;
+  if (p.replay) {
+    s.replayAt = t + LIVE_TAIL_S;
+    s.replayRt = s.simT - REPLAY_PRE_S;
+    s.endAt = s.replayAt + REPLAY_S;
+  } else s.endAt = t + (p.slowMotion ? 0.6 : 0.15);
+  emit({ type: 'win', who: winner, kind, format: p.format, score: [...s.score], rpm: Math.round(champ.omega * 1000) / 1000, players: s.tops.length });
 }
 
 /** A finish is close: a top is flying at the rim fast enough to leave, or is about to topple. */
@@ -255,8 +311,7 @@ function threatNear(s: State): { x: number; y: number } | null {
       const hy = top.y + top.vy * k;
       if (vr > 0.8 * escapeSpeed(s.arena, top, hx, hy) && (vr > 2 || inPocket(s.arena, hx, hy, 0.15))) return { x: top.x, y: top.y };
     }
-    const other = otherOf(s, top);
-    if (top.omega < FALL_AT + 0.04 && other.status === 'spinning' && other.omega > top.omega + 0.03) return { x: top.x, y: top.y };
+    if (top.omega < FALL_AT + 0.04 && s.tops.some((o) => o !== top && o.status === 'spinning' && o.omega > top.omega + 0.03)) return { x: top.x, y: top.y };
   }
   return null;
 }
@@ -299,8 +354,8 @@ function simulate(s: State, sdt: number, t: number, emit: (e: Omit<SimEvent, 't'
   if (!live) return;
 
   // RPM lead changes (with a little hysteresis).
-  const [a, b] = s.tops;
-  const lead = a.omega > b.omega + 0.04 ? 0 : b.omega > a.omega + 0.04 ? 1 : s.leader;
+  const ranked = s.tops.filter((x) => x.status === 'spinning').sort((a, b) => b.omega - a.omega || a.idx - b.idx);
+  const lead = ranked.length > 1 && ranked[0].omega > ranked[1].omega + 0.04 ? ranked[0].idx : s.leader;
   if (lead !== s.leader) {
     if (s.leader >= 0) emit({ type: 'leadChange', to: lead });
     s.leader = lead;
@@ -381,12 +436,50 @@ function replayView(s: State, rt: number): State {
   };
 }
 
+const ORDINAL = ['1ST', '2ND', '3RD', '4TH'];
+
+/** Free-for-all HUD: one spin bar per top, stacked; eliminated tops greyed out with their place. */
+function drawRows(ctx: Ctx2D, s: State, theme: Theme) {
+  textOutlined(ctx, 'FREE FOR ALL  ·  LAST TOP SPINNING', 540, PANEL_TOP + 8, 34, theme.accent);
+  const rowH = 46;
+  const barX = 360;
+  const barW = 470;
+  const prelaunch = s.phase === 'countdown' || s.phase === 'drop' || s.phase === 'vs';
+  s.tops.forEach((top, k) => {
+    const y = PANEL_TOP + 40 + k * rowH;
+    const outAt = s.eliminated.indexOf(top.idx);
+    const out = outAt >= 0;
+    ctx.save();
+    ctx.globalAlpha *= out ? 0.4 : 1;
+    const st = TOPS[top.type];
+    const name = `${nameOf(top)} ${st.emoji}`;
+    textOutlined(ctx, name, barX - 14, y + rowH / 2, fitText(ctx, name, 28, 300), theme.text, 'right');
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath();
+    ctx.roundRect(barX, y + rowH * 0.2, barW, rowH * 0.6, rowH * 0.3);
+    ctx.fill();
+    const frac = out ? 0 : prelaunch ? 1 : top.omega;
+    ctx.fillStyle = top.flash > 0.3 ? '#ffffff' : top.wobbling && !out ? (Math.floor(s.t * 8) % 2 ? '#ff5a64' : top.team.color) : top.team.color;
+    ctx.beginPath();
+    ctx.roundRect(barX, y + rowH * 0.2, Math.max(0.001, barW * frac), rowH * 0.6, rowH * 0.3);
+    ctx.fill();
+    const tag = out ? `OUT · ${ORDINAL[s.tops.length - 1 - outAt]}` : `${(Math.round((frac * MAX_RPM) / 10) * 10).toLocaleString('en-US')} RPM`;
+    textOutlined(ctx, tag, barX + barW + 12, y + rowH / 2, 20, out ? '#ff5a64' : '#ffffff', 'left');
+    ctx.restore();
+  });
+}
+
 function drawPanel(ctx: Ctx2D, s: State, theme: Theme) {
   const alpha = panelAlpha(s);
   if (alpha <= 0) return;
   const { p } = s;
   ctx.save();
   ctx.globalAlpha = alpha;
+  if (ffa(s)) {
+    drawRows(ctx, s, theme);
+    ctx.restore();
+    return;
+  }
   const title = p.format === 'points' ? `ROUND ${s.round}  ·  FIRST TO ${p.targetPoints}` : 'LAST TOP SPINNING WINS';
   textOutlined(ctx, title, 540, PANEL_TOP + 8, 36, theme.accent);
   // Fighting-game spin bars, facing each other.
@@ -441,52 +534,50 @@ const vsExiting = (s: State) => s.round === 1 && s.phase === 'countdown' && s.t 
 const vsShowing = (s: State) => s.phase === 'vs' || vsExiting(s);
 
 export interface VsSlide {
-  /** Pixel offsets of the top (A) and bottom (B) halves. */
-  a: { x: number; y: number };
-  b: { x: number; y: number };
-  /** 0 → 1 as the halves split apart. */
+  /** Pixel offset of each contender's strip. */
+  o: { x: number; y: number }[];
+  /** 0 → 1 as the strips split apart. */
   exit: number;
   /** Seconds since VS slammed down (negative before). */
   slam: number;
 }
 
+/**
+ * Strips slide in from alternate sides, staggered. On the way out, a duel's two halves split up and
+ * down; a free-for-all's strips fly out sideways.
+ */
 export function vsSlide(s: State): VsSlide {
+  const n = s.tops.length;
   const inT = s.phase === 'vs' ? s.t - s.phaseAt : VS_S;
-  const eA = easeOut(clamp01(inT / 0.25));
-  const eB = easeOut(clamp01((inT - 0.1) / 0.25));
   const exit = s.phase === 'vs' ? 0 : easeIn(clamp01((s.t - s.phaseAt) / VS_EXIT_S));
-  return { a: { x: -(1 - eA) * 1100, y: -exit * 1150 }, b: { x: (1 - eB) * 1100, y: exit * 1150 }, exit, slam: inT - VS_SLAM };
+  const o = s.tops.map((_, k) => {
+    const side = k % 2 === 0 ? -1 : 1;
+    const e = easeOut(clamp01((inT - k * (n > 2 ? 0.07 : 0.1)) / 0.25));
+    return n > 2 ? { x: side * ((1 - e) * 1100 + exit * 1150), y: 0 } : { x: side * (1 - e) * 1100, y: side * exit * 1150 };
+  });
+  return { o, exit, slam: inT - VS_SLAM };
 }
 
-/** The VS card's diagonal split (video pixels at the left and right edges). */
-const SPLIT_L = 1010;
-const SPLIT_R = 920;
-
-function vsHalf(ctx: Ctx2D, k: number) {
+function vsStripPath(ctx: Ctx2D, st: ReturnType<typeof vsLayout>['strips'][number]) {
   ctx.beginPath();
-  if (k === 0) {
-    ctx.moveTo(-40, -40);
-    ctx.lineTo(1120, -40);
-    ctx.lineTo(1120, SPLIT_R - 3);
-    ctx.lineTo(-40, SPLIT_L - 3);
-  } else {
-    ctx.moveTo(-40, SPLIT_L + 3);
-    ctx.lineTo(1120, SPLIT_R + 3);
-    ctx.lineTo(1120, 1960);
-    ctx.lineTo(-40, 1960);
-  }
+  ctx.moveTo(-40, st.topL + 3);
+  ctx.lineTo(1120, st.topR + 3);
+  ctx.lineTo(1120, st.bottomR - 3);
+  ctx.lineTo(-40, st.bottomL - 3);
   ctx.closePath();
 }
 
-/** The two coloured halves (drawn under the 3D tops). */
+/** The coloured strips (drawn under the 3D tops). */
 function drawVsBackground(ctx: Ctx2D, s: State, sl: VsSlide) {
+  const layout = vsLayout(s.tops.length);
   s.tops.forEach((top, k) => {
-    const o = k === 0 ? sl.a : sl.b;
+    const o = sl.o[k];
     const col = hexToRgb(top.team.color);
-    const c = VS_TOP[k];
+    const strip = layout.strips[k];
+    const c = strip.top;
     ctx.save();
     ctx.translate(o.x, o.y);
-    vsHalf(ctx, k);
+    vsStripPath(ctx, strip);
     ctx.fillStyle = '#0b0b14';
     ctx.fill();
     ctx.clip();
@@ -499,7 +590,7 @@ function drawVsBackground(ctx: Ctx2D, s: State, sl: VsSlide) {
     // Speed stripes racing across each half (in opposite directions).
     ctx.strokeStyle = rgbToCss(lighten(col, 0.6), 0.09);
     ctx.lineWidth = 26;
-    const drift = ((s.t * 900) % 240) * (k === 0 ? 1 : -1);
+    const drift = ((s.t * 900) % 240) * (k % 2 === 0 ? 1 : -1);
     for (let i = -6; i < 12; i++) {
       const x = i * 240 + drift;
       ctx.beginPath();
@@ -509,7 +600,7 @@ function drawVsBackground(ctx: Ctx2D, s: State, sl: VsSlide) {
     }
     ctx.restore();
   });
-  // The bright slash between the halves.
+  // Bright slashes between the strips.
   if (sl.exit < 1) {
     ctx.save();
     ctx.globalAlpha = 1 - sl.exit;
@@ -517,10 +608,12 @@ function drawVsBackground(ctx: Ctx2D, s: State, sl: VsSlide) {
     ctx.lineWidth = 8;
     ctx.shadowColor = '#ffffff';
     ctx.shadowBlur = 24;
-    ctx.beginPath();
-    ctx.moveTo(-40, SPLIT_L + 0.04 * 40);
-    ctx.lineTo(1120, SPLIT_R - 0.04 * 40);
-    ctx.stroke();
+    for (const st of layout.strips.slice(1)) {
+      ctx.beginPath();
+      ctx.moveTo(-40, st.topL + 1.6);
+      ctx.lineTo(1120, st.topR - 1.6);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 }
@@ -533,29 +626,35 @@ function fitText(ctx: Ctx2D, text: string, size: number, maxW: number) {
 
 /** Names, types and the VS slam (drawn crisp, after bloom). */
 function drawVsText(ctx: Ctx2D, s: State, theme: Theme, sl: VsSlide) {
+  const layout = vsLayout(s.tops.length);
   s.tops.forEach((top, k) => {
-    const o = k === 0 ? sl.a : sl.b;
+    const strip = layout.strips[k];
+    const z = strip.scale;
     const st = TOPS[top.type];
     const light = rgbToCss(lighten(hexToRgb(top.team.color), 0.55));
-    const align: CanvasTextAlign = k === 0 ? 'left' : 'right';
-    const x = k === 0 ? 545 : 535;
-    const y0 = VS_TOP[k].y - 95;
+    const x = strip.textX;
+    const y0 = strip.top.y - 95 * z;
+    const maxW = 470;
     ctx.save();
-    ctx.translate(o.x, o.y);
+    ctx.translate(sl.o[k].x, sl.o[k].y);
     const name = nameOf(top);
-    textOutlined(ctx, name, x, y0, fitText(ctx, name, 66, 470), '#ffffff', align);
+    textOutlined(ctx, name, x, y0, fitText(ctx, name, 66 * z, maxW), '#ffffff', strip.align);
     const kind = `${st.emoji} ${st.label.toUpperCase()} · ${top.design.name.toUpperCase()}`;
-    textOutlined(ctx, kind, x, y0 + 74, fitText(ctx, kind, 46, 480), light, align);
-    textOutlined(ctx, st.tagline, x, y0 + 130, 32, 'rgba(255,255,255,0.92)', align);
-    textOutlined(ctx, top.dir > 0 ? 'RIGHT SPIN ↻' : 'LEFT SPIN ↺', x, y0 + 180, 28, theme.accent, align);
+    textOutlined(ctx, kind, x, y0 + 74 * z, fitText(ctx, kind, 46 * z, maxW), light, strip.align);
+    textOutlined(ctx, st.tagline, x, y0 + 130 * z, 32 * z, 'rgba(255,255,255,0.92)', strip.align);
+    textOutlined(ctx, top.dir > 0 ? 'RIGHT SPIN ↻' : 'LEFT SPIN ↺', x, y0 + 180 * z, 28 * z, theme.accent, strip.align);
     ctx.restore();
   });
   if (sl.slam < 0) return;
-  // VS slams down onto the split, with a flash.
+  // VS (or FREE FOR ALL) slams down onto a split, with a flash.
   const pop = clamp01(sl.slam / 0.12);
   const a = 1 - sl.exit;
-  textOutlined(ctx, 'VS', 540, (SPLIT_L + SPLIT_R) / 2, 210 * (1 + 1.4 * (1 - pop) ** 2), theme.accent, 'center', a * Math.min(1, sl.slam / 0.05));
-  if (sl.slam > 0.2) textOutlined(ctx, 'PICK A SIDE', 540, (SPLIT_L + SPLIT_R) / 2 + 125, 38, '#ffffff', 'center', a * clamp01((sl.slam - 0.2) / 0.2));
+  const many = s.tops.length > 2;
+  const big = many ? 'FREE FOR ALL' : 'VS';
+  const size = (many ? fitText(ctx, big, 130, 980) : 210) * (1 + 1.4 * (1 - pop) ** 2);
+  textOutlined(ctx, big, 540, layout.slamY, size, theme.accent, 'center', a * Math.min(1, sl.slam / 0.05));
+  // With 3-4 strips there's no room under the slam: the prompt goes in the free space at the bottom.
+  if (sl.slam > 0.2) textOutlined(ctx, many ? 'PICK YOUR TOP 👇' : 'PICK A SIDE', 540, many ? 1770 : layout.slamY + 125, many ? 46 : 38, '#ffffff', 'center', a * clamp01((sl.slam - 0.2) / 0.2));
   const flash = 0.5 * Math.exp(-sl.slam * 9);
   if (flash > 0.01) {
     ctx.fillStyle = `rgba(255,255,255,${flash.toFixed(3)})`;
@@ -600,7 +699,7 @@ export const spinBattle: Template<SpinBattleParams, State> = {
   name: 'Spin Top Battle',
   family: 'race',
   description:
-    'Rendered in 3D: two battle tops are launched into a bowl stadium after a 3-2-1 countdown and clash with sparks until one loses. A top loses by a spin finish (it runs out of spin, wobbles and topples) or an over finish (knocked out through a pocket in the rim or launched over the wall). Each top is a type: Attack (races around the rim, hits hardest, but burns its own spin), Defense (heavy, hard to knock out), Stamina (sits in the middle and outspins everything) or Balance (a bit of everything), in one of three contour designs per type (e.g. Tri-Blade, Sickle and Starburst attack rings); the contours really collide, so hooked blades catch and smooth rims glance off. Types change how a fight looks, but any type can win. Formats: a single duel, or a points match (spin finish 1 point, over finish 2, first to the target wins). Tops are colours, countries with their flag on top, or named tops (e.g. Ember Lynx, Frost Mammoth). Tops spin right (clockwise) or left: same-direction tops slam apart on contact, while opposite-direction tops curl round the bowl in opposite directions, meet head-on and swing round each other (with spins "random", which top spins which way is picked after you write). The deciding blow plays again as an instant replay from a low side angle. Live spin bars show each top\'s RPM. Length: roundLength sets how long a round typically lasts; a duel video runs about roundLength + 10 s, a points match about 3-4 rounds of (0.5 × roundLength + 3) s plus 8 s. It opens on a VS card showing both contenders (name, type, spin direction) for viewers to pick a side, then the tops hang in launchers for a 3-2-1 and drop in when the ripcords are pulled. Never use the word "Beyblade" (a trademark): call them spinning tops or battle tops.',
+    'Rendered in 3D: two battle tops are launched into a bowl stadium after a 3-2-1 countdown and clash with sparks until one loses. A top loses by a spin finish (it runs out of spin, wobbles and topples) or an over finish (knocked out through a pocket in the rim or launched over the wall). Each top is a type: Attack (races around the rim, hits hardest, but burns its own spin), Defense (heavy, hard to knock out), Stamina (sits in the middle and outspins everything) or Balance (a bit of everything), in one of three contour designs per type (e.g. Tri-Blade, Sickle and Starburst attack rings); the contours really collide, so hooked blades catch and smooth rims glance off. Types change how a fight looks, but any type can win. Formats: a single duel, a points match (spin finish 1 point, over finish 2, first to the target wins), or a free-for-all (ffa) with 3 or 4 tops (players) of random types, eliminated one at a time until one is left spinning; in a free-for-all the matchup setting doesn\'t apply. Tops are colours, countries with their flag on top, or named tops (e.g. Ember Lynx, Frost Mammoth). Tops spin right (clockwise) or left: same-direction tops slam apart on contact, while opposite-direction tops curl round the bowl in opposite directions, meet head-on and swing round each other (with spins "random", which top spins which way is picked after you write). The deciding blow plays again as an instant replay from a low side angle. Live spin bars show each top\'s RPM. Length: roundLength sets how long a round typically lasts; a duel video runs about roundLength + 10 s, a points match about 3-4 rounds of (0.5 × roundLength + 3) s plus 8 s. It opens on a VS card showing both contenders (name, type, spin direction) for viewers to pick a side, then the tops hang in launchers for a 3-2-1 and drop in when the ripcords are pulled. Never use the word "Beyblade" (a trademark): call them spinning tops or battle tops.',
   schema: spinBattleSchema,
   substeps: 4,
   glowScale: 0.4,
@@ -611,13 +710,20 @@ export const spinBattle: Template<SpinBattleParams, State> = {
   nudges: ['Pick your top 👇', 'Who keeps spinning? Call it 👇', 'Attack or stamina? 👇', 'Lock in your pick 👇', 'Which one goes flying? 👇', 'Comment your champion 👇'],
 
   init({ params: p, rng, visual }) {
+    const n = p.format === 'ffa' ? Number(p.players) : 2;
     const pool = p.identity === 'countries' ? COUNTRY_TEAMS : p.identity === 'named' ? NAMED_TOPS : COLOR_TEAMS;
-    const teams = pickDistinctTeams(pool, 2, rng, 140);
-    const types = resolveMatchup(p.matchup, rng);
+    const teams = pickDistinctTeams(pool, n, rng, n > 2 ? 110 : 140);
+    // Free-for-all: every top's type is random (two of a kind can meet).
+    const types = n > 2 ? Array.from({ length: n }, () => rng.pick(TOP_TYPES)) : resolveMatchup(p.matchup, rng);
     const first: 1 | -1 = rng.chance(0.5) ? 1 : -1;
-    const dirs: (1 | -1)[] = p.spins === 'right' ? [1, 1] : p.spins === 'opposite' ? [first, -first as 1 | -1] : [first, rng.chance(0.5) ? 1 : -1];
+    const dirs: (1 | -1)[] = Array.from({ length: n }, (_, i): 1 | -1 => {
+      if (p.spins === 'right') return 1;
+      if (p.spins === 'opposite') return i % 2 === 0 ? first : (-first as 1 | -1);
+      return i === 0 ? first : rng.chance(0.5) ? 1 : -1;
+    });
     const tops = types.map((type, i) => makeTop(i, type, teams[i], dirs[i], pickDesign(type, rng)));
-    for (const top of tops) top.vsOpposite = dirs[0] !== dirs[1];
+    // Opposite-spin tuning applies when most of a top's opponents spin the other way.
+    for (const top of tops) top.vsOpposite = 2 * dirs.filter((d) => d !== top.dir).length > n - 1;
     const pockets: number[] = [];
     const p0 = rng.range(0, Math.PI * 2);
     for (let k = 0; k < p.pockets; k++) pockets.push(p0 + (k / p.pockets) * Math.PI * 2);
@@ -626,13 +732,15 @@ export const spinBattle: Template<SpinBattleParams, State> = {
       rng,
       visual,
       tops,
-      arena: { G: K.bowl * p.bowlDepth, pockets, wallLaunch: p.wallLaunch, hold: p.format === 'points' ? K.pointsHold : 1, points: p.format === 'points', chaos: p.format === 'points' ? K.pointsChaos : 1, hitPower: p.hitPower, spin: BASE_ROUND_S / (p.roundLength * (p.format === 'points' ? POINTS_ROUND : 1)) },
+      arena: { G: K.bowl * p.bowlDepth, pockets, wallLaunch: p.wallLaunch, hold: p.format === 'points' ? K.pointsHold : 1, points: p.format === 'points', ffa: p.format === 'ffa' ? (Number(p.players) - 2) / 2 : 0, chaos: p.format === 'points' ? K.pointsChaos : 1, hitPower: p.hitPower, spin: BASE_ROUND_S / (p.roundLength * (p.format === 'points' ? POINTS_ROUND : 1)) },
       contact: new Map(),
       t: 0,
       simT: 0,
       fightT: 0,
       round: 0,
       score: [0, 0],
+      roundOver: false,
+      eliminated: [],
       phase: 'countdown',
       phaseAt: 0,
       beats: 0,
@@ -811,7 +919,7 @@ export const spinBattle: Template<SpinBattleParams, State> = {
     const cy = 1920 * 0.47;
     // Countdown: 3, 2, 1, GO!
     const since = s.t - s.phaseAt;
-    if (s.phase === 'countdown' || s.phase === 'drop' || (s.phase === 'fight' && s.t - s.launchAt < 0.5 && s.banner === null)) {
+    if (s.phase === 'countdown' || s.phase === 'drop' || (s.phase === 'fight' && s.t - s.launchAt < 0.5 && !s.roundOver)) {
       const beat = s.phase === 'countdown' ? Math.min(2, Math.floor(since / BEAT_S)) : 3;
       const local = s.phase === 'countdown' ? since - beat * BEAT_S : s.t - s.launchAt;
       const pop = Math.min(1, local / 0.12);
@@ -828,9 +936,11 @@ export const spinBattle: Template<SpinBattleParams, State> = {
       const b = s.banner;
       const age = s.t - b.at;
       const pop = Math.min(1, age / 0.15);
-      const a = Math.min(1, Math.max(0, (AFTER_S + 0.2 - age) / 0.25));
+      const a = Math.min(1, Math.max(0, ((ffa(s) && b.winner < 0 ? 1.1 : AFTER_S + 0.2) - age) / 0.25));
       textOutlined(ctx, FINISH_TEXT[b.kind], 540, cy - 30, 104 * (0.7 + 0.3 * pop), b.kind === 'spin' ? '#ffffff' : '#ff5a64', 'center', a);
-      if (b.winner >= 0) textOutlined(ctx, `+${b.points}  ${nameOf(s.tops[b.winner])}`, 540, cy + 60, 52, theme.accent, 'center', a * pop);
+      if (ffa(s) && b.winner < 0) textOutlined(ctx, `${nameOf(s.tops[b.out])} is out · ${b.left} left`, 540, cy + 60, 46, theme.accent, 'center', a * pop);
+      else if (ffa(s)) textOutlined(ctx, `${nameOf(s.tops[b.winner])} is the last top spinning!`, 540, cy + 60, fitText(ctx, `${nameOf(s.tops[b.winner])} is the last top spinning!`, 46, 1000), theme.accent, 'center', a * pop);
+      else if (b.winner >= 0) textOutlined(ctx, `+${b.points}  ${nameOf(s.tops[b.winner])}`, 540, cy + 60, 52, theme.accent, 'center', a * pop);
     }
     // Crown over the champion in the outro.
     if (s.endAt !== null && s.t >= s.endAt && s.winner >= 0) {
@@ -864,12 +974,16 @@ export const spinBattle: Template<SpinBattleParams, State> = {
           { kind: 'sfx', name: 'chime', vel: 0.45, pitch: 0.5 },
         ];
       case 'launch':
-        // Both ripcords yanked out.
+        // Every ripcord yanked out (two at most: more just sounds like noise).
         return [
           { kind: 'sfx', name: 'rip', vel: 0.85, pitch: 0.45, pan: -0.4 },
           { kind: 'sfx', name: 'rip', vel: 0.85, pitch: 0.6, pan: 0.4 },
           { kind: 'note', midi: 84, vel: 0.5, voice: 'bell', dur: 0.8 },
         ];
+      case 'elim':
+        return e.kind === 'spin'
+          ? [{ kind: 'sfx', name: 'clack', vel: 0.75, pitch: 0.15, pan }, { kind: 'sfx', name: 'boom', vel: 0.4 }, { kind: 'note', midi: 60 + 3 * (e.left as number), vel: 0.45, voice: 'bell', dur: 1 }]
+          : [{ kind: 'sfx', name: 'boom', vel: 0.8, pan }, { kind: 'sfx', name: 'clang', vel: 0.7, pitch: 0.15, pan }, { kind: 'note', midi: 60 + 3 * (e.left as number), vel: 0.45, voice: 'bell', dur: 1 }];
       case 'land':
         return [
           { kind: 'sfx', name: 'boom', vel: 0.75 },
@@ -952,8 +1066,10 @@ export const spinBattle: Template<SpinBattleParams, State> = {
       close = win.kind === 'spin' ? clamp01(1 - rpm / 0.45) : clamp01(win.t / Math.max(1, durationS - OUTRO_S - tail) - 0.2);
     }
     for (const c of clashes) {
+      // The winner was behind on spin in one of its own clashes.
       const w = c.w as number[];
-      comeback = Math.max(comeback, clamp01((w[1 - who] - w[who]) / 0.3));
+      const i = c.a === who ? 0 : c.b === who ? 1 : -1;
+      if (i >= 0) comeback = Math.max(comeback, clamp01((w[1 - i] - w[i]) / 0.3));
     }
     // Longest stretch with nothing happening, within rounds.
     let lull = 0;
@@ -966,12 +1082,20 @@ export const spinBattle: Template<SpinBattleParams, State> = {
     const lullFit = 1 - clamp01((lull - 3) / 5);
     const clashFit = 1 - dm.exp(-clashes.length / (6 * launches.length));
     const kinds = new Set(finishes.map((f) => (f.kind === 'spin' ? 'spin' : f.kind === 'draw' ? 'draw' : 'over')));
-    const variety = points ? (kinds.has('spin') && kinds.has('over') ? 1 : 0.4) : 1;
+    // Points: a mix of finishes. Free-for-all: eliminations spread through the fight, not bunched.
+    let variety = points ? (kinds.has('spin') && kinds.has('over') ? 1 : 0.4) : 1;
+    if (win.format === 'ffa') {
+      const land = events.find((e) => e.type === 'land')?.t ?? 0;
+      const outs = [...events.filter((e) => e.type === 'elim').map((e) => e.t), win.t];
+      const gaps = outs.map((x, i) => x - (i ? outs[i - 1] : land));
+      const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      variety = 1 - clamp01((Math.min(...gaps) / Math.max(mean, 0.1) < 0.25 ? 0.6 : 0) + (gaps[0] / Math.max(win.t - land, 1) < 0.1 ? 0.4 : 0));
+    }
     const drama = 0.3 * close + 0.2 * comeback + 0.15 * lullFit + 0.2 * clashFit + 0.15 * variety;
     return {
       total: durFit * (0.2 + 0.8 * drama),
       parts: { durFit, close, comeback, lullFit, clashFit, variety },
-      notes: [`${clashes.length} clashes`, `${finishes.map((f) => f.kind).join(', ')}`, `${events.filter((e) => e.type === 'threat').length} slow-motion moments`],
+      notes: [`${clashes.length} clashes`, `${[...events.filter((e) => e.type === 'elim'), ...finishes].map((f) => f.kind).join(', ')}`, `${events.filter((e) => e.type === 'threat').length} slow-motion moments`],
     };
   },
 };

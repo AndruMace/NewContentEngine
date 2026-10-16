@@ -61,7 +61,7 @@ aren't approved or exported.
 | `colliding-blocks` | bounce | Blocks 1 kg vs 100ⁿ kg: the collision counts spell the digits of π (3, 31, 314…), with a velocity-circle diagram |
 | `pathfinding-race` | kinetic | BFS, DFS, Dijkstra, A*, Greedy… race through the same maze/field; badges show who found the shortest route |
 | `fourier-drawing` | kinetic | Spinning circles draw a mystery country, US state, dinosaur, animal or mythical creature, 1 → 200 circles, then the reveal |
-| `spin-battle` | race | 3D: two battle tops (Attack, Defense, Stamina, Balance) clash in a bowl stadium after a 3-2-1 launch; spin finish or over finish (pocket / over the wall); single duel or first-to-N points match |
+| `spin-battle` | race | 3D: two battle tops (Attack, Defense, Stamina, Balance) clash in a bowl stadium after a 3-2-1 launch; spin finish or over finish (pocket / over the wall); single duel, first-to-N points match, or 3-4 top free-for-all |
 
 Themes: Neon Dark, Pastel Minimal, Retro CRT, Monochrome Gold, Sunset, Deep Ocean.
 Melodies: 15 public-domain tunes (Beethoven, Mozart, Grieg, Bach, Pachelbel, Joplin, traditional).
