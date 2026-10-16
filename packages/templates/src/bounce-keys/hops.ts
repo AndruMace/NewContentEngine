@@ -72,7 +72,16 @@ export interface Steer {
   fastStep?: number;
   /** Fast steps keep their distance from the centre line (x = 540, z = 0): round the spiral's column. */
   keepRadius?: boolean;
+  /**
+   * Real physics: one gravity for the whole song, and no bounce rising higher than the drop before
+   * it (vertical speed off a bar is at most RESTITUTION times the speed onto it). A held note finds
+   * its extra time in a longer drop, never a taller lob.
+   */
+  constantGravity?: boolean;
 }
+
+/** Constant gravity: the share of vertical speed a bounce keeps (a lively ball, like rubber on wood). */
+export const RESTITUTION = 0.85;
 
 /** A hop counts as fast when shorter than this share of the song's median note, or than FAST_S. */
 export const FAST_SHARE = 0.72;
@@ -122,8 +131,10 @@ export function layoutCascade(onsets: { t: number; dur: number }[], start: Pt, l
   // Held notes ease gravity down beforehand (rate-limited) rather than flying off screen or plunging,
   // but never below 20% of the song's base: much lower and the fast notes around them would only
   // skim flat, with no room to zigzag. A note too long even for that drops further onto its bar.
-  const gravity = durs.length ? gravityProfile(durs, { levelCap: steer.maxApex, floor: 0.2 }) : [];
   const g0 = durs.length ? baseGravity(durs) : 2500;
+  const gravity = !durs.length ? [] : steer.constantGravity ? durs.map(() => g0) : gravityProfile(durs, { levelCap: steer.maxApex, floor: 0.2 });
+  /** The most a bounce may rise off a bar given how fast the ball came down onto it. */
+  const bounceCap = () => (steer.constantGravity ? RESTITUTION * vin.y : Infinity);
   const m = durs.length ? median(durs) : 0.5;
   const sizes = barSizes(onsets);
   // A steady sideways speed: short notes become short hops at about the same pace instead of slow
@@ -163,6 +174,8 @@ export function layoutCascade(onsets: { t: number; dur: number }[], start: Pt, l
     const c = Math.min(0.42, Math.max(0.03, 0.15 - (0.15 * dm.log(dt / m)) / Math.LN2));
     let up = g * dt * (0.5 - c);
     let wasCapped = false;
+    // A bounce never rises above the drop it came from; the rest of the time is spent falling.
+    up = Math.min(up, bounceCap());
     if ((up * up) / (2 * g) > steer.maxApex) {
       up = Math.sqrt(2 * g * steer.maxApex);
       wasCapped = true;
@@ -217,7 +230,8 @@ export function layoutCascade(onsets: { t: number; dur: number }[], start: Pt, l
           ex = (nx * r0) / r1 - (at.x - 540);
           ez = (nz * r0) / r1 - at.z;
         }
-        return withinRing(at, { x: fitTo(ex / dt, at.x, dt, steer.bounds.x), y: -g * dt * up, z: fitTo(ez / dt, at.z, dt, steer.bounds.z) }, dt, steer.maxRadius);
+        const rise = Math.min(g * dt * up, bounceCap());
+        return withinRing(at, { x: fitTo(ex / dt, at.x, dt, steer.bounds.x), y: -rise, z: fitTo(ez / dt, at.z, dt, steer.bounds.z) }, dt, steer.maxRadius);
       };
       const fits = (v: Pt) => tiltOk(v, FAST_TILT) && !stacked(at, landAt(at, v, g, dt), sizes[i], sizes[i + 1]);
       const base = steer.fastStep ?? FAST_STEP;

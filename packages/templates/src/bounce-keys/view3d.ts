@@ -25,7 +25,7 @@ const view = sceneCache((s: State, theme: Theme) => {
   scene.environmentIntensity = 0.25;
   const [near, far] = FOG[s.p.style] ?? [10, 30];
   scene.fog = new THREE.Fog(new THREE.Color(theme.bg[1]), near, far);
-  const camera = new THREE.PerspectiveCamera(45, 1080 / 1920, 0.1, 80);
+  const camera = new THREE.PerspectiveCamera(45, 1080 / 1920, 0.1, 120);
   if (s.p.style === 'falling') camera.up.set(0, 0, -1);
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x1a1a28, 0.5));
@@ -215,7 +215,7 @@ function hopExtent(s: State, t: number): number {
 }
 
 /** Extra camera distance (three.js units) for a hop of this extent, so its destination stays in view. */
-const pullBack = (extent: number) => Math.max(0, extent - 500) / 100 * 0.9;
+const pullBack = (extent: number) => Math.min(22, (Math.max(0, extent - 500) / 100) * 0.9);
 
 /**
  * Each style's camera follows the ball's landings. Falling eases from landing to landing; the
@@ -230,7 +230,8 @@ function placeCamera(camera: THREE.PerspectiveCamera, sun: THREE.DirectionalLigh
     const j = Math.min(s.lands.length - 1, i + 1);
     const a = s.lands[i];
     const b = s.lands[j];
-    const f = v3({ x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, z: a.z + (b.z - a.z) * e });
+    // Constant gravity's long drops would leave a landing-to-landing camera behind: follow the ball.
+    const f = s.p.physics === 'constant' ? v3(smoothFollow(s, t, 0.5).p) : v3({ x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, z: a.z + (b.z - a.z) * e });
     // High above, looking down the drop: blocks rush up toward the lens as the camera descends.
     camera.position.set(f.x * 0.3, f.y + 12, f.z * 0.3 + 0.8);
     look.set(f.x * 0.3, f.y - 3, f.z * 0.3);

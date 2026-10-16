@@ -18,6 +18,10 @@ export const bounceKeysSchema = z.object({
   durationS: z.number().min(18).max(60).default(32).meta({ title: 'Length (s)' }),
   bassBall: z.boolean().default(true).meta({ title: 'Bass ball' }),
   bassEntry: z.enum(['half', 'quarter']).default('half').meta({ title: 'Bass ball joins' }),
+  // Eased: gravity drifts slowly so held notes and fast runs both stay easy to follow. Constant: one
+  // gravity per song and no bounce higher than its drop, with held notes taking long drops instead.
+  // The keyboard always eases (its keys can't move, so a held note can only lob).
+  physics: z.enum(['eased', 'constant']).default('eased').meta({ title: 'Gravity' }),
   voice: z.enum(['theme', 'marimba', 'bell', 'pluck', 'glass']).default('theme').meta({ title: 'Voice' }),
 });
 
@@ -188,9 +192,29 @@ export function followAt(s: State, t: number): { i: number; e: number } {
 /** 2D cascade camera offset (keys don't scroll). */
 function cameraY(s: State, t: number): number {
   if (s.p.style !== 'cascade') return 0;
+  // Constant gravity's long drops would leave a landing-to-landing camera behind: follow the ball.
+  if (s.p.physics === 'constant') return followBallY(s, t, 0.5, 560) - ANCHOR;
   const { i, e } = followAt(s, t);
   const j = Math.min(s.lands.length - 1, i + 1);
   return s.lands[i].y + (s.lands[j].y - s.lands[i].y) * e - ANCHOR;
+}
+
+/**
+ * The ball's height averaged over a window either side of t (triangular weights), never more than
+ * maxLag from where the ball really is. Computed from t alone, so frames render the same however
+ * the video is scrubbed.
+ */
+export function followBallY(s: State, t: number, half: number, maxLag: number): number {
+  const N = 16;
+  let w = 0;
+  let y = 0;
+  for (let k = -N; k <= N; k++) {
+    const wk = 1 - Math.abs(k) / (N + 1);
+    y += ballAt(s.arcs, s.onsets, t + (k / N) * half).y * wk;
+    w += wk;
+  }
+  const by = ballAt(s.arcs, s.onsets, t).y;
+  return Math.min(by + maxLag, Math.max(by - maxLag, y / w));
 }
 
 /** Where the ball touches landing i's bar (ball centre minus the radius along the bar's normal). */
@@ -284,6 +308,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
           topDown: p.style === 'falling',
           fastStep: p.style === 'falling' ? 150 : undefined,
           keepRadius: p.style === 'spiral',
+          constantGravity: p.physics === 'constant',
           maxApex: p.style === 'falling' ? 240 : 420,
         });
     const { lands, normals, arcs, gravity, sizes } = layout;

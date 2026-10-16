@@ -4,7 +4,7 @@ import { MELODIES, getMelody } from '@sim/audio';
 import { bounceKeys } from './index';
 import { BOUNCE_KEYS_STYLES } from './index';
 import { arcAt, bounceNormal, buildTimeline, solveArc, tonicOf } from './timeline';
-import { FAST_TILT, GRAVITY_RATE } from './hops';
+import { FAST_TILT, GRAVITY_RATE, RESTITUTION } from './hops';
 
 const theme = getTheme('neon-dark');
 const run = (melodyId: string, params: Record<string, unknown> = {}, seed = 1) =>
@@ -200,6 +200,31 @@ describe('bounce keys', () => {
       if (id === 'turkish-march') expect(reversed / pairs, id).toBe(1);
       else if (style !== 'spiral') expect(reversed / pairs, id).toBeGreaterThanOrEqual(0.9);
     }
+  });
+
+  it.each(['cascade', 'cascade-3d', 'spiral', 'falling'])('constant gravity: one gravity, no bounce above its drop, still on the beat (%s)', (style) => {
+    for (const m of MELODIES) {
+      const r = run(m.id, { style, physics: 'constant' });
+      const s = r.state;
+      expect(new Set(s.gravity).size, m.id).toBe(1);
+      for (const a of s.arcs.slice(1)) expect(a.g, m.id).toBe(s.gravity[0]);
+      for (let i = 1; i < s.arcs.length; i++) {
+        const into = arcAt(s.arcs[i - 1], Infinity).vy;
+        // Rising speed off a bar is at most RESTITUTION of the falling speed onto it, so the bounce
+        // tops out below the height the ball fell from.
+        if (s.arcs[i].vy < 0) expect(-s.arcs[i].vy, `${m.id} hop ${i}`).toBeLessThanOrEqual(RESTITUTION * into + 1e-6);
+      }
+      const lands = r.events.filter((e) => e.type === 'land');
+      lands.forEach((e, i) => expect(s.onsets[i].t - e.t, m.id).toBeLessThan(1 / 240 + 1e-9));
+    }
+    // Rondo still zigzags.
+    const s = run('turkish-march', { style, physics: 'constant' }).state;
+    const steep = s.normals.map((n) => Math.acos(Math.min(1, -n.y)) > 0.36);
+    for (let i = 2; i < s.arcs.length; i++) if (steep[i - 1] && steep[i - 2] && style !== 'falling') expect(s.arcs[i - 1].vx * s.arcs[i].vx + s.arcs[i - 1].vz * s.arcs[i].vz).toBeLessThan(0);
+  });
+
+  it('keeps the keyboard eased whatever the physics setting', () => {
+    expect(run('fur-elise', { style: 'keys', physics: 'constant' }).state.gravity).toEqual(run('fur-elise', { style: 'keys' }).state.gravity);
   });
 
   it('gives short notes shorter bars', () => {
