@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Runner, getTheme } from '@sim/engine';
 import { MELODIES, getMelody } from '@sim/audio';
 import { bounceKeys } from './index';
-import { BOUNCE_KEYS_STYLES } from './index';
+import { BOUNCE_KEYS_STYLES, formatCountdown } from './index';
 import { arcAt, bounceNormal, buildTimeline, solveArc, tonicOf } from './timeline';
 import { FAST_TILT, GRAVITY_RATE, RESTITUTION } from './hops';
 
@@ -231,6 +231,17 @@ describe('bounce keys', () => {
     const a = run('fur-elise', { paint: false });
     const b = run('fur-elise', { paint: true });
     expect(JSON.stringify(b.events)).toBe(JSON.stringify(a.events));
+  });
+
+  it('counts down to the reveal: the label text and a tick for each of the last three seconds', () => {
+    expect(formatCountdown(18.2)).toBe('0:19');
+    expect(formatCountdown(3)).toBe('0:03');
+    expect(formatCountdown(75)).toBe('1:15');
+    expect(formatCountdown(-1)).toBe('0:00');
+    const r = run('ode-to-joy');
+    const ticks = r.events.filter((e) => e.type === 'count');
+    expect(ticks.map((e) => e.n)).toEqual([3, 2, 1]);
+    ticks.forEach((e) => expect(r.state.revealAt - (e.n as number) - e.t).toBeLessThan(1 / 240 + 1e-9));
   });
 
   it('gives short notes shorter bars', () => {

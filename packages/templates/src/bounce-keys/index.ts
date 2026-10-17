@@ -58,6 +58,8 @@ const PAD_H = 16;
 const PROGRESS = { y: 310, w: 600 };
 const PROMPT = { x: 560, y: 400 };
 const ANSWER_Y = 720;
+/** The last seconds before the reveal count down 3-2-1 in big digits. */
+const FINAL_COUNT = 3;
 const GUESS_HOOK = 'Guess the song 🎵';
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
@@ -127,6 +129,8 @@ export interface State {
   nextBass: number;
   nextBreak: number;
   started: boolean;
+  /** Final countdown: the next digit to tick (3, 2, 1; 0 when done). */
+  nextCount: number;
   bassEntered: boolean;
   revealed: boolean;
   t: number;
@@ -380,6 +384,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       nextBass: 0,
       nextBreak: 0,
       started: false,
+      nextCount: FINAL_COUNT,
       bassEntered: false,
       revealed: false,
       t: 0,
@@ -426,6 +431,11 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       emit({ type: 'bassLand', midi: b.midi, dur: b.dur, pan: ((b.x - 540) / 540) * 0.5 });
       if (s.visual) s.lastBassHit.set(b.midi, b.t);
       s.nextBass++;
+    }
+    // Final countdown ticks, one per second (only if the song is long enough to have them).
+    while (s.nextCount > 0 && s.revealAt - s.nextCount < end) {
+      if (s.revealAt - s.nextCount >= s.onsets[0].t) emit({ type: 'count', n: s.nextCount });
+      s.nextCount--;
     }
     if (!s.revealed && s.revealAt < end) {
       s.revealed = true;
@@ -524,6 +534,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       drawMainBall(ctx, theme, s, t, cameraY(s, t));
     }
     drawProgress(ctx, theme, s, t);
+    drawCountdown(ctx, theme, s, t);
     if (t >= s.revealAt) {
       const since = t - s.revealAt - 0.2;
       const lines = splitTitle(s.title.toUpperCase());
@@ -568,6 +579,9 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
           { kind: 'note', midi: midi + 12, vel: 0.18, voice: 'pluck', dur: 0.5, pan },
         ];
       }
+      case 'count':
+        // A crisp tick per second, higher on the last.
+        return [{ kind: 'sfx', name: 'tick', vel: e.n === 1 ? 0.7 : 0.5 }];
       case 'bassEnter':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.45 }];
       case 'reveal':
@@ -596,15 +610,6 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
     };
   },
 };
-
-/** Long titles on two lines, split at the space nearest the middle. */
-function splitTitle(title: string): string[] {
-  if (title.length <= 16) return [title];
-  const mid = title.length / 2;
-  let best = -1;
-  for (let i = 0; i < title.length; i++) if (title[i] === ' ' && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) best = i;
-  return best < 0 ? [title] : [title.slice(0, best), title.slice(best + 1)];
-}
 
 /** A 2D bar's clockwise rotation for its normal (0 = flat). */
 const tiltOf = (n: Pt) => Math.atan2(n.x, -n.y);
@@ -873,6 +878,55 @@ function drawBall(ctx: Ctx2D, theme: Theme, s: State, arcs: Arc[], onsets: { t: 
   ctx.ellipse(pt.x, pt.y - cam + r * sq, rx, ry, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
+}
+
+/** Long titles on two lines, split at the space nearest the middle. */
+function splitTitle(title: string): string[] {
+  if (title.length <= 16) return [title];
+  const mid = title.length / 2;
+  let best = -1;
+  for (let i = 0; i < title.length; i++) if (title[i] === ' ' && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) best = i;
+  return best < 0 ? [title] : [title.slice(0, best), title.slice(best + 1)];
+}
+
+/** "0:18": seconds until the reveal, rounded up. */
+export function formatCountdown(seconds: number): string {
+  const n = Math.max(0, Math.ceil(seconds - 1e-9));
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
+}
+
+/**
+ * "ANSWER IN 0:18" under the progress bar, ticking down; in the last FINAL_COUNT seconds a big
+ * 3-2-1 pulses in the middle of the screen, one digit per second (each with a tick).
+ */
+function drawCountdown(ctx: Ctx2D, theme: Theme, s: State, t: number) {
+  const left = s.revealAt - t;
+  if (left <= 0) return;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.globalAlpha = Math.min(1, t / 0.5);
+  ctx.font = `800 28px ${FONT_FAMILY}`;
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = theme.textStroke;
+  const label = `ANSWER IN ${formatCountdown(left)}`;
+  ctx.strokeText(label, 540 - 12, PROGRESS.y + 40);
+  ctx.fillStyle = theme.text;
+  ctx.fillText(label, 540 - 12, PROGRESS.y + 40);
+  if (left <= FINAL_COUNT && s.revealAt - FINAL_COUNT >= s.onsets[0].t) {
+    const n = Math.ceil(left);
+    const into = n - left; // 0 when the digit appears, 1 as the next one takes over
+    const pop = 1 - Math.min(1, into * 5);
+    ctx.globalAlpha = 0.9 * (1 - 0.65 * into);
+    ctx.translate(540, ANSWER_Y);
+    ctx.scale(1 + 0.45 * pop * pop, 1 + 0.45 * pop * pop);
+    ctx.font = `900 260px ${FONT_FAMILY}`;
+    ctx.lineWidth = 16;
+    ctx.strokeText(String(n), 0, 0);
+    ctx.fillStyle = theme.accent;
+    ctx.fillText(String(n), 0, 0);
+  }
+  ctx.restore();
 }
 
 /** A thin bar that fills toward the reveal, with a lock at the end that opens. */
