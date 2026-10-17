@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, paramsJsonSchema } from '@sim/engine';
 import { TEMPLATES, getTemplate } from '@sim/templates';
-import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema, summarizePerformance, uploadCopyFromClaude, variantHook } from './index';
+import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema, summarizePerformance, uploadCopyFromClaude, variantHook, coerceParams, describeTemplate } from './index';
 
 describe('arm selection', () => {
   it('spreads arms across templates and respects the filters', () => {
@@ -307,5 +307,15 @@ describe('mystery songs', () => {
 
   it('fixes the Bounce Keys hook to the question', () => {
     for (const style of ['cascade', 'keys', 'cascade-3d', 'spiral', 'falling']) expect(variantHook('bounce-keys', { style })).toBe('Guess the song 🎵');
+  });
+});
+
+describe('playground-only params', () => {
+  it('are never set by planned concepts or shown to the planner', () => {
+    const t = getTemplate('bounce-keys');
+    const params = coerceParams(t, { paint: true, style: 'keys' });
+    expect(params.style).toBe('keys');
+    expect(params.paint).toBe(false);
+    expect(describeTemplate(t)).not.toContain('paint');
   });
 });

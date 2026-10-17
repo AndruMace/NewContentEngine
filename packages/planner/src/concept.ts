@@ -373,6 +373,8 @@ export function coerceParams(template: Template, raw: Record<string, unknown>): 
   const schema = paramsJsonSchema(template) as { properties: Record<string, any> };
   const out: Record<string, unknown> = {};
   for (const [key, prop] of Object.entries(schema.properties)) {
+    // Playground-only options stay at their defaults in planned videos.
+    if (prop.playgroundOnly) continue;
     const v = raw[key];
     if (v === undefined || v === null) continue;
     if (prop.type === 'number' || prop.type === 'integer') {
@@ -393,10 +395,12 @@ export function coerceParams(template: Template, raw: Record<string, unknown>): 
 /** Template description for prompts: what it is, its params (with ranges/defaults) and copy placeholders. */
 export function describeTemplate(template: Template): string {
   const schema = paramsJsonSchema(template) as { properties: Record<string, any> };
-  const params = Object.entries(schema.properties).map(([key, p]) => {
-    const range = p.enum ? `one of ${p.enum.map((e: string) => `"${e}"`).join(', ')}` : p.type === 'boolean' ? 'true/false' : `${p.minimum}–${p.maximum}`;
-    return `- ${key} (${p.title ?? key}): ${range}; default ${JSON.stringify(p.default)}`;
-  });
+  const params = Object.entries(schema.properties)
+    .filter(([, p]) => !p.playgroundOnly)
+    .map(([key, p]) => {
+      const range = p.enum ? `one of ${p.enum.map((e: string) => `"${e}"`).join(', ')}` : p.type === 'boolean' ? 'true/false' : `${p.minimum}–${p.maximum}`;
+      return `- ${key} (${p.title ?? key}): ${range}; default ${JSON.stringify(p.default)}`;
+    });
   return [
     `Template "${template.id}" (${template.name}, family: ${template.family})`,
     template.description,

@@ -227,6 +227,12 @@ describe('bounce keys', () => {
     expect(run('fur-elise', { style: 'keys', physics: 'constant' }).state.gravity).toEqual(run('fur-elise', { style: 'keys' }).state.gravity);
   });
 
+  it('paint is visual only: the run is identical with it on', () => {
+    const a = run('fur-elise', { paint: false });
+    const b = run('fur-elise', { paint: true });
+    expect(JSON.stringify(b.events)).toBe(JSON.stringify(a.events));
+  });
+
   it('gives short notes shorter bars', () => {
     const s = run('toccata', { style: 'cascade' }).state;
     const short = s.onsets.map((o, i) => ({ o, size: s.sizes[i] })).filter(({ o }) => o.dur < 0.15);

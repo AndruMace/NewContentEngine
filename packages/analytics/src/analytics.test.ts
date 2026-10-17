@@ -45,3 +45,12 @@ describe('title matching', () => {
     expect(titleSimilarity('Sand fills a heart jar', 'Marble race: 12 countries')).toBeLessThan(0.2);
   });
 });
+
+describe('taste catalog', () => {
+  it('leaves playground-only params out', async () => {
+    const { paramSpecs } = await import('./catalog');
+    const specs = paramSpecs().filter((p) => p.templateId === 'bounce-keys').map((p) => p.param);
+    expect(specs).toContain('bassEntry');
+    expect(specs).not.toContain('paint');
+  });
+});

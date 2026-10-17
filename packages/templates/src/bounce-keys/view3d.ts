@@ -5,7 +5,7 @@
  */
 import { lighten, type Ctx2D, type RGB, type Theme } from '@sim/engine';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { THREE, draw3D, environmentMap, sceneCache } from '../three-layer';
+import { THREE, canvasTexture, draw3D, environmentMap, sceneCache } from '../three-layer';
 import { BALL_R, BLOCK_H, BLOCK_W, BREAK_DELAY_S, ballAt, contactAt, followAt, glow, landedIndex, noteColor, type State } from './index';
 import type { Pt } from './timeline';
 
@@ -81,10 +81,31 @@ const view = sceneCache((s: State, theme: Theme) => {
     }
   }
 
-  const ballMat = new THREE.MeshPhysicalMaterial({ color: new THREE.Color(theme.ball), roughness: 0.15, metalness: 0.2, clearcoat: 1, emissiveIntensity: 0.6 });
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R / U, 40, 28), ballMat);
-  ball.castShadow = true;
+  // The ball: a glossy sphere with a band in the next note's colour that rolls with it, inside a
+  // dark back-face shell (an outline that separates it from bright blocks). Emissive stays low so
+  // bloom doesn't wash it out.
+  const R = BALL_R / U;
+  const ball = new THREE.Group();
+  const roll = new THREE.Group();
+  const ballMat = new THREE.MeshPhysicalMaterial({ color: new THREE.Color(theme.ball), roughness: 0.18, metalness: 0.15, clearcoat: 1, emissiveIntensity: 0.15 });
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(R, 40, 28), ballMat);
+  sphere.castShadow = true;
+  // The band is a belt of the sphere itself (a slice either side of the equator, a hair larger).
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, emissiveIntensity: 0.35, polygonOffset: true, polygonOffsetFactor: -2 });
+  const band = new THREE.Mesh(new THREE.SphereGeometry(R * 1.004, 40, 6, 0, Math.PI * 2, Math.PI / 2 - 0.24, 0.48), bandMat);
+  roll.add(sphere, band);
+  const outline = new THREE.Mesh(new THREE.SphereGeometry(R * 1.12, 32, 20), new THREE.MeshBasicMaterial({ color: 0x0a0814, side: THREE.BackSide }));
+  ball.add(roll, outline);
   scene.add(ball);
+  // Rolling without slipping: each hop turns the ball about the horizontal axis across its motion,
+  // by distance travelled / radius. Orientation at the start of every hop, accumulated once.
+  const rollAt: THREE.Quaternion[] = [new THREE.Quaternion()];
+  for (const a of s.arcs) {
+    const q = rollAt[rollAt.length - 1].clone();
+    const h = Math.hypot(a.vx, a.vz);
+    if (h > 1e-6) q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(a.vz / h, 0, -a.vx / h), (h * a.dt) / BALL_R));
+    rollAt.push(q);
+  }
 
   const trail = new THREE.InstancedMesh(new THREE.SphereGeometry(BALL_R / U, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.32, depthWrite: false }), TRAIL);
   scene.add(trail);
@@ -96,7 +117,7 @@ const view = sceneCache((s: State, theme: Theme) => {
   sparks.frustumCulled = false;
   scene.add(sparks);
 
-  return { scene, camera, sun, blocks, matrices, ball, ballMat, trail, sparks, sparkGeo };
+  return { scene, camera, sun, blocks, matrices, ball, roll, rollAt, ballMat, bandMat, trail, sparks, sparkGeo };
 });
 
 const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -134,7 +155,19 @@ export function drawCascade3D(ctx: Ctx2D, theme: Theme, s: State, t: number, rev
   v.ball.position.copy(v3(pt));
   v.ball.position.y -= (sq * BALL_R) / U;
   v.ball.scale.set(1 + sq, 1 - sq, 1 + sq);
-  v.ballMat.emissive.copy(rgb(lighten(target, 0.2), 0.45));
+  // Roll: the orientation at the start of this hop, turned on by how far it has travelled since.
+  const k = Math.min(s.arcs.length - 1, i + 1);
+  const arc = s.arcs[k];
+  const h = Math.hypot(arc.vx, arc.vz);
+  v.roll.quaternion.copy(v.rollAt[k]);
+  if (h > 1e-6) v.roll.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(arc.vz / h, 0, -arc.vx / h), (h * Math.min(arc.dt, Math.max(0, t - arc.t0))) / BALL_R));
+  v.bandMat.color.copy(rgb(target));
+  v.bandMat.emissive.copy(rgb(target, 0.6));
+  // Paint: the landed block's colour splashes onto the ball and fades.
+  const splash = s.p.paint && i >= 0 ? Math.exp(-since * 1.6) : 0;
+  // Toned down from the theme's ball colour: lit 3D white blooms out next to bright blocks.
+  v.ballMat.color.set(theme.ball).multiplyScalar(0.6).lerp(rgb(noteColor(theme, s, s.onsets[Math.max(0, i)].midi)), 0.7 * splash);
+  v.ballMat.emissive.copy(rgb(lighten(target, 0.2), 0.06));
   for (let k = 0; k < TRAIL; k++) {
     const p = ballAt(s.arcs, s.onsets, t - (k + 1) * 0.014);
     const scale = 0.85 - (0.6 * k) / TRAIL;
@@ -173,6 +206,79 @@ function pathAt(s: State, t: number): { p: Pt; ang: number } {
   const b = s.lands[j];
   const ang = s.theta.length ? s.theta[i] + (s.theta[j] - s.theta[i]) * u : 0;
   return { p: { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, z: a.z + (b.z - a.z) * u }, ang };
+}
+
+/** The bar's own axes for landing i (three.js units): along its length, up its normal, across. */
+function barAxes(s: State, i: number) {
+  const up = new THREE.Vector3(s.normals[i].x, -s.normals[i].y, s.normals[i].z).normalize();
+  const along = s.p.style === 'spiral' ? new THREE.Vector3(-Math.sin(s.theta[i]), 0, Math.cos(s.theta[i])) : new THREE.Vector3(1, 0, 0);
+  const x = along.sub(up.clone().multiplyScalar(along.dot(up))).normalize();
+  return { up, x, z: new THREE.Vector3().crossVectors(x, up) };
+}
+
+/**
+ * The ball's shadow on the bar it's heading for, drawn on screen after bloom (a mesh shadow drawn
+ * in the 3D pass got washed out by the bars' glow): straight down from the ball onto the bar's top
+ * face, wide and soft while the ball is high, small and dark as it comes down, clipped to the face.
+ * Uses the camera as placed for this frame by drawCascade3D.
+ */
+export function drawShadow3D(ctx: Ctx2D, theme: Theme, s: State, t: number) {
+  const v = view(s, theme);
+  const camera = v.camera;
+  camera.updateMatrixWorld(true);
+  const screen = (p: THREE.Vector3) => {
+    const q = p.clone().project(camera);
+    return { x: ((q.x + 1) / 2) * 1080, y: ((1 - q.y) / 2) * 1920, front: q.z < 1 };
+  };
+  const j = Math.min(s.onsets.length - 1, landedIndex(s.onsets, t) + 1);
+  if (t > s.onsets[j].t + BREAK_DELAY_S && j < s.onsets.length - 1) return;
+  const { up, x, z } = barAxes(s, j);
+  const c = v3(contactAt(s, j));
+  const p = v3(ballAt(s.arcs, s.onsets, t));
+  // Straight down from the ball onto the bar's plane.
+  const drop = up.y > 1e-3 ? p.clone().sub(c).dot(up) / up.y : 0;
+  const hit = p.clone().add(new THREE.Vector3(0, -drop, 0));
+  const height = Math.max(0, drop - BALL_R / U);
+  const k = Math.max(0, 1 - height / 6);
+  const alpha = 0.18 + 0.67 * k * k;
+  const r = (BALL_R / U) * (1.5 - 0.65 * k);
+  const halfX = (BLOCK_W * s.sizes[j]) / 2 / U;
+  const halfZ = 0.36;
+  const face = [
+    c.clone().addScaledVector(x, -halfX).addScaledVector(z, -halfZ),
+    c.clone().addScaledVector(x, halfX).addScaledVector(z, -halfZ),
+    c.clone().addScaledVector(x, halfX).addScaledVector(z, halfZ),
+    c.clone().addScaledVector(x, -halfX).addScaledVector(z, halfZ),
+  ].map(screen);
+  if (face.some((f) => !f.front)) return;
+  const o = screen(hit);
+  const ux = screen(hit.clone().addScaledVector(x, r));
+  const uz = screen(hit.clone().addScaledVector(z, r));
+  ctx.save();
+  ctx.beginPath();
+  face.forEach((f, i) => (i ? ctx.lineTo(f.x, f.y) : ctx.moveTo(f.x, f.y)));
+  ctx.closePath();
+  ctx.clip();
+  // Never over the ball itself (it's in the 3D layer underneath): cut its disc out.
+  const b = screen(p);
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const edge = screen(p.clone().addScaledVector(right, (BALL_R / U) * 1.15));
+  const br = Math.hypot(edge.x - b.x, edge.y - b.y) || 1;
+  ctx.beginPath();
+  ctx.rect(0, 0, 1080, 1920);
+  ctx.arc(b.x, b.y, br, 0, Math.PI * 2);
+  ctx.clip('evenodd');
+  // A unit circle mapped onto the bar's plane: the shadow foreshortens with the view.
+  ctx.transform(ux.x - o.x, ux.y - o.y, uz.x - o.x, uz.y - o.y, o.x, o.y);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  g.addColorStop(0, `rgba(0,0,0,${alpha.toFixed(3)})`);
+  g.addColorStop(0.55, `rgba(0,0,0,${(alpha * 0.6).toFixed(3)})`);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, 1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 /** The most the camera's height may trail the ball's (px), so long lobs and drops stay in frame. */

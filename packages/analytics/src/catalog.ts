@@ -27,7 +27,8 @@ export function paramSpecs(): ParamSpec[] {
     const planned = new Set([...(PLANNED_VARIANTS[t.id] ?? []).map((v) => v.param), ...(t.lengthParam ? [t.lengthParam.param] : [])]);
     const props = (paramsJsonSchema(t) as { properties: Record<string, any> }).properties;
     for (const [param, p] of Object.entries(props)) {
-      if (planned.has(param)) continue;
+      // Playground-only options are never learned or picked.
+      if (planned.has(param) || p.playgroundOnly) continue;
       const title = p.title ?? param;
       if ((p.type === 'number' || p.type === 'integer') && Number.isFinite(p.minimum) && Number.isFinite(p.maximum) && p.maximum > p.minimum)
         out.push({ templateId: t.id, param, title, kind: 'number', default: p.default ?? (p.minimum + p.maximum) / 2, min: p.minimum, max: p.maximum });

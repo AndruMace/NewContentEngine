@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import { FONT_FAMILY, lighten, mixRgb, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type RGB, type Rng, type Template, type Theme, type VoiceId } from '@sim/engine';
+import { FONT_FAMILY, hexToRgb, lighten, mixRgb, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type RGB, type Rng, type Template, type Theme, type VoiceId } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { burst, drawSparks, updateSparks, type Spark } from '../fx';
 import { drawAnswer, drawCommentPrompt } from '../guess';
 import { gaussFit } from '../scoring';
 import { arcAt, buildTimeline, type Arc, type Onset, type Pt } from './timeline';
 import { layoutCascade, layoutLevel } from './hops';
-import { drawCascade3D } from './view3d';
+import { drawCascade3D, drawShadow3D } from './view3d';
 
 export const BOUNCE_KEYS_STYLES = ['cascade', 'keys', 'cascade-3d', 'spiral', 'falling'] as const;
 export type BounceKeysStyle = (typeof BOUNCE_KEYS_STYLES)[number];
@@ -18,6 +18,8 @@ export const bounceKeysSchema = z.object({
   durationS: z.number().min(18).max(60).default(32).meta({ title: 'Length (s)' }),
   bassBall: z.boolean().default(true).meta({ title: 'Bass ball' }),
   bassEntry: z.enum(['half', 'quarter']).default('half').meta({ title: 'Bass ball joins' }),
+  // The ball picks up each block's colour as it lands. A Playground option: planners leave it off.
+  paint: z.boolean().default(false).meta({ title: 'Paint transfer', playgroundOnly: true }),
   // Eased: gravity drifts slowly so held notes and fast runs both stay easy to follow. Constant: one
   // gravity per song and no bounce higher than its drop, with held notes taking long drops instead.
   // The keyboard always eases (its keys can't move, so a held note can only lob).
@@ -107,6 +109,8 @@ export interface State {
   gravity: number[];
   /** Bar length per landing (share of full): short notes get short bars. */
   sizes: number[];
+  /** 2D roll angle of the ball at the start of each arc (it rolls with its sideways speed). */
+  spin: number[];
   bass: BassNote[];
   bassArcs: Arc[];
   /** When the bass ball starts dropping in (Infinity: never). */
@@ -237,7 +241,8 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
   // The run is fixed by the song; seeds only change colours and layout jitter.
   searchBudget: 6,
   melodyDriven: true,
-  glowScale: 0.8,
+  // Lit 3D blocks and ball are already bright from their lighting, so they take much less bloom.
+  glowScale: (p) => (is3D(p.style) ? 0.45 : 0.8),
   defaultCopy: {
     hook: GUESS_HOOK,
     cta: 'It was {answer}! Did you get it? 🎵',
@@ -312,6 +317,9 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
           maxApex: p.style === 'falling' ? 240 : 420,
         });
     const { lands, normals, arcs, gravity, sizes } = layout;
+    // The ball rolls with its sideways motion: angle grows by distance / radius along each hop.
+    const spin = [0];
+    for (const a of arcs) spin.push(spin[spin.length - 1] + (a.vx * a.dt) / BALL_R);
     const clamped = layout.capped;
     // Spiral: each landing's angle round the column, unwrapped so the camera turns smoothly.
     const theta: number[] = [];
@@ -357,6 +365,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       arcs,
       gravity,
       sizes,
+      spin,
       bass,
       bassArcs,
       bassEnterAt,
@@ -497,7 +506,8 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
     drawSparks(ctx, s.sparks);
     ctx.restore();
 
-    if (!three) drawBall(ctx, theme, s, s.arcs, s.onsets, t, cam, BALL_R, true);
+    // The main ball itself is drawn after bloom (renderTop), so it stays crisp on bright blocks.
+    if (!three) drawTrail(ctx, theme, s, s.arcs, s.onsets, t, cam, BALL_R);
     if (t >= s.bassEnterAt) drawBall(ctx, theme, s, s.bassArcs, s.bass, t, 0, BASS_R, false);
 
     if (revealK >= 0 && revealK < 0.6) {
@@ -507,6 +517,12 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
   },
 
   renderTop({ ctx, theme, t }, s) {
+    // Shadows after bloom, so the bars' glow can't wash them out.
+    if (is3D(s.p.style)) drawShadow3D(ctx, theme, s, t);
+    else {
+      drawShadow(ctx, s, t, cameraY(s, t));
+      drawMainBall(ctx, theme, s, t, cameraY(s, t));
+    }
     drawProgress(ctx, theme, s, t);
     if (t >= s.revealAt) {
       const since = t - s.revealAt - 0.2;
@@ -696,6 +712,137 @@ function drawBassRail(ctx: Ctx2D, theme: Theme, s: State, t: number) {
     ctx.fill();
   }
   ctx.globalAlpha = 1;
+}
+
+/** The ball's roll angle at t (2D): continuous, flipping direction with its sideways motion. */
+function spinAt(s: State, t: number): number {
+  const i = landedIndex(s.onsets, t);
+  const k = Math.min(s.arcs.length - 1, i + 1);
+  const a = s.arcs[k];
+  return s.spin[k] + (a.vx * Math.min(a.dt, Math.max(0, t - a.t0))) / BALL_R;
+}
+
+/** The fading trail behind a ball, in the colour of the note it's heading to (glows with bloom). */
+function drawTrail(ctx: Ctx2D, theme: Theme, s: State, arcs: Arc[], onsets: { t: number; midi?: number }[], t: number, cam: number, r: number) {
+  const i = landedIndex(onsets, t);
+  const col = noteColor(theme, s, (onsets[Math.min(onsets.length - 1, i + 1)] as { midi?: number }).midi ?? 60);
+  const trail = Math.round(14 * Math.min(1, theme.trail));
+  for (let k = trail; k >= 1; k--) {
+    const pt = ballAt(arcs, onsets, t - k * 0.014);
+    const u = 1 - k / (trail + 1);
+    ctx.fillStyle = rgbToCss(col, 0.3 * u);
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y - cam, r * (0.4 + 0.55 * u), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/**
+ * A shadow on the bar (or key) the ball is about to land on, directly beneath it: wide and soft while
+ * the ball is high, small and dark as it comes down. Clipped to the bar's face so it never spills
+ * onto the background, and drawn after bloom so the bar's glow can't wash it out.
+ */
+function drawShadow(ctx: Ctx2D, s: State, t: number, cam: number) {
+  const j = Math.min(s.onsets.length - 1, landedIndex(s.onsets, t) + 1);
+  const c = contactAt(s, j);
+  const a = tiltOf(s.normals[j]);
+  const p = ballAt(s.arcs, s.onsets, t);
+  // The bar's face in its own frame: x along it, y down into it from the top surface.
+  const keyW = s.kb ? (isBlack(s.onsets[j].midi) ? s.kb.keyW * 0.62 : s.kb.keyW) - 4 : 0;
+  const w = s.kb ? keyW : BLOCK_W * s.sizes[j];
+  const h = s.kb ? 70 : BLOCK_H;
+  // Straight down from the ball onto the bar's surface line.
+  const along = (p.x - c.x) / Math.max(0.3, Math.cos(a));
+  const surfaceY = c.y + along * Math.sin(a);
+  const height = Math.max(0, surfaceY - (p.y + BALL_R));
+  const k = Math.max(0, 1 - height / 600);
+  const alpha = 0.18 + 0.67 * k * k;
+  const rx = BALL_R * (1.5 - 0.65 * k);
+  ctx.save();
+  ctx.translate(c.x, c.y - cam);
+  ctx.rotate(a);
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, 0, w, h, s.kb ? [0, 0, 8, 8] : 9);
+  ctx.clip();
+  ctx.translate(along, 2);
+  ctx.scale(1, 0.5);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+  g.addColorStop(0, `rgba(0,0,0,${alpha.toFixed(3)})`);
+  g.addColorStop(0.55, `rgba(0,0,0,${(alpha * 0.6).toFixed(3)})`);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, rx, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * The main ball, drawn after bloom so it stays crisp on bright blocks: its own soft glow, a rolling
+ * stripe in the colour of the note it's heading to, a highlight and a dark outline. With paint on,
+ * each landing splashes the block's colour onto it, fading back.
+ */
+function drawMainBall(ctx: Ctx2D, theme: Theme, s: State, t: number, cam: number) {
+  const r = BALL_R;
+  const i = landedIndex(s.onsets, t);
+  const n = s.onsets.length;
+  const col = noteColor(theme, s, s.onsets[Math.min(n - 1, i + 1)].midi);
+  const pt = ballAt(s.arcs, s.onsets, t);
+  const since = i >= 0 ? t - s.onsets[i].t : 10;
+  const sq = 0.3 * Math.exp(-since * 22);
+  const stretch = Math.min(0.18, Math.abs(pt.vy) / 9000);
+  let body = hexToRgb(theme.ball);
+  const splash = s.p.paint && i >= 0 ? Math.exp(-since * 1.6) : 0;
+  const landed = i >= 0 ? noteColor(theme, s, s.onsets[i].midi) : col;
+  if (splash > 0) body = mixRgb(body, landed, 0.7 * splash);
+  ctx.save();
+  ctx.translate(pt.x, pt.y - cam + r * sq);
+  // Its own glow, kept modest so it never blooms into the blocks.
+  const halo = ctx.createRadialGradient(0, 0, r * 0.8, 0, 0, r * 2);
+  halo.addColorStop(0, rgbToCss(lighten(col, 0.3), 0.32));
+  halo.addColorStop(1, rgbToCss(col, 0));
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.scale(1 + sq - stretch * 0.5, 1 - sq + stretch);
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  const shade = ctx.createRadialGradient(-r * 0.35, -r * 0.35, r * 0.1, 0, 0, r);
+  shade.addColorStop(0, rgbToCss(lighten(body, 0.35)));
+  shade.addColorStop(1, rgbToCss(mixRgb(body, [20, 18, 30], 0.35)));
+  ctx.fillStyle = shade;
+  ctx.fill();
+  ctx.save();
+  ctx.clip();
+  ctx.rotate(spinAt(s, t));
+  // The stripe rolls with the ball, in the colour of the next note.
+  ctx.fillStyle = rgbToCss(col);
+  ctx.fillRect(-r, -r * 0.2, 2 * r, r * 0.4);
+  ctx.fillStyle = rgbToCss(mixRgb(col, [0, 0, 0], 0.45), 0.6);
+  ctx.fillRect(-r, -r * 0.24, 2 * r, r * 0.05);
+  ctx.fillRect(-r, r * 0.19, 2 * r, r * 0.05);
+  if (splash > 0.02) {
+    // Paint flecks that roll with the ball.
+    ctx.fillStyle = rgbToCss(landed, Math.min(1, splash * 1.4));
+    for (const [x, y, rr] of [[-0.45, -0.55, 0.28], [0.5, 0.45, 0.24], [0.15, -0.6, 0.16], [-0.55, 0.5, 0.18]]) {
+      ctx.beginPath();
+      ctx.arc(x * r, y * r, rr * r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+  // Highlight (fixed to the light, not the roll) and a dark rim that separates it from bright blocks.
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.38, -r * 0.42, r * 0.26, r * 0.16, -0.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(10,8,20,0.85)';
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, r - 1.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /** A ball with a short trail, squashed for a moment after each landing and coloured for the note it's heading to. */

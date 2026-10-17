@@ -118,8 +118,11 @@ export interface Template<P = any, S = any> {
   ownMusic?: boolean;
   /** The melody shapes the run itself (not just its sound), so changing it changes the video. */
   melodyDriven?: boolean;
-  /** Multiplier on the theme's bloom (solid fills like sand/liquid blow out at full glow). */
-  glowScale?: number;
+  /**
+   * Multiplier on the theme's bloom (solid fills like sand/liquid blow out at full glow). A function
+   * when it depends on the settings, e.g. a template with both flat and lit 3D styles.
+   */
+  glowScale?: number | ((params: P) => number);
   /** The final state equals the first frame: renders drop the last frame so the video loops cleanly. */
   seamlessLoop?: boolean;
   /** Where the comment-prompt nudge sits (fraction of height); defaults to the hook's spot once the hook is gone. */

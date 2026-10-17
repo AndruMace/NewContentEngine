@@ -159,7 +159,8 @@ export class Runner<P = any, S = any> {
     fillBackground(ctx, W, H, this.theme);
     this.template.render({ ctx, width: W, height: H, theme: this.theme, t: this.t, frame: this.frame }, this.state);
     ctx.restore();
-    const glowScale = this.template.glowScale ?? 1;
+    const g = this.template.glowScale;
+    const glowScale = typeof g === 'function' ? g(this.params) : (g ?? 1);
     this.postFx.apply(ctx, canvas, glowScale === 1 ? this.theme : { ...this.theme, glow: this.theme.glow * glowScale });
     if (this.template.renderTop) {
       ctx.save();
