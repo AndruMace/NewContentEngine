@@ -67,6 +67,10 @@ aren't approved or exported.
 | `pathfinding-race` | kinetic | BFS, DFS, Dijkstra, A*, Greedy… race through the same maze/field; badges show who found the shortest route |
 | `fourier-drawing` | kinetic | Spinning circles draw a mystery country, US state, dinosaur, animal or mythical creature, 1 → 200 circles, then the reveal |
 | `spin-battle` | race | 3D: two battle tops (Attack, Defense, Stamina, Balance) clash in a bowl stadium after a 3-2-1 launch; spin finish or over finish (pocket / over the wall); single duel, first-to-N points match, or 3-4 top free-for-all |
+| `bounce-keys` | kinetic | Guess the song: a ball bounces note to note down blocks, a keyboard or 3D towers, exactly on the beat; title revealed at the end |
+| `rps-battle` | race | Rock-paper-scissors (or fire/water/leaf, or three flags) swarms convert whoever they beat; live share bar; one side takes everyone, or the biggest wins at the buzzer |
+| `trick-shot` | bounce | 3D: a glass cabinet of tilted boards, rods, pegs, bumpers and spinners with a cup on the floor; bounce until it drops in, an AI cannon closing in shot by shot, or a first-to-N-cups race; slow-motion replay from beside the cup |
+| `marble-machine` | kinetic | Guess the song, 3D Rube Goldberg: a peg drum sends marbles through a helix, seesaws, a loop-and-jump and zigzag rails onto vibraphone bars on the beat; a paddle wheel and bucket elevator bring them back; the last one sets off dominoes that ring the reveal bell |
 
 Themes: Neon Dark, Pastel Minimal, Retro CRT, Monochrome Gold, Sunset, Deep Ocean.
 Melodies: 15 public-domain tunes (Beethoven, Mozart, Grieg, Bach, Pachelbel, Joplin, traditional).

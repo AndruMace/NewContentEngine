@@ -287,6 +287,43 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       hook: { cascade: 'Guess the song 🎵', keys: 'Guess the song 🎵', 'cascade-3d': 'Guess the song 🎵', spiral: 'Guess the song 🎵', falling: 'Guess the song 🎵' },
     },
   ],
+  'rps-battle': [
+    {
+      param: 'identity',
+      values: ['classic', 'elements', 'countries'],
+      guide: {
+        classic: 'Sides: rock, paper and scissors (fixed for this video): 🪨 beats ✂️, ✂️ beat 📄, 📄 beats 🪨, and whoever is beaten switches sides. {winner} is Rock, Paper or Scissors. "Pick a side" and "who takes over?" angles work. Never predict the winner.',
+        elements: 'Sides: fire, water and leaf (fixed for this video): 🔥 burns 🌿, 💧 douses 🔥, 🌿 drinks 💧, and whoever is beaten switches sides. {winner} is Fire, Water or Leaf. "Pick an element" angles work. Never predict the winner.',
+        countries:
+          'Sides: three countries with their flags, in a rock-paper-scissors cycle (fixed for this video); which three is picked after you write, so don\'t name them. {winner} is a country name. Lean into friendly national rivalry: invite viewers to back their country. Keep it light, no politics. Never predict the winner.',
+      },
+    },
+  ],
+  'trick-shot': [
+    {
+      param: 'mode',
+      values: ['bounce', 'attempts', 'race'],
+      guide: {
+        bounce:
+          'Mode: bounce (fixed for this video). In a 3D glass cabinet, one ball ricochets around the obstacles, the floor always throwing it back up, until it finally drops into the cup; a counter shows the bounces. "Will it ever go in?" and "guess how many bounces" angles work. The CTA may use {result} (e.g. "In after 57 bounces!"). Never say when or how it goes in.',
+        attempts:
+          'Mode: attempts (fixed for this video). In a 3D glass cabinet, an AI cannon takes shot after shot, each miss landing closer, until one goes in; a counter shows the attempt number. "How many tries will it take?" angles work. The CTA may use {result} (e.g. "Attempt 6: nailed it!") or {attempts}. Never give away the number of attempts before the end.',
+        race:
+          'Mode: race (fixed for this video). In a 3D glass cabinet, coloured balls bounce around together and the first to drop into the cup {racePoints} times wins; balls are named by colour (Red, Blue…). "Pick a ball" angles work. The CTA may use {winner} or {result}. Never predict the winner.',
+      },
+    },
+  ],
+  'marble-machine': [
+    {
+      param: 'camera',
+      values: ['director', 'wide'],
+      guide: {
+        director: 'Camera: director (fixed for this video). A 3D Rube Goldberg marble machine: a turning peg drum releases steel marbles through a spiral ramp, tipping seesaws, a loop-the-loop and zigzag rails onto vibraphone bars, and they ride a bucket elevator back up; the camera follows marbles through the contraptions, and the last marble sets off a domino run that rings a bell for the reveal. A mystery song plays note by note as marbles strike the bars; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
+        wide: 'Camera: wide (fixed for this video). The whole 3D Rube Goldberg marble machine stays in view: a turning peg drum releases steel marbles through a spiral ramp, tipping seesaws, a loop-the-loop and zigzag rails onto vibraphone bars, and they ride a bucket elevator back up; the last marble sets off a domino run that rings a bell for the reveal. A mystery song plays note by note as marbles strike the bars; its title is revealed at the end. The on-screen hook is fixed ("Guess the song 🎵"). Invite guessing the song in the title and captions too, but never name, quote or hint at the song, its composer, its era or its genre anywhere (title, captions, hashtags): the melody is assigned after you write. The CTA should reveal it with {answer}, e.g. "It was {answer}! Did you get it? 🎵".',
+      },
+      hook: { director: 'Guess the song 🎵', wide: 'Guess the song 🎵' },
+    },
+  ],
   'snake-ai': [
     {
       param: 'ending',
@@ -344,6 +381,9 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'fourier-drawing': ['✏️', '🤯', '👀'],
   'spin-battle': ['🌀', '⚔️', '🔥'],
   'bounce-keys': ['🎵', '🎹', '👀'],
+  'rps-battle': ['✂️', '🪨', '😱'],
+  'trick-shot': ['🎯', '😱', '🤯'],
+  'marble-machine': ['🎵', '⚙️', '👀'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
 

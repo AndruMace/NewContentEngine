@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { FONT_FAMILY, hexToRgb, lighten, rgbToCss, type Ctx2D, type DramaScore, type Rng, type Template } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { COLOR_TEAMS, COUNTRY_TEAMS, burst, drawSparks, drawTeamBall, pickDistinctTeams, updateSparks, type Spark, type Team } from '../fx';
+import { drawClock, drawShareBar } from '../hud';
 import { clamp01, gaussFit } from '../scoring';
 
 export const territoryWarSchema = z.object({
@@ -347,8 +348,10 @@ export const territoryWar: Template<TerritoryWarParams, State> = {
       ctx.fill();
       drawTeamBall(ctx, b.x, b.y, vr, tm, FONT_FAMILY, { initial: vr > 20 });
     }
-    drawShareBar(ctx, s);
-    drawClock(ctx, s, theme.text, theme.textStroke);
+    // One decimal in the final seconds and at the end, so a close finish reads as a real result.
+    const precise = s.endAt !== null || s.p.matchSeconds - s.t <= 5;
+    drawShareBar(ctx, { x: X0, y: Y0 - 120, w: BOARD, h: 70, teams: s.teams, counts: s.counts, leader: s.endAt !== null ? s.winner : s.leader, precise });
+    drawClock(ctx, { left: s.p.matchSeconds - s.t, rush: s.rushOn, ended: s.endAt !== null, labelY: Y0 + BOARD + 62, bigY: Y0 + BOARD / 2, text: theme.text, stroke: theme.textStroke });
   },
 
   audio(e, { melody, theme, lastNoteT }) {
@@ -416,72 +419,4 @@ function drawFlagWash(ctx: Ctx2D, s: State) {
     ctx.fillText(tm.icon, X0 + BOARD / 2, Y0 + BOARD / 2 + BOARD * 0.08);
     ctx.restore();
   });
-}
-
-/** Live share of the board per team, with the leader crowned. */
-function drawShareBar(ctx: Ctx2D, s: State) {
-  const total = s.n * s.n;
-  const y = Y0 - 120;
-  const h = 70;
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.beginPath();
-  ctx.roundRect(X0 - 8, y - 8, BOARD + 16, h + 16, 22);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.roundRect(X0, y, BOARD, h, 16);
-  ctx.clip();
-  let x = X0;
-  const lead = s.endAt !== null ? s.winner : s.leader;
-  s.teams.forEach((tm, k) => {
-    const w = (s.counts[k] / total) * BOARD;
-    ctx.fillStyle = tm.color;
-    ctx.fillRect(x, y, w + 0.5, h);
-    if (w > 90) {
-      // One decimal in the final seconds and at the end, so a close finish reads as a real result.
-      const precise = s.endAt !== null || s.p.matchSeconds - s.t <= 5;
-      const pct = `${((s.counts[k] / total) * 100).toFixed(precise ? 1 : 0)}%`;
-      const label = `${k === lead ? '👑 ' : ''}${tm.icon ?? ''} ${pct}`.trim();
-      ctx.font = `900 ${w > 200 ? 36 : 28}px ${FONT_FAMILY}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 7;
-      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-      ctx.strokeText(label, x + w / 2, y + h / 2 + 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(label, x + w / 2, y + h / 2 + 2);
-    }
-    x += w;
-  });
-  ctx.restore();
-}
-
-/** Time left under the board, and a big countdown over it in the last five seconds. */
-function drawClock(ctx: Ctx2D, s: State, text: string, stroke: string) {
-  const left = Math.max(0, s.p.matchSeconds - s.t);
-  ctx.save();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.lineJoin = 'round';
-  if (s.endAt === null) {
-    const label = s.rushOn ? `⚡ FINAL RUSH · ${left.toFixed(1)}s` : `${Math.ceil(left)}s left`;
-    ctx.font = `900 44px ${FONT_FAMILY}`;
-    ctx.lineWidth = 9;
-    ctx.strokeStyle = stroke;
-    ctx.strokeText(label, 540, Y0 + BOARD + 62);
-    ctx.fillStyle = text;
-    ctx.fillText(label, 540, Y0 + BOARD + 62);
-  }
-  if (s.endAt === null && left <= 5 && left > 0) {
-    const frac = left - Math.floor(left);
-    ctx.globalAlpha = 0.55 + 0.4 * frac;
-    ctx.font = `900 ${Math.round(260 + 120 * frac)}px ${FONT_FAMILY}`;
-    ctx.lineWidth = 16;
-    ctx.strokeStyle = stroke;
-    ctx.strokeText(String(Math.ceil(left)), 540, Y0 + BOARD / 2);
-    ctx.fillStyle = text;
-    ctx.fillText(String(Math.ceil(left)), 540, Y0 + BOARD / 2);
-  }
-  ctx.restore();
 }

@@ -15,10 +15,13 @@ import { pathfindingRace } from './pathfinding-race';
 import { fourierDrawing, GUESS as FOURIER_GUESS } from './fourier-drawing';
 import { spinBattle } from './spin-battle';
 import { bounceKeys } from './bounce-keys';
+import { rpsBattle } from './rps-battle';
+import { trickShot } from './trick-shot';
+import { marbleMachine } from './marble-machine';
 
-export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, FOURIER_GUESS };
+export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, FOURIER_GUESS };
 
-export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys];
+export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine];
 
 export function getTemplate(id: string): Template {
   const template = TEMPLATES.find((t) => t.id === id);

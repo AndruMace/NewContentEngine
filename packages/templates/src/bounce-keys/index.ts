@@ -2,7 +2,9 @@ import { z } from 'zod';
 import { FONT_FAMILY, hexToRgb, lighten, mixRgb, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type RGB, type Rng, type Template, type Theme, type VoiceId } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { burst, drawSparks, updateSparks, type Spark } from '../fx';
-import { drawAnswer, drawCommentPrompt } from '../guess';
+import { SONG_FINAL_COUNT, drawCommentPrompt, drawSongCountdown, drawSongProgress, drawSongTitle } from '../guess';
+
+export { formatCountdown } from '../guess';
 import { gaussFit } from '../scoring';
 import { arcAt, buildTimeline, type Arc, type Onset, type Pt } from './timeline';
 import { layoutCascade, layoutLevel } from './hops';
@@ -59,7 +61,7 @@ const PROGRESS = { y: 310, w: 600 };
 const PROMPT = { x: 560, y: 400 };
 const ANSWER_Y = 720;
 /** The last seconds before the reveal count down 3-2-1 in big digits. */
-const FINAL_COUNT = 3;
+const FINAL_COUNT = SONG_FINAL_COUNT;
 const GUESS_HOOK = 'Guess the song 🎵';
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
@@ -533,28 +535,11 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
       drawShadow(ctx, s, t, cameraY(s, t));
       drawMainBall(ctx, theme, s, t, cameraY(s, t));
     }
-    drawProgress(ctx, theme, s, t);
-    drawCountdown(ctx, theme, s, t);
+    const clock = { first: s.onsets[0].t, revealAt: s.revealAt, t };
+    drawSongProgress(ctx, theme, clock, { y: PROGRESS.y, w: PROGRESS.w, outroDelay: OUTRO_DELAY_S });
+    drawSongCountdown(ctx, theme, clock, { labelY: PROGRESS.y + 40, bigY: ANSWER_Y });
     if (t >= s.revealAt) {
-      const since = t - s.revealAt - 0.2;
-      const lines = splitTitle(s.title.toUpperCase());
-      const size = lines.length > 1 ? 70 : 80;
-      lines.forEach((line, i) => drawAnswer(ctx, theme, line, 540, ANSWER_Y + (i - (lines.length - 1) / 2) * size * 1.1, since - i * 0.08, size));
-      const a = Math.min(1, Math.max(0, (since - 0.35) / 0.3));
-      if (a > 0) {
-        ctx.save();
-        ctx.globalAlpha = a;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.font = `800 40px ${FONT_FAMILY}`;
-        ctx.lineWidth = 6;
-        ctx.strokeStyle = theme.textStroke;
-        const by = ANSWER_Y + (lines.length / 2) * size * 1.1 + 34;
-        ctx.strokeText(s.composer, 540, by);
-        ctx.fillStyle = theme.accent;
-        ctx.fillText(s.composer, 540, by);
-        ctx.restore();
-      }
+      drawSongTitle(ctx, theme, s.title, s.composer, t - s.revealAt - 0.2, ANSWER_Y);
       return;
     }
     const first = s.onsets[0].t;
@@ -879,80 +864,3 @@ function drawBall(ctx: Ctx2D, theme: Theme, s: State, arcs: Arc[], onsets: { t: 
   ctx.fill();
   ctx.stroke();
 }
-
-/** Long titles on two lines, split at the space nearest the middle. */
-function splitTitle(title: string): string[] {
-  if (title.length <= 16) return [title];
-  const mid = title.length / 2;
-  let best = -1;
-  for (let i = 0; i < title.length; i++) if (title[i] === ' ' && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) best = i;
-  return best < 0 ? [title] : [title.slice(0, best), title.slice(best + 1)];
-}
-
-/** "0:18": seconds until the reveal, rounded up. */
-export function formatCountdown(seconds: number): string {
-  const n = Math.max(0, Math.ceil(seconds - 1e-9));
-  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
-}
-
-/**
- * "ANSWER IN 0:18" under the progress bar, ticking down; in the last FINAL_COUNT seconds a big
- * 3-2-1 pulses in the middle of the screen, one digit per second (each with a tick).
- */
-function drawCountdown(ctx: Ctx2D, theme: Theme, s: State, t: number) {
-  const left = s.revealAt - t;
-  if (left <= 0) return;
-  ctx.save();
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.globalAlpha = Math.min(1, t / 0.5);
-  ctx.font = `800 28px ${FONT_FAMILY}`;
-  ctx.lineWidth = 6;
-  ctx.strokeStyle = theme.textStroke;
-  const label = `ANSWER IN ${formatCountdown(left)}`;
-  ctx.strokeText(label, 540 - 12, PROGRESS.y + 40);
-  ctx.fillStyle = theme.text;
-  ctx.fillText(label, 540 - 12, PROGRESS.y + 40);
-  if (left <= FINAL_COUNT && s.revealAt - FINAL_COUNT >= s.onsets[0].t) {
-    const n = Math.ceil(left);
-    const into = n - left; // 0 when the digit appears, 1 as the next one takes over
-    const pop = 1 - Math.min(1, into * 5);
-    ctx.globalAlpha = 0.9 * (1 - 0.65 * into);
-    ctx.translate(540, ANSWER_Y);
-    ctx.scale(1 + 0.45 * pop * pop, 1 + 0.45 * pop * pop);
-    ctx.font = `900 260px ${FONT_FAMILY}`;
-    ctx.lineWidth = 16;
-    ctx.strokeText(String(n), 0, 0);
-    ctx.fillStyle = theme.accent;
-    ctx.fillText(String(n), 0, 0);
-  }
-  ctx.restore();
-}
-
-/** A thin bar that fills toward the reveal, with a lock at the end that opens. */
-function drawProgress(ctx: Ctx2D, theme: Theme, s: State, t: number) {
-  const first = s.onsets[0].t;
-  const u = Math.min(1, Math.max(0, (t - first) / (s.revealAt - first)));
-  // Makes way for the CTA, which can run to two lines.
-  const alpha = Math.min(1, Math.max(0, 1 - (t - s.revealAt - OUTRO_DELAY_S) / 0.25));
-  if (alpha <= 0) return;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  const x0 = 540 - PROGRESS.w / 2 - 24;
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.beginPath();
-  ctx.roundRect(x0, PROGRESS.y - 7, PROGRESS.w, 14, 7);
-  ctx.fill();
-  if (u > 0) {
-    ctx.fillStyle = theme.accent;
-    ctx.beginPath();
-    ctx.roundRect(x0, PROGRESS.y - 7, Math.max(14, PROGRESS.w * u), 14, 7);
-    ctx.fill();
-  }
-  ctx.font = `44px ${FONT_FAMILY}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(u >= 1 ? '🔓' : '🔒', x0 + PROGRESS.w + 40, PROGRESS.y);
-  ctx.restore();
-}
-
