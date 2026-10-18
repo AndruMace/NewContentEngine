@@ -258,6 +258,34 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
     case 'chime':
       playVoice(bus, 'bell', 84 + Math.round((ev.pitch ?? 0) * 12), v, when, 1, dest);
       break;
+    case 'knock': {
+      // A marble striking wood: a dull, woody thump (two damped body modes) under a soft click.
+      // pitch 0..1: thicker, lower boards to thinner, brighter ones.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.012, dest, v * 0.55, 'bandpass', 2200 + p * 1600, 1.2);
+      osc(bus, 'sine', 210 + p * 190, when, when + 0.09, dest, v * 0.7, 0.0008, 0.035);
+      osc(bus, 'triangle', 620 + p * 420, when, when + 0.05, dest, v * 0.28, 0.0006, 0.018);
+      noiseBurst(bus, when, 0.05, dest, v * 0.18, 'lowpass', 900, 0.8);
+      break;
+    }
+    case 'clink': {
+      // Glass on glass or metal: a tiny bright tick and short inharmonic rings.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.006, dest, v * 0.6, 'highpass', 6000 + p * 3000);
+      [1, 2.32, 4.25].forEach((ratio, k) => osc(bus, 'sine', (3100 + p * 1700) * ratio, when, when + 0.25, dest, (v * 0.22) / (k + 1), 0.0004, 0.06 + 0.05 / (k + 1)));
+      break;
+    }
+    case 'ding': {
+      // A small brass bell struck: bright strike and long, beating inharmonic partials.
+      const p = ev.pitch ?? 0.5;
+      const base = 1250 + p * 500;
+      noiseBurst(bus, when, 0.01, dest, v * 0.4, 'highpass', 5000);
+      [1, 2.01, 2.76, 3.97, 5.4].forEach((ratio, k) => {
+        osc(bus, 'sine', base * ratio, when, when + 2.6, dest, (v * 0.32) / (k + 1), 0.001, 1.6 / (1 + k * 0.6));
+        osc(bus, 'sine', base * ratio * 1.003, when, when + 2.6, dest, (v * 0.12) / (k + 1), 0.001, 1.4 / (1 + k * 0.6));
+      });
+      break;
+    }
   }
 }
 

@@ -324,6 +324,16 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       hook: { director: 'Guess the song 🎵', wide: 'Guess the song 🎵' },
     },
   ],
+  'rube-goldberg': [
+    {
+      param: 'marbles',
+      values: ['glass', 'steel'],
+      guide: {
+        glass: 'Marbles: glass cat\'s-eyes (fixed for this video). A Rube Goldberg marble machine built differently for every video and run with real physics: funnels, wooden ramps, spirals, a coin-funnel vortex, dominoes, a Newton\'s cradle, a paddle wheel, a seesaw catapult, xylophone steps and a zigzag peg drop, ending with the marble ringing a brass bell. Lean into satisfying chain reaction / ASMR angles ("watch it all connect", "every part works"). Don\'t list specific contraptions in the title (which ones appear varies), and don\'t claim it is real footage.',
+        steel: 'Marbles: steel ball bearings (fixed for this video). A Rube Goldberg marble machine built differently for every video and run with real physics: funnels, wooden ramps, spirals, a coin-funnel vortex, dominoes, a Newton\'s cradle, a paddle wheel, a seesaw catapult, xylophone steps and a zigzag peg drop, ending with the ball ringing a brass bell. Lean into satisfying chain reaction / ASMR angles ("watch it all connect", "every part works"). Don\'t list specific contraptions in the title (which ones appear varies), and don\'t claim it is real footage.',
+      },
+    },
+  ],
   'snake-ai': [
     {
       param: 'ending',
@@ -384,6 +394,7 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'rps-battle': ['✂️', '🪨', '😱'],
   'trick-shot': ['🎯', '😱', '🤯'],
   'marble-machine': ['🎵', '⚙️', '👀'],
+  'rube-goldberg': ['🔗', '😮\u200d💨', '⚙️'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
 

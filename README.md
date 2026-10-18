@@ -71,6 +71,7 @@ aren't approved or exported.
 | `rps-battle` | race | Rock-paper-scissors (or fire/water/leaf, or three flags) swarms convert whoever they beat; live share bar; one side takes everyone, or the biggest wins at the buzzer |
 | `trick-shot` | bounce | 3D: a glass cabinet of tilted boards, rods, pegs, bumpers and spinners with a cup on the floor; bounce until it drops in, an AI cannon closing in shot by shot, or a first-to-N-cups race; slow-motion replay from beside the cup |
 | `marble-machine` | kinetic | Guess the song, 3D Rube Goldberg: a peg drum sends marbles through a helix, seesaws, a loop-and-jump and zigzag rails onto vibraphone bars on the beat; a paddle wheel and bucket elevator bring them back; the last one sets off dominoes that ring the reveal bell |
+| `rube-goldberg` | kinetic | 3D, real rigid-body physics (Rapier): a Rube Goldberg marble machine generated per seed and tested as it is built (funnels, ramps, spiral, vortex, dominoes, Newton's cradle, paddle wheel, catapult, xylophone steps, zigzag peg drop) ending on a brass bell; photoreal studio look (five backdrops) with foley and a marimba melody |
 
 Themes: Neon Dark, Pastel Minimal, Retro CRT, Monochrome Gold, Sunset, Deep Ocean.
 Melodies: 15 public-domain tunes (Beethoven, Mozart, Grieg, Bach, Pachelbel, Joplin, traditional).

@@ -8,6 +8,11 @@
  */
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { VIDEO_HEIGHT, VIDEO_WIDTH, type Ctx2D, type Theme } from '@sim/engine';
 
 interface Shared {
@@ -41,10 +46,92 @@ function get(): Shared {
 /** Studio-style reflections for glossy materials (assign to scene.environment). */
 export const environmentMap = () => get().env;
 
-/** Render the scene and draw it over the current 2D frame. */
-export function draw3D(ctx: Ctx2D, scene: THREE.Scene, camera: THREE.Camera) {
+/** Render the scene and draw it over the current 2D frame (optionally at another exposure / tone map). */
+export function draw3D(ctx: Ctx2D, scene: THREE.Scene, camera: THREE.Camera, opts: { exposure?: number; toneMapping?: THREE.ToneMapping } = {}) {
   const { renderer, canvas } = get();
+  const exposure = renderer.toneMappingExposure;
+  const toneMapping = renderer.toneMapping;
+  if (opts.exposure !== undefined) renderer.toneMappingExposure = opts.exposure;
+  if (opts.toneMapping !== undefined) renderer.toneMapping = opts.toneMapping;
   renderer.render(scene, camera);
+  renderer.toneMappingExposure = exposure;
+  renderer.toneMapping = toneMapping;
+  ctx.drawImage(canvas as CanvasImageSource, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+}
+
+/**
+ * A studio environment of our own for reflections: a dark room lit by a few large softboxes, so
+ * metal reflects soft highlights on black (a product-photo look) rather than a bright white room.
+ * Built once per call site and cached by key.
+ */
+const studioEnvs = new Map<string, THREE.Texture>();
+export function studioEnvironment(key: string, build: (scene: THREE.Scene) => void): THREE.Texture {
+  const cached = studioEnvs.get(key);
+  if (cached) return cached;
+  const { renderer } = get();
+  const scene = new THREE.Scene();
+  build(scene);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const tex = pmrem.fromScene(scene, 0.02).texture;
+  pmrem.dispose();
+  studioEnvs.set(key, tex);
+  return tex;
+}
+
+interface Composed {
+  composer: EffectComposer;
+  ao: GTAOPass | null;
+  bokeh: BokehPass | null;
+  camera: THREE.Camera;
+}
+const composers = new WeakMap<THREE.Scene, Composed>();
+
+/**
+ * Render through a post-processing chain (ambient occlusion, depth of field, then tone mapping in
+ * the output pass) and draw it over the current 2D frame. One composer per scene, reused.
+ */
+export function draw3DComposed(
+  ctx: Ctx2D,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  opts: { exposure?: number; toneMapping?: THREE.ToneMapping; ao?: { radius: number; scale?: number }; dof?: { focus: number; aperture: number; maxblur: number } } = {},
+) {
+  const { renderer, canvas } = get();
+  let c = composers.get(scene);
+  if (!c || c.camera !== camera) {
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(1);
+    composer.setSize(VIDEO_WIDTH, VIDEO_HEIGHT);
+    composer.addPass(new RenderPass(scene, camera));
+    let ao: GTAOPass | null = null;
+    if (opts.ao) {
+      ao = new GTAOPass(scene, camera, VIDEO_WIDTH, VIDEO_HEIGHT);
+      ao.output = GTAOPass.OUTPUT.Default;
+      composer.addPass(ao);
+    }
+    let bokeh: BokehPass | null = null;
+    if (opts.dof) {
+      bokeh = new BokehPass(scene, camera, { focus: opts.dof.focus, aperture: opts.dof.aperture, maxblur: opts.dof.maxblur });
+      composer.addPass(bokeh);
+    }
+    composer.addPass(new OutputPass());
+    c = { composer, ao, bokeh, camera };
+    composers.set(scene, c);
+  }
+  if (c.ao && opts.ao) c.ao.updateGtaoMaterial({ radius: opts.ao.radius, scale: opts.ao.scale ?? 1, thickness: opts.ao.radius });
+  if (c.bokeh && opts.dof) {
+    const u = c.bokeh.uniforms as Record<string, { value: number }>;
+    u.focus.value = opts.dof.focus;
+    u.aperture.value = opts.dof.aperture;
+    u.maxblur.value = opts.dof.maxblur;
+  }
+  const exposure = renderer.toneMappingExposure;
+  const toneMapping = renderer.toneMapping;
+  if (opts.exposure !== undefined) renderer.toneMappingExposure = opts.exposure;
+  if (opts.toneMapping !== undefined) renderer.toneMapping = opts.toneMapping;
+  c.composer.render();
+  renderer.toneMappingExposure = exposure;
+  renderer.toneMapping = toneMapping;
   ctx.drawImage(canvas as CanvasImageSource, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
 }
 
@@ -65,6 +152,8 @@ export function sceneCache<S extends object, T extends { scene: THREE.Scene }>(b
 }
 
 function disposeScene(scene: THREE.Scene) {
+  composers.get(scene)?.composer.dispose();
+  composers.delete(scene);
   scene.traverse((o) => {
     const m = o as THREE.Mesh;
     m.geometry?.dispose();
