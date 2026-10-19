@@ -31,6 +31,22 @@ describe('cabin-storm (long-form)', () => {
     }
   });
 
+  it('plays recorded thunder: close claps for near strikes, never the same clip twice in a row', () => {
+    const r = run(1800, { lightningPerHour: 120 }, 9);
+    const s = r.state as CabinState;
+    const thunder = r.audio.filter((a) => a.kind === 'sample');
+    expect(thunder.length).toBe(s.strikes.length);
+    const byStrike = r.events.filter((e) => e.type === 'thunder');
+    for (const e of byStrike) {
+      const near = s.strikes[e.strike as number].delay < 6;
+      expect(String(e.clip)).toMatch(near ? /thunder-close-/ : /thunder-far-/);
+    }
+    for (const cls of ['close', 'far']) {
+      const clips = byStrike.map((e) => String(e.clip)).filter((c) => c.includes(cls));
+      for (let i = 1; i < clips.length; i++) expect(clips[i]).not.toBe(clips[i - 1]);
+    }
+  });
+
   it('has no lightning when it is turned off', () => {
     expect(run(300, { lightningPerHour: 0 }).events.some((e) => e.type === 'lightning')).toBe(false);
   });

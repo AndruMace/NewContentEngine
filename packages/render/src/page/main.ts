@@ -44,6 +44,7 @@ window.renderRecipe = async (recipe, opts) => {
   await loadFonts();
   const template = getTemplate(recipe.templateId);
   const theme = getTheme(recipe.themeId);
+  await template.preload?.(recipe.params as never);
   const runner = new Runner(template, {
     seed: recipe.seed,
     params: recipe.params,

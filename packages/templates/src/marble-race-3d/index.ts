@@ -51,6 +51,8 @@ export interface State {
   steps: number;
   winner: number;
   winStep: number;
+  /** Per video frame, the furthest any marble had got so far (for the gaps on the leaderboard). */
+  frontier: Float32Array;
   /** When the result is complete: the podium filled (race mode), or the win (elimination). */
   podiumStep: number;
   camera: CameraTrack;
@@ -118,6 +120,7 @@ export const marbleRace3d: Template<MarbleRace3dParams, State> = {
       steps,
       winner: race.timedOut || race.lost ? -1 : race.winner,
       winStep: race.winStep,
+      frontier: frontierOf(race.progress),
       podiumStep: race.podiumStep,
       camera: cameraTrack(race.focus, race.course),
       finishes: [],
@@ -183,10 +186,19 @@ export const marbleRace3d: Template<MarbleRace3dParams, State> = {
     const prog = s.progress[f] ?? s.progress[s.progress.length - 1];
     const rows: LeaderboardRow[] = [];
     const row = (i: number, out = false): LeaderboardRow => ({ label: s.teams[i].label, color: s.teams[i].color, icon: s.teams[i].icon, ...(out ? { out } : {}) });
-    for (const i of s.finishOrder) rows.push(row(i));
+    for (const fin of s.finishes) rows.push({ ...row(fin.who), note: fin.gap > 0.005 ? `+${fin.gap.toFixed(2)}s` : undefined });
     const alive = s.teams.map((_, i) => i).filter((i) => s.outAt[i] < 0 && !s.finishOrder.includes(i));
-    if (prog) alive.sort((a, b) => prog[b] - prog[a] || a - b);
-    for (const i of alive) rows.push(row(i));
+    const ranked = (p: Float32Array | undefined) => (p ? [...alive].sort((a, b) => p[b] - p[a] || a - b) : alive);
+    const now = ranked(prog);
+    // Places gained or lost over the last second (arrows), and each marble's time behind the
+    // leader: how long ago the front of the race was where it is now.
+    const before = ranked(s.progress[Math.max(0, f - 60)]);
+    for (const i of now) {
+      const move = before.indexOf(i) - now.indexOf(i);
+      // (No gap on the leader's own row.)
+      const gap = prog && (s.finishes.length || now.indexOf(i) > 0) ? gapBehind(s, f, prog[i]) : 0;
+      rows.push({ ...row(i), ...(move ? { move } : {}), ...(gap >= 0.05 ? { note: `+${gap.toFixed(1)}s` } : {}) });
+    }
     const outs = s.teams
       .map((_, i) => i)
       .filter((i) => s.outAt[i] >= 0)
@@ -378,6 +390,31 @@ function drawPodium(ctx: Ctx2D, s: State, t: number) {
     ctx.restore();
   });
   ctx.restore();
+}
+
+/** The front of the race, frame by frame (never moving back). */
+function frontierOf(progress: Float32Array[]): Float32Array {
+  const out = new Float32Array(progress.length);
+  let best = 0;
+  progress.forEach((p, f) => {
+    for (const v of p) best = Math.max(best, v);
+    out[f] = best;
+  });
+  return out;
+}
+
+/** Seconds since the front of the race was at course distance p (as of frame f). */
+function gapBehind(s: State, f: number, p: number): number {
+  let lo = 0;
+  let hi = Math.min(f, s.frontier.length - 1);
+  if (s.frontier[hi] <= p) return 0;
+  // The last frame the front was still at or behind p.
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (s.frontier[mid] <= p) lo = mid;
+    else hi = mid - 1;
+  }
+  return (f - lo) / 60;
 }
 
 /** The video frame the tape is on. */

@@ -1,14 +1,15 @@
 import { z } from 'zod';
 import type { AudioEventInput, DramaScore, Template } from '@sim/engine';
 import { Rng } from '@sim/engine';
-import { log } from '@sim/physics/math';
-import { drawCabin } from './view3d';
+import { scheduleTimes, wrap } from '../ambient/loop';
+import { drawCabin, preloadCabin } from './view3d';
+import { loadSound } from '../ambient/assets';
 
 /**
  * Long-form ambient: inside a log cabin, a crackling fire, a thunderstorm through big windows.
  *
  * There is no simulation as such: init() lays out a seeded schedule of cues for the whole master
- * loop (lightning, thunder, the rain/wind bed, fire crackles), step() emits them on time, and every
+ * loop (lightning and its thunder), step() emits them on time, and every
  * frame is drawn from t and that schedule alone. All cue times live in [0, loopS): a thunderclap
  * that would land after the end wraps to the start, so the loop repeats seamlessly.
  */
@@ -34,9 +35,7 @@ export interface Strike {
 
 type Cue =
   | { t: number; type: 'lightning'; strike: number }
-  | { t: number; type: 'thunder'; strike: number; vel: number; near: boolean }
-  | { t: number; type: 'bed'; vel: number }
-  | { t: number; type: 'crackle'; vel: number; pitch: number; pan: number; pop: boolean };
+  | { t: number; type: 'thunder'; strike: number; vel: number; clip: string; rate: number; pan: number };
 
 export interface CabinState {
   p: CabinStormParams;
@@ -48,34 +47,57 @@ export interface CabinState {
 
 /** Minimum time between strikes, so flashes never come in bursts. */
 const MIN_STRIKE_GAP_S = 12;
-/** Rain and wind bed: one overlapping stretch every 4 s (the synth's 'ambience' layer). */
-const BED_EVERY_S = 4;
+/** Recorded beds (see scripts/build-ambient-audio.ts): rain on the window, the fire, wind gusts. */
+const SOUNDS = { rain: 'audio/rain-window-600.opus', fire: 'audio/fire-hearth-600.opus', wind: 'audio/wind-howl-60.opus' } as const;
+const SOUND_LENGTH_S = { rain: 600, fire: 600, wind: 60 } as const;
+/** Thunder one-shots: close claps (a sharp crack, then rumble) and distant rolls. */
+const THUNDER = {
+  close: [1, 2, 3, 4, 5, 6].map((i) => `audio/thunder-close-${i}.opus`),
+  far: [1, 2, 3, 4, 5].map((i) => `audio/thunder-far-${i}.opus`),
+};
+/** Thunder within this many seconds of its flash (≈ 2 km) is a close clap. */
+const CLOSE_DELAY_S = 6;
 
-const mod = (t: number, L: number) => ((t % L) + L) % L;
+/** Each pool played in a shuffled order, reshuffled when used up (never the same clip twice in a row). */
+function clipPicker(rng: Rng, pool: string[]) {
+  let order: string[] = [];
+  let last = '';
+  return () => {
+    if (!order.length) {
+      order = [...pool];
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = rng.int(0, i);
+        [order[i], order[j]] = [order[j], order[i]];
+      }
+      if (order[order.length - 1] === last && order.length > 1) [order[0], order[order.length - 1]] = [order[order.length - 1], order[0]];
+    }
+    last = order.pop()!;
+    return last;
+  };
+}
 
 function schedule(p: CabinStormParams, L: number, rng: Rng): Pick<CabinState, 'strikes' | 'cues'> {
-  const strikes: Strike[] = [];
-  const rate = p.lightningPerHour / 3600;
-  if (rate > 0) {
-    // Poisson arrivals with a floor on the gap, over [0, L - gap) so the wrap gap is respected too.
-    for (let t = rng.range(0, 1 / rate); t < L - MIN_STRIKE_GAP_S; t += MIN_STRIKE_GAP_S + -log(1 - rng.next()) / rate) {
-      const distanceKm = rng.range(0.6, 7);
-      const strength = Math.min(1, (0.35 + rng.next() * 0.65) * (1.2 - distanceKm / 10));
-      strikes.push({ t, strength, delay: distanceKm * 2.9, x: rng.next(), pulses: rng.chance(0.45) ? [0, rng.range(0.18, 0.35)] : [0] });
-    }
-  }
+  const strikes: Strike[] = scheduleTimes(rng, L, p.lightningPerHour / 3600, MIN_STRIKE_GAP_S).map((t) => {
+    const distanceKm = rng.range(0.6, 7);
+    const strength = Math.min(1, (0.35 + rng.next() * 0.65) * (1.2 - distanceKm / 10));
+    return { t, strength, delay: distanceKm * 2.9, x: rng.next(), pulses: rng.chance(0.45) ? [0, rng.range(0.18, 0.35)] : [0] };
+  });
   const cues: Cue[] = [];
+  const pickClose = clipPicker(rng, THUNDER.close);
+  const pickFar = clipPicker(rng, THUNDER.far);
   strikes.forEach((s, i) => {
     cues.push({ t: s.t, type: 'lightning', strike: i });
-    cues.push({ t: mod(s.t + s.delay, L), type: 'thunder', strike: i, vel: 0.25 + 0.65 * s.strength, near: s.delay < 6 });
+    const near = s.delay < CLOSE_DELAY_S;
+    cues.push({
+      t: wrap(s.t + s.delay, L),
+      type: 'thunder',
+      strike: i,
+      vel: 0.45 + 0.55 * s.strength,
+      clip: near ? pickClose() : pickFar(),
+      rate: rng.range(0.92, 1.06),
+      pan: (s.x - 0.5) * 1.2,
+    });
   });
-  for (let t = 0; t < L; t += BED_EVERY_S) cues.push({ t, type: 'bed', vel: 0.35 + 0.45 * p.storm });
-  // Fire crackles: a few a second, with occasional louder pops.
-  const crackleRate = 1.5 + 3 * p.fire;
-  for (let t = rng.range(0, 1 / crackleRate); t < L; t += -log(1 - rng.next()) / crackleRate) {
-    const pop = rng.chance(0.06);
-    cues.push({ t, type: 'crackle', vel: (pop ? 0.5 : 0.12 + rng.next() * 0.2) * (0.6 + 0.4 * p.fire), pitch: rng.next(), pan: rng.range(-0.25, 0.25), pop });
-  }
   cues.sort((a, b) => a.t - b.t);
   return { strikes, cues };
 }
@@ -88,6 +110,11 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
   schema: cabinStormSchema,
   format: { width: 1920, height: 1080, fps: 30 },
   longForm: {
+    beds: (p: CabinStormParams) => [
+      { sound: SOUNDS.rain, gain: 0.55 + 0.5 * p.storm, swell: { depth: 0.25, cycles: [3, 7, 13] } },
+      { sound: SOUNDS.fire, gain: 0.35 + 0.5 * p.fire, pan: -0.1, swell: { depth: 0.15, cycles: [5, 11] } },
+      { sound: SOUNDS.wind, gain: 0.15 + 0.35 * p.storm, pan: 0.3, swell: { depth: 0.6, cycles: [2, 9, 17] } },
+    ],
     minLoopS: 20 * 60,
     maxLoopS: 60 * 60,
     defaultLoopS: 30 * 60,
@@ -102,6 +129,13 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
   glowScale: 0,
   defaultCopy: { hook: '', cta: '' },
 
+  preload: () =>
+    Promise.all([
+      preloadCabin(),
+      ...(Object.keys(SOUNDS) as (keyof typeof SOUNDS)[]).map((k) => loadSound(SOUNDS[k], SOUND_LENGTH_S[k])),
+      ...[...THUNDER.close, ...THUNDER.far].map((clip) => loadSound(clip)),
+    ]).then(() => undefined),
+
   init({ params, rng, loopS }) {
     const L = loopS || 30 * 60;
     return { p: params, loopS: L, ...schedule(params, L, rng), next: 0 };
@@ -111,9 +145,8 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
     while (s.next < s.cues.length && s.cues[s.next].t < t + dt) {
       const c = s.cues[s.next++];
       if (c.type === 'lightning') emit({ type: 'lightning', strike: c.strike, strength: s.strikes[c.strike].strength });
-      else if (c.type === 'thunder') emit({ type: 'thunder', strike: c.strike, vel: c.vel, near: c.near });
-      else if (c.type === 'bed') emit({ type: 'bed', vel: c.vel });
-      else emit({ type: 'crackle', vel: c.vel, pitch: c.pitch, pan: c.pan, pop: c.pop });
+      else emit({ type: 'thunder', strike: c.strike, vel: c.vel, clip: c.clip, rate: c.rate, pan: c.pan });
+
     }
   },
 
@@ -129,11 +162,7 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
   audio(e): AudioEventInput[] {
     switch (e.type) {
       case 'thunder':
-        return [{ kind: 'sfx', name: 'boom', vel: e.vel as number, pitch: e.near ? 0.7 : 0.2 }];
-      case 'bed':
-        return [{ kind: 'sfx', name: 'ambience', vel: e.vel as number, pitch: 1 }];
-      case 'crackle':
-        return [{ kind: 'sfx', name: e.pop ? 'pop' : 'tick', vel: e.vel as number, pitch: e.pitch as number, pan: e.pan as number }];
+        return [{ kind: 'sample', name: e.clip as string, vel: e.vel as number, rate: e.rate as number, pan: e.pan as number }];
       default:
         return [];
     }

@@ -1,4 +1,4 @@
-import type { AudioEvent, VoiceId } from '@sim/engine';
+import type { AmbientBed, AudioEvent, VoiceId } from '@sim/engine';
 
 /**
  * Procedural voices + SFX built from Web Audio nodes. The same code drives the realtime
@@ -14,6 +14,8 @@ export interface SynthBus {
   t0: number;
   /** Long-form loop length: noise offsets repeat with it, so the loop's end flows into its start. 0 = none. */
   loopS: number;
+  /** Decoded recordings for 'sample' events, by path in assets/ambient. */
+  samples: Map<string, AudioBuffer>;
 }
 
 /** Where in the shared noise buffer a sound starting at context time `when` reads from (same in every segment). */
@@ -43,16 +45,26 @@ function seededNoise(ctx: BaseAudioContext, seconds: number, channels: number, d
   return buf;
 }
 
-export function createBus(ctx: BaseAudioContext, opts: { reverb: number; destination?: AudioNode; t0?: number; loopS?: number }): SynthBus {
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -16;
-  comp.knee.value = 10;
-  comp.ratio.value = 8;
-  comp.attack.value = 0.002;
-  comp.release.value = 0.2;
+export function createBus(
+  ctx: BaseAudioContext,
+  opts: { reverb: number; destination?: AudioNode; t0?: number; loopS?: number; samples?: Map<string, AudioBuffer>; compress?: boolean },
+): SynthBus {
   const master = ctx.createGain();
   master.gain.value = 0.9;
-  comp.connect(master).connect(opts.destination ?? ctx.destination);
+  master.connect(opts.destination ?? ctx.destination);
+  // The Shorts bus is squeezed hard (dense collisions); long-form ambience keeps its dynamics and is
+  // only limited when mastered.
+  let comp: AudioNode = master;
+  if (opts.compress ?? true) {
+    const c = ctx.createDynamicsCompressor();
+    c.threshold.value = -16;
+    c.knee.value = 10;
+    c.ratio.value = 8;
+    c.attack.value = 0.002;
+    c.release.value = 0.2;
+    c.connect(master);
+    comp = c;
+  }
 
   const input = ctx.createGain();
   input.connect(comp);
@@ -63,7 +75,7 @@ export function createBus(ctx: BaseAudioContext, opts: { reverb: number; destina
     wet.gain.value = opts.reverb;
     input.connect(verb).connect(wet).connect(comp);
   }
-  return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map(), t0: opts.t0 ?? 0, loopS: opts.loopS ?? 0 };
+  return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map(), t0: opts.t0 ?? 0, loopS: opts.loopS ?? 0, samples: opts.samples ?? new Map() };
 }
 
 function out(bus: SynthBus, pan = 0): AudioNode {
@@ -172,6 +184,18 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
   const dest = out(bus, ev.pan ?? 0);
   if (ev.kind === 'note') {
     playVoice(bus, ev.voice ?? 'marimba', ev.midi, ev.vel, when, ev.dur ?? 1, dest);
+    return;
+  }
+  if (ev.kind === 'sample') {
+    const buffer = bus.samples.get(ev.name);
+    if (!buffer) throw new Error(`Sound not loaded: ${ev.name}`);
+    const src = bus.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = ev.rate ?? 1;
+    const g = bus.ctx.createGain();
+    g.gain.value = ev.vel;
+    src.connect(g).connect(dest);
+    src.start(when);
     return;
   }
   const v = ev.vel;
@@ -381,7 +405,16 @@ export async function renderAudioRange(
   events: AudioEvent[],
   from: number,
   to: number,
-  opts: { reverb: number; sampleRate?: number; preRoll?: number; postRoll?: number; loopS?: number },
+  opts: {
+    reverb: number;
+    sampleRate?: number;
+    preRoll?: number;
+    postRoll?: number;
+    loopS?: number;
+    samples?: Map<string, AudioBuffer>;
+    beds?: AmbientBed[];
+    compress?: boolean;
+  },
 ): Promise<Float32Array> {
   const sr = opts.sampleRate ?? 48000;
   const pre = opts.preRoll ?? 12;
@@ -391,8 +424,9 @@ export async function renderAudioRange(
   const skip = Math.round(pre * sr);
   const n = Math.round((end - from) * sr);
   const ctx = new OfflineAudioContext(2, skip + n, sr);
-  const bus = createBus(ctx, { reverb: opts.reverb, t0: start, loopS: opts.loopS });
+  const bus = createBus(ctx, { reverb: opts.reverb, t0: start, loopS: opts.loopS, samples: opts.samples, compress: opts.compress });
   const L = opts.loopS ?? 0;
+  for (const bed of opts.beds ?? []) playBed(bus, bed, (skip + n) / sr);
   const due: { when: number; ev: AudioEvent }[] = [];
   for (const ev of events) {
     for (const shift of L ? [-L, 0, L] : [0]) {
@@ -426,6 +460,35 @@ export async function renderAudioRange(
     out[i * 2 + 1] = r[skip + i];
   }
   return out;
+}
+
+/**
+ * A bed: its recording looped from the point matching the segment's start time, so every segment
+ * (and every repeat of the loop, since the recording's length divides the loop) lines up. The level
+ * swells slowly, as a function of time within the loop.
+ */
+function playBed(bus: SynthBus, bed: AmbientBed, lengthS: number) {
+  const buffer = bus.samples.get(bed.sound);
+  if (!buffer) throw new Error(`Sound not loaded: ${bed.sound}`);
+  const ctx = bus.ctx;
+  const B = buffer.length / buffer.sampleRate;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.loop = true;
+  const g = ctx.createGain();
+  const L = bus.loopS;
+  const cycles = bed.swell?.cycles ?? [];
+  const level = (t: number) => {
+    if (!bed.swell || !L || !cycles.length) return bed.gain;
+    let s = 0;
+    cycles.forEach((c, k) => (s += Math.sin((2 * Math.PI * c * t) / L + k * 1.7)));
+    return bed.gain * (1 + (bed.swell.depth * s) / cycles.length);
+  };
+  const STEP = 0.5;
+  g.gain.setValueAtTime(level(bus.t0), 0);
+  for (let k = 1; k * STEP <= lengthS + STEP; k++) g.gain.linearRampToValueAtTime(level(bus.t0 + k * STEP), k * STEP);
+  src.connect(g).connect(out(bus, bed.pan ?? 0));
+  src.start(0, ((bus.t0 % B) + B) % B);
 }
 
 /** 32-bit float stereo WAV, so nothing clips before loudness normalisation. */

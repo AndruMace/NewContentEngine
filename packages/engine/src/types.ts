@@ -17,11 +17,29 @@ export type SfxId = 'shatter' | 'pop' | 'boom' | 'tick' | 'whoosh' | 'chime' | '
 
 export type AudioEvent =
   | { t: number; kind: 'note'; midi: number; vel: number; voice?: VoiceId; dur?: number; pan?: number }
-  | { t: number; kind: 'sfx'; name: SfxId; vel: number; pitch?: number; pan?: number };
+  | { t: number; kind: 'sfx'; name: SfxId; vel: number; pitch?: number; pan?: number }
+  /** A recorded sound from assets/ambient (e.g. 'audio/thunder-close-1.opus'), at a playback rate. */
+  | { t: number; kind: 'sample'; name: string; vel: number; rate?: number; pan?: number };
 
 export type AudioEventInput =
   | Omit<Extract<AudioEvent, { kind: 'note' }>, 't'>
-  | Omit<Extract<AudioEvent, { kind: 'sfx' }>, 't'>;
+  | Omit<Extract<AudioEvent, { kind: 'sfx' }>, 't'>
+  | Omit<Extract<AudioEvent, { kind: 'sample' }>, 't'>;
+
+/**
+ * A recording that plays continuously under a long-form video (rain, fire, a ship's room tone). Its
+ * length must divide the loop length (beds are cut to 60, 120, 300 or 600 s: these divide every allowed
+ * loop), so it sits at the same point at t = loopS as at t = 0.
+ */
+export interface AmbientBed {
+  /** Path in assets/ambient. */
+  sound: string;
+  /** Linear gain. */
+  gain: number;
+  pan?: number;
+  /** Slow swells in level: depth (0..1) and how many times each one rises and falls per loop. */
+  swell?: { depth: number; cycles: number[] };
+}
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
@@ -94,6 +112,10 @@ export interface LeaderboardRow {
   out?: boolean;
   /** Optional emoji/icon drawn before the label. */
   icon?: string;
+  /** Places just gained (positive) or lost (negative): drawn as a green or red arrow by the rank. */
+  move?: number;
+  /** A short note at the row's end, e.g. the gap to the leader ("+0.6s"). */
+  note?: string;
 }
 
 export interface Copy {
@@ -125,6 +147,10 @@ export interface LongFormSpec {
   defaultLoopS: number;
   /** A representative moment for the thumbnail (e.g. mid lightning flash). */
   thumbnailAt?: (state: any) => number;
+  /** Recordings that play throughout (see AmbientBed). */
+  beds?: (params: any) => AmbientBed[];
+  /** Reverb on the synthesized sounds (recordings already carry their room). Default 0. */
+  reverb?: number;
 }
 
 export interface Template<P = any, S = any> {
@@ -160,6 +186,11 @@ export interface Template<P = any, S = any> {
   lengthParam?: { param: string; offsetS: number };
   /** Copy with {paramName} / {hud:key} placeholders. */
   defaultCopy: Copy;
+  /**
+   * Load files the template draws or plays (textures, models, recordings) before the first frame.
+   * Browser only; never called for headless runs, so it can't affect the simulation.
+   */
+  preload?(params: P): Promise<void>;
   init(ctx: InitCtx<P>): S;
   step(s: S, ctx: StepCtx): void;
   isDone(s: S): boolean;

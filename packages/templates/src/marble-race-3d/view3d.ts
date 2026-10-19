@@ -291,11 +291,24 @@ const view = sceneCache((s: State, theme: Theme) => {
       }
     } else {
       for (const p of b.pieces) {
-        const isGate = p.shape.kind === 'box' && p.shape.hz > 0.02;
-        const m = new THREE.Mesh(geometryOf(p.shape), isGate ? kit.gate : kit.spinner);
-        m.position.set(p.pos.x, p.pos.y, p.pos.z);
-        m.castShadow = true;
-        g.add(m);
+        // Gates and spinners are painted pieces with no palette hue; contraptions (trapdoor flaps,
+        // elevator slats, paddle wheels) wear the track's own materials.
+        const machine = p.finish === 'paint' && p.hue === -1;
+        const isGate = machine && p.shape.kind === 'box' && p.shape.hz > 0.02;
+        if (isGate) g.userData.gate = true;
+        const geo = geometryOf(p.shape);
+        let obj: THREE.Object3D;
+        if (p.finish === 'glass' && !(kit.wall instanceof THREE.Material)) obj = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), new THREE.LineBasicMaterial({ color: kit.wall.edges, transparent: true, opacity: kit.wall.opacity }));
+        else {
+          const mat = machine ? (isGate ? kit.gate : kit.spinner) : p.finish === 'glass' ? (kit.wall as THREE.Material) : p.finish === 'brass' ? kit.turn(p.hue ?? 0) : p.finish === 'steel' ? (kit.bracket ?? kit.peg) : kit.floor(p.hue ?? 0);
+          const m = new THREE.Mesh(geo, mat);
+          m.castShadow = true;
+          m.receiveShadow = !machine;
+          obj = m;
+        }
+        obj.position.set(p.pos.x, p.pos.y, p.pos.z);
+        obj.quaternion.set(p.rot.x, p.rot.y, p.rot.z, p.rot.w);
+        g.add(obj);
       }
     }
     scene.add(g);
@@ -362,7 +375,7 @@ export function drawRace3D(ctx: Ctx2D, theme: Theme, s: State, t: number) {
     g.position.set(fr[o], fr[o + 1], fr[o + 2]);
     g.quaternion.set(fr[o + 3], fr[o + 4], fr[o + 5], fr[o + 6]);
     // Gates are gone once they've lifted clear (they'd hang over the track).
-    if (fr[o + 1] > first[o + 1] + 0.03) g.visible = false;
+    if (g.userData.gate && fr[o + 1] > first[o + 1] + 0.03) g.visible = false;
   });
   const { pos, look } = cameraPose(s, t);
   // Knocked-out marbles burst and vanish.

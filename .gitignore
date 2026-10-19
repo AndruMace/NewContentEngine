@@ -8,3 +8,4 @@ data/exports/
 .DS_Store
 data/sqlite.db*
 data/youtube-token.json
+data/ambient-sources/

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { chromium, type Browser } from 'playwright-core';
@@ -13,6 +13,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const ROOT = resolve(here, '../../..');
 const CACHE = join(ROOT, '.render-cache');
+const ASSETS = join(ROOT, 'assets/ambient');
+const ASSET_TYPES: Record<string, string> = {
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  gltf: 'model/gltf+json',
+  bin: 'application/octet-stream',
+  opus: 'audio/ogg',
+  ogg: 'audio/ogg',
+  json: 'application/json',
+};
 
 let bundlePromise: Promise<string> | null = null;
 
@@ -66,6 +76,20 @@ export class RenderHarness {
       if (path === '/' || path === '/index.html') res.writeHead(200, { 'content-type': 'text/html' }).end(PAGE_HTML);
       else if (path === '/render-page.js') res.writeHead(200, { 'content-type': 'text/javascript' }).end(js);
       else if (path === '/fonts/montserrat-900.woff2') res.writeHead(200, { 'content-type': 'font/woff2' }).end(font);
+      else if (path.startsWith('/assets/')) {
+        // Long-form templates' textures, models and recordings (assets/ambient), read-only.
+        const file = resolve(ASSETS, decodeURIComponent(path.slice('/assets/'.length)));
+        const type = ASSET_TYPES[file.slice(file.lastIndexOf('.') + 1)];
+        if (!file.startsWith(ASSETS + sep) || !type) {
+          res.writeHead(404).end();
+          return;
+        }
+        try {
+          res.writeHead(200, { 'content-type': type }).end(await readFile(file));
+        } catch {
+          res.writeHead(404).end();
+        }
+      }
       else if (path === '/upload' && req.method === 'POST') {
         const name = url.searchParams.get('name') ?? '';
         if (!/^[\w.-]+$/.test(name)) {

@@ -9,8 +9,21 @@
 import { CanvasSource, Mp4OutputFormat, Output, StreamTarget, getFirstEncodableVideoCodec, type StreamTargetChunk } from 'mediabunny';
 import { Runner, getTheme, loopLengthOf, type Recipe } from '@sim/engine';
 import { getMelody, renderAudioRange } from '@sim/audio';
-import { getTemplate } from '@sim/templates';
+import { getTemplate, loadedSounds, setAssetBase } from '@sim/templates';
 import { upload } from './upload';
+
+setAssetBase('assets/');
+
+/** Load the template's files once per page (textures, models, recordings). */
+const preloaded = new Set<string>();
+async function preload(job: LongFormJob) {
+  const key = JSON.stringify(job.recipe.params) + job.recipe.templateId;
+  if (preloaded.has(key)) return;
+  const template = getTemplate(job.recipe.templateId);
+  const r = runnerFor(job, false);
+  await template.preload?.(r.params);
+  preloaded.add(key);
+}
 
 export interface LongFormJob {
   recipe: Recipe;
@@ -78,6 +91,7 @@ function drawingRunnerAt(job: LongFormJob, frame: number) {
 }
 
 window.longFormPrepare = async (job) => {
+  await preload(job);
   const r = headlessRun(job);
   const template = getTemplate(job.recipe.templateId);
   await upload('events.json', JSON.stringify({ events: r.events, audio: r.audio }));
@@ -97,6 +111,7 @@ window.longFormPrepare = async (job) => {
  * reading pixels back would switch the encode canvas to slow software rendering.
  */
 window.longFormSeamCheck = async (job) => {
+  await preload(job);
   const r = runnerFor(job, true);
   const canvas = Object.assign(document.createElement('canvas'), { width: r.width, height: r.height });
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
@@ -120,6 +135,7 @@ window.longFormSeamCheck = async (job) => {
 
 window.longFormVideoSegment = async (job, seg) => {
   const t0 = performance.now();
+  await preload(job);
   const r = drawingRunnerAt(job, seg.f0);
   const canvas = Object.assign(document.createElement('canvas'), { width: r.width, height: r.height });
   document.body.appendChild(canvas);
@@ -162,7 +178,23 @@ window.longFormVideoSegment = async (job, seg) => {
 window.longFormAudioSegment = async (job, seg) => {
   const t0 = performance.now();
   const r = headlessRun(job);
-  const samples = await renderAudioRange(r.audio, seg.from, seg.to, { reverb: r.theme.reverb, loopS: r.loopS, postRoll: seg.overlap });
+  await preload(job);
+  const lf = getTemplate(job.recipe.templateId).longForm!;
+  const beds = lf.beds?.(r.params) ?? [];
+  // The pre-roll must outlast the longest one-shot (a thunder roll), so one ringing at a segment's
+  // start sounds exactly as in the segment before.
+  const bedSounds = new Set(beds.map((b) => b.sound));
+  let longest = 0;
+  for (const [name, buf] of loadedSounds()) if (!bedSounds.has(name)) longest = Math.max(longest, buf.duration);
+  const samples = await renderAudioRange(r.audio, seg.from, seg.to, {
+    preRoll: Math.max(12, Math.ceil(longest) + 2),
+    reverb: lf.reverb ?? 0,
+    loopS: r.loopS,
+    postRoll: seg.overlap,
+    samples: loadedSounds(),
+    beds,
+    compress: false,
+  });
   await upload(seg.name, samples);
   return { samples: samples.length / 2, ms: performance.now() - t0 };
 };

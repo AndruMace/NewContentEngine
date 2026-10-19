@@ -1,0 +1,462 @@
+{
+  "about": "Third-party assets used by the long-form ambient templates. Every file under assets/ambient/ must be listed here, and every asset must be CC0 (checked by packages/templates/src/ambient/assets.test.ts). Sounds are processed from the original recordings by scripts/build-ambient-audio.ts; the originals are not kept in the repo.",
+  "assets": [
+    {
+      "id": "rough_wood",
+      "kind": "texture",
+      "use": "Cabin log walls",
+      "files": [
+        "textures/rough_wood/rough_wood_arm_2k.jpg",
+        "textures/rough_wood/rough_wood_diff_2k.jpg",
+        "textures/rough_wood/rough_wood_nor_gl_2k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/rough_wood",
+      "site": "Poly Haven",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "wood_floor_worn",
+      "kind": "texture",
+      "use": "Cabin floorboards",
+      "files": [
+        "textures/wood_floor_worn/wood_floor_worn_arm_2k.jpg",
+        "textures/wood_floor_worn/wood_floor_worn_diff_2k.jpg",
+        "textures/wood_floor_worn/wood_floor_worn_nor_gl_2k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/wood_floor_worn",
+      "site": "Poly Haven",
+      "authors": [
+        "Dimitrios Savva"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rustic_stone_wall_02",
+      "kind": "texture",
+      "use": "Cabin fireplace and chimney",
+      "files": [
+        "textures/rustic_stone_wall_02/rustic_stone_wall_02_arm_2k.jpg",
+        "textures/rustic_stone_wall_02/rustic_stone_wall_02_diff_2k.jpg",
+        "textures/rustic_stone_wall_02/rustic_stone_wall_02_nor_gl_2k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/rustic_stone_wall_02",
+      "site": "Poly Haven",
+      "authors": [
+        "Amal Kumar"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "bark_brown_02",
+      "kind": "texture",
+      "use": "Firewood",
+      "files": [
+        "textures/bark_brown_02/bark_brown_02_arm_1k.jpg",
+        "textures/bark_brown_02/bark_brown_02_diff_1k.jpg",
+        "textures/bark_brown_02/bark_brown_02_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/bark_brown_02",
+      "site": "Poly Haven",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "caban",
+      "kind": "texture",
+      "use": "Rug and throw",
+      "files": [
+        "textures/caban/caban_arm_1k.jpg",
+        "textures/caban/caban_diff_1k.jpg",
+        "textures/caban/caban_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/caban",
+      "site": "Poly Haven",
+      "authors": [
+        "Rico Cilliers",
+        "colormass"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "metal_plate_02",
+      "kind": "texture",
+      "use": "Spaceship panels",
+      "files": [
+        "textures/metal_plate_02/metal_plate_02_arm_1k.jpg",
+        "textures/metal_plate_02/metal_plate_02_diff_1k.jpg",
+        "textures/metal_plate_02/metal_plate_02_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/metal_plate_02",
+      "site": "Poly Haven",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "blue_metal_plate",
+      "kind": "texture",
+      "use": "Spaceship panels",
+      "files": [
+        "textures/blue_metal_plate/blue_metal_plate_arm_1k.jpg",
+        "textures/blue_metal_plate/blue_metal_plate_diff_1k.jpg",
+        "textures/blue_metal_plate/blue_metal_plate_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/blue_metal_plate",
+      "site": "Poly Haven",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "Rockingchair_01",
+      "kind": "model",
+      "use": "Cabin rocking chair",
+      "files": [
+        "models/Rockingchair_01/Rockingchair_01.bin",
+        "models/Rockingchair_01/Rockingchair_01_1k.gltf",
+        "models/Rockingchair_01/textures/Rockingchair_01_arm_1k.jpg",
+        "models/Rockingchair_01/textures/Rockingchair_01_diff_1k.jpg",
+        "models/Rockingchair_01/textures/Rockingchair_01_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/Rockingchair_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Jorge Camacho"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ArmChair_01",
+      "kind": "model",
+      "use": "Cabin armchair",
+      "files": [
+        "models/ArmChair_01/ArmChair_01.bin",
+        "models/ArmChair_01/ArmChair_01_1k.gltf",
+        "models/ArmChair_01/textures/Armchair_01_arm_1k.jpg",
+        "models/ArmChair_01/textures/Armchair_01_diff_1k.jpg",
+        "models/ArmChair_01/textures/Armchair_01_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/ArmChair_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Kirill Sannikov"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "WoodenTable_01",
+      "kind": "model",
+      "use": "Cabin side table",
+      "files": [
+        "models/WoodenTable_01/WoodenTable_01.bin",
+        "models/WoodenTable_01/WoodenTable_01_1k.gltf",
+        "models/WoodenTable_01/textures/WoodenTable_01_arm_1k.jpg",
+        "models/WoodenTable_01/textures/WoodenTable_01_diff_1k.jpg",
+        "models/WoodenTable_01/textures/WoodenTable_01_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/WoodenTable_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Ethan Place"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "Lantern_01",
+      "kind": "model",
+      "use": "Cabin lantern",
+      "files": [
+        "models/Lantern_01/Lantern_01.bin",
+        "models/Lantern_01/Lantern_01_1k.gltf",
+        "models/Lantern_01/textures/Lantern_01_brass_arm_1k.jpg",
+        "models/Lantern_01/textures/Lantern_01_brass_diff_1k.jpg",
+        "models/Lantern_01/textures/Lantern_01_brass_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/Lantern_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Rajil Jose Macatangay"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rain-window",
+      "kind": "sound",
+      "use": "Cabin rain bed",
+      "files": [
+        "audio/rain-window-600.opus"
+      ],
+      "durationS": 600,
+      "derived": "600 s seamless loop from 60 s, normalised to -23 LUFS",
+      "source": "https://freesound.org/people/bassimat/sounds/833924/",
+      "site": "Freesound",
+      "title": "Rain on the House Roof Window #001",
+      "authors": [
+        "bassimat"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rain-steady",
+      "kind": "sound",
+      "use": "Cabin rain bed (steady, alternative)",
+      "files": [
+        "audio/rain-steady-600.opus"
+      ],
+      "durationS": 600,
+      "derived": "600 s seamless loop from 15 s, normalised to -23 LUFS",
+      "source": "https://freesound.org/people/bobgon55/sounds/398626/",
+      "site": "Freesound",
+      "title": "Rainy Night in Summer",
+      "authors": [
+        "bobgon55"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "fire-hearth",
+      "kind": "sound",
+      "use": "Cabin fire bed",
+      "files": [
+        "audio/fire-hearth-600.opus"
+      ],
+      "durationS": 600,
+      "derived": "600 s seamless loop from 45 s, normalised to -23 LUFS",
+      "source": "https://freesound.org/people/visionear/sounds/501417/",
+      "site": "Freesound",
+      "title": "Aachen_Burning Fireplace Crackling Fire Sounds.wav",
+      "authors": [
+        "visionear"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "wind-howl",
+      "kind": "sound",
+      "use": "Cabin wind bed",
+      "files": [
+        "audio/wind-howl-60.opus"
+      ],
+      "durationS": 60,
+      "derived": "60 s seamless loop from 0 s, normalised to -26 LUFS",
+      "source": "https://freesound.org/people/juryduty/sounds/185070/",
+      "site": "Freesound",
+      "title": "howling_wind.wav",
+      "authors": [
+        "juryduty"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "ship-roomtone",
+      "kind": "sound",
+      "use": "Spaceship room tone bed",
+      "files": [
+        "audio/ship-roomtone-120.opus"
+      ],
+      "durationS": 120,
+      "derived": "120 s seamless loop from 3 s, normalised to -24 LUFS",
+      "source": "https://freesound.org/people/secondbody/sounds/614461/",
+      "site": "Freesound",
+      "title": "17. flying spaceship interior (roomtone)",
+      "authors": [
+        "secondbody"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-close-1",
+      "kind": "sound",
+      "use": "Thunder (close)",
+      "files": [
+        "audio/thunder-close-1.opus"
+      ],
+      "durationS": 13.1,
+      "derived": "clip 0.3–13.4 s of the original, faded",
+      "source": "https://freesound.org/people/Fission9/sounds/534023/",
+      "site": "Freesound",
+      "title": "Thunderclap",
+      "authors": [
+        "Fission9"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-far-1",
+      "kind": "sound",
+      "use": "Thunder (far)",
+      "files": [
+        "audio/thunder-far-1.opus"
+      ],
+      "durationS": 17,
+      "derived": "clip 1–18 s of the original, faded",
+      "source": "https://freesound.org/people/Fugeni/sounds/559804/",
+      "site": "Freesound",
+      "title": "Booming Thunder in Distance",
+      "authors": [
+        "Fugeni"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-close-2",
+      "kind": "sound",
+      "use": "Thunder (close)",
+      "files": [
+        "audio/thunder-close-2.opus"
+      ],
+      "durationS": 20,
+      "derived": "clip 13–33 s of the original, faded",
+      "source": "https://freesound.org/people/Dave%20Welsh/sounds/194364/",
+      "site": "Freesound",
+      "title": "Thunder Clap OWB KY 441x16.wav",
+      "authors": [
+        "Dave Welsh"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-close-3",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-close-3.opus"
+      ],
+      "durationS": 15.5,
+      "derived": "clip 2.5–18 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/567746/",
+      "site": "Freesound",
+      "title": "200708 Thunders various, big, med, distant, crack booming, hiss of rain.flac",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-close-4",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-close-4.opus"
+      ],
+      "durationS": 13,
+      "derived": "clip 27–40 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/567746/",
+      "site": "Freesound",
+      "title": "200708 Thunders various, big, med, distant, crack booming, hiss of rain.flac",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-far-2",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-far-2.opus"
+      ],
+      "durationS": 10,
+      "derived": "clip 50–60 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/567746/",
+      "site": "Freesound",
+      "title": "200708 Thunders various, big, med, distant, crack booming, hiss of rain.flac",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-far-3",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-far-3.opus"
+      ],
+      "durationS": 12,
+      "derived": "clip 80–92 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/567746/",
+      "site": "Freesound",
+      "title": "200708 Thunders various, big, med, distant, crack booming, hiss of rain.flac",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-far-4",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-far-4.opus"
+      ],
+      "durationS": 13.5,
+      "derived": "clip 132.5–146 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/567746/",
+      "site": "Freesound",
+      "title": "200708 Thunders various, big, med, distant, crack booming, hiss of rain.flac",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-far-5",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-far-5.opus"
+      ],
+      "durationS": 12.5,
+      "derived": "clip 1.5–14 s of the original, faded",
+      "source": "https://freesound.org/people/hifijohn/sounds/242735/",
+      "site": "Freesound",
+      "title": "thunder",
+      "authors": [
+        "hifijohn"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-close-5",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-close-5.opus"
+      ],
+      "durationS": 10,
+      "derived": "clip 20–30 s of the original, faded",
+      "source": "https://freesound.org/people/hifijohn/sounds/242735/",
+      "site": "Freesound",
+      "title": "thunder",
+      "authors": [
+        "hifijohn"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "thunder-close-6",
+      "kind": "sound",
+      "use": "Thunder (mixed)",
+      "files": [
+        "audio/thunder-close-6.opus"
+      ],
+      "durationS": 16.5,
+      "derived": "clip 39.5–56 s of the original, faded",
+      "source": "https://freesound.org/people/hifijohn/sounds/242735/",
+      "site": "Freesound",
+      "title": "thunder",
+      "authors": [
+        "hifijohn"
+      ],
+      "license": "CC0-1.0"
+    }
+  ]
+}

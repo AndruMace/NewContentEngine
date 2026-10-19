@@ -8,7 +8,8 @@
 import * as dm from '@sim/physics/math';
 import type { Rng } from '@sim/engine';
 import { Sim, ID_Q, DT, STEPS_PER_FRAME, quatAxis, v3, type TapeEvent, type V3 } from '../rube-goldberg/sim';
-import { buildCourse, locate, R, WALL_H, type Course } from './course';
+import { RAPIER } from '../rube-goldberg/rapier';
+import { buildCourse, locate, LIFT_HALF_PERIOD, R, W, WALL_H, type Course, type CourseOpts } from './course';
 
 export const GATE_OPEN_S = 0.8;
 export const OUTRO_S = 2.6;
@@ -17,6 +18,12 @@ const MAX_S = 85;
 const ROLL_DAMPING = 0.9;
 const GATE_LIFT = WALL_H + 0.03;
 const GATE_LIFT_S = 0.3;
+/** How long marbles may sit on a shut trapdoor before it lets them through anyway. */
+const TRAP_RELEASE_S = 4;
+/** Swung open this far (radians), a trapdoor has tipped: it latches open for good. */
+const TRAP_LATCH_AT = 0.25;
+/** How long a latched trapdoor takes to swing fully open. */
+const TRAP_SWING_S = 0.25;
 
 export type Mode = 'elimination' | 'race';
 
@@ -27,6 +34,9 @@ export interface RaceOpts {
   lanesPerSection: number;
   density: number;
   spinnerSpeed: number;
+  /** Passed to the course (tests). */
+  specials?: CourseOpts['specials'];
+  specialChance?: number;
 }
 
 export interface Race {
@@ -56,7 +66,7 @@ function sectionCuts(n: number, sections: number): number[] {
 
 export function runRace(rng: Rng, o: RaceOpts): Race {
   const sim = new Sim();
-  const course = buildCourse(sim, rng, { sections: o.sections, lanesPerSection: o.lanesPerSection, density: o.density, spinnerSpeed: o.spinnerSpeed, gates: o.mode === 'elimination', marbles: o.marbles });
+  const course = buildCourse(sim, rng, { sections: o.sections, lanesPerSection: o.lanesPerSection, density: o.density, spinnerSpeed: o.spinnerSpeed, gates: o.mode === 'elimination', marbles: o.marbles, specials: o.specials, specialChance: o.specialChance });
   const marbles = course.grid.map((at, i) =>
     sim.addBody(at, ID_Q, [{ piece: { shape: { kind: 'sphere', r: R }, finish: 'glass', hue: i, pos: v3(0, 0, 0), rot: ID_Q }, material: 'glass', tag: 'marble' }], {
       kind: 'marble',
@@ -97,6 +107,9 @@ export function runRace(rng: Rng, o: RaceOpts): Race {
   const alive = () => marbles.map((_, i) => i).filter((i) => !out[i] && finishedAt[i] < 0);
   const order = () => alive().sort((a, b) => prog[b] - prog[a] || a - b);
   const pos = (i: number): V3 => sim.body(marbles[i]).translation();
+  const trapWait = course.trapdoors.map(() => 0);
+  const trapState = course.trapdoors.map((): 'shut' | 'opening' | 'open' => 'shut');
+  const trapFrom = course.trapdoors.map(() => ({ t: 0, angle: 0 }));
 
   const eliminate = (i: number, cp: number) => {
     out[i] = true;
@@ -114,6 +127,29 @@ export function runRace(rng: Rng, o: RaceOpts): Race {
     const t = sim.t;
     // Kinematic parts: spinners turn, opened gates lift away.
     for (const sp of course.spinners) sim.body(sp.body).setNextKinematicRotation(quatAxis(Y, sp.phase + sp.omega * (t + DT)));
+    // Latched trapdoors: swing smoothly the rest of the way open, then stay there.
+    course.trapdoors.forEach((td, k) => {
+      if (trapState[k] !== 'opening') return;
+      const u = Math.min(1, (t + DT - trapFrom[k].t) / TRAP_SWING_S);
+      const e = u * u * (3 - 2 * u);
+      const full = td.rest - td.dir * td.open;
+      const a = trapFrom[k].angle + (full - trapFrom[k].angle) * e;
+      // The flap's centre sits half its length from the hinge, along its own direction.
+      const half = (td.len / 2) * td.dir;
+      const body = sim.body(td.body);
+      body.setNextKinematicRotation(quatAxis(v3(0, 0, 1), a));
+      body.setNextKinematicTranslation(v3(td.pivot.x + half * dm.cos(a), td.pivot.y + half * dm.sin(a), td.pivot.z));
+      if (u >= 1) trapState[k] = 'open';
+    });
+    // Elevators: alternate slats up and down in opposite phase, pausing at each end of their travel
+    // (long enough for the marbles on a raised slat to roll across onto the next).
+    for (const lf of course.lifts) {
+      const u = Math.max(-1, Math.min(1, 1.6 * dm.sin(((t + DT) * Math.PI) / LIFT_HALF_PERIOD)));
+      lf.bodies.forEach((bi, k) => {
+        const c = lf.at[k];
+        sim.body(bi).setNextKinematicTranslation(v3(c.x, c.y + lf.amp * (k % 2 ? -u : u), c.z));
+      });
+    }
     for (const g of [course.startGate, ...course.gates]) {
       if (g.openAt === null) continue;
       const u = Math.min(1, (t + DT - g.openAt) / GATE_LIFT_S);
@@ -203,6 +239,37 @@ export function runRace(rng: Rng, o: RaceOpts): Race {
       }
     }
 
+    // Trapdoors let a lone straggler (or two) through: marbles that have sat on a shut flap for a
+    // while trip its release.
+    const onTrap = new Set<number>();
+    course.trapdoors.forEach((td, k) => {
+      let on = false;
+      marbles.forEach((_, i) => {
+        if (out[i]) return;
+        const p = pos(i);
+        if (Math.abs(p.x - td.at.x) < td.len / 2 + R && Math.abs(p.z - td.at.z) < W / 2 && p.y > td.at.y - 0.01 && p.y < td.at.y + 0.03) {
+          on = true;
+          onTrap.add(i);
+        }
+      });
+      const flap = sim.body(td.body);
+      if (trapState[k] === 'shut') {
+        // How far it has swung open (radians from shut).
+        const q = flap.rotation();
+        const openBy = (2 * dm.atan2(q.z, q.w) - td.rest) * -td.dir;
+        trapWait[k] = on ? trapWait[k] + 1 / 60 : 0;
+        // Tipped by enough weight, or (a group too light to tip it) after a wait: either way it
+        // latches open from here on.
+        if (openBy > TRAP_LATCH_AT || trapWait[k] > TRAP_RELEASE_S) {
+          // From here the flap is driven, not free: the counterweight can't pull it shut again.
+          trapState[k] = 'opening';
+          trapFrom[k] = { t: now, angle: td.rest - td.dir * openBy };
+          flap.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+          emit('trapdoor', { forced: openBy <= TRAP_LATCH_AT });
+        }
+      }
+    });
+
     // Unstick: a marble that has hardly moved for a while, or has moved without getting anywhere
     // (a spinner's bar sweeping it back up the lane, round and round), and isn't queued at a gate,
     // gets a nudge along the course.
@@ -215,7 +282,7 @@ export function runRace(rng: Rng, o: RaceOpts): Race {
       }
       const b = sim.body(marbles[i]);
       const v = b.linvel();
-      const waiting = (o.mode === 'elimination' && passed[i] > nextCp && winner < 0) || finishedAt[i] >= 0 || (winner >= 0 && passed[i] >= course.lines.length);
+      const waiting = (o.mode === 'elimination' && passed[i] > nextCp && winner < 0) || finishedAt[i] >= 0 || (winner >= 0 && passed[i] >= course.lines.length) || onTrap.has(i);
       if (waiting || prog[i] > markProg[i] + 0.02) {
         markProg[i] = prog[i];
         markT[i] = now;

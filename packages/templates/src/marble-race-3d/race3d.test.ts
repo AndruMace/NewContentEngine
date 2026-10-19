@@ -30,6 +30,16 @@ describe('marble race 3d', () => {
     }
   });
 
+  it.each(['trapdoor', 'wheel', 'jump', 'lift'] as const)('%s: races run through it in every section, with no one lost or stuck', (kind) => {
+    for (let seed = 1; seed <= 2; seed++) {
+      const r = runRace(new Rng(seed), { mode: 'race', marbles: 8, sections: 4, lanesPerSection: 3, density: 1, spinnerSpeed: 2.2, specials: [kind], specialChance: 1 });
+      expect(r.timedOut).toBe(false);
+      expect(r.lost).toBe(0);
+      expect(r.kicks).toBeLessThan(15);
+      r.sim.free();
+    }
+  });
+
   it('race mode waits for the podium: 1st, 2nd and 3rd all cross before the end', () => {
     for (let seed = 1; seed <= 3; seed++) {
       const r = runRace(new Rng(seed), { mode: 'race', marbles: 8, sections: 4, lanesPerSection: 3, density: 1, spinnerSpeed: 2.2 });

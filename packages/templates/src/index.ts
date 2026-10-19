@@ -30,6 +30,8 @@ export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, bal
  * Long-form ambient templates (hours-long background videos). Kept out of TEMPLATES on purpose: that
  * list feeds batches, the planner, the taste model and analytics, which are all about Shorts.
  */
+export { setAssetBase, loadedSounds } from './ambient/assets';
+
 export const LONG_FORM_TEMPLATES: Template[] = [cabinStorm];
 
 export const ALL_TEMPLATES: Template[] = [...TEMPLATES, ...LONG_FORM_TEMPLATES];

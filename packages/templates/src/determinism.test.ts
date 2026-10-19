@@ -34,6 +34,9 @@ describe.each(ALL_TEMPLATES.map((t) => t.id))('%s', (id) => {
   });
 
   it('produces audio events', () => {
-    expect(logHash(id, 5, false).runner.audio.length).toBeGreaterThan(5);
+    const { runner } = logHash(id, 5, false);
+    // Long-form ambience is mostly continuous beds (recordings), with only occasional events.
+    const beds = runner.template.longForm?.beds?.(runner.params).length ?? 0;
+    expect(runner.audio.length + beds * 10).toBeGreaterThan(5);
   });
 });

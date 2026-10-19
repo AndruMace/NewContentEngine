@@ -257,7 +257,8 @@ function drawHeartCue(ctx: Ctx2D, width: number, height: number, u: number) {
 
 function drawLeaderboard(ctx: Ctx2D, theme: Theme, rows: LeaderboardRow[], title: string | undefined, x: number, y: number) {
   const rowH = 44;
-  const w = 250;
+  // Rows with notes (gaps) get a wider board.
+  const w = rows.some((r) => r.note) ? 340 : 250;
   const top = title ? 40 : 0;
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.42)';
@@ -276,6 +277,17 @@ function drawLeaderboard(ctx: Ctx2D, theme: Theme, rows: LeaderboardRow[], title
     ctx.font = `900 24px ${FONT_FAMILY}`;
     ctx.fillStyle = '#ffffff';
     ctx.fillText(`${i + 1}`, x + 16, cy);
+    if (row.move) {
+      // A small arrow between the rank and the colour dot: up and green, or down and red.
+      const up = row.move > 0;
+      ctx.fillStyle = up ? '#3ddc84' : '#ff5a5a';
+      ctx.beginPath();
+      ctx.moveTo(x + 36, cy + (up ? 6 : -6));
+      ctx.lineTo(x + 46, cy + (up ? 6 : -6));
+      ctx.lineTo(x + 41, cy + (up ? -6 : 6));
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.fillStyle = row.color;
     ctx.beginPath();
     ctx.arc(x + 62, cy, 14, 0, Math.PI * 2);
@@ -286,7 +298,16 @@ function drawLeaderboard(ctx: Ctx2D, theme: Theme, rows: LeaderboardRow[], title
     ctx.fillStyle = '#ffffff';
     ctx.font = `900 26px ${FONT_FAMILY}`;
     const label = row.icon ? `${row.icon} ${row.label}` : row.label;
-    ctx.fillText(label, x + 88, cy, w - 100);
+    const noteW = row.note ? 84 : 0;
+    ctx.fillText(label, x + 88, cy, w - 100 - noteW);
+    if (row.note) {
+      ctx.save();
+      ctx.font = `800 21px ${FONT_FAMILY}`;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(255,255,255,0.72)';
+      ctx.fillText(row.note, x + w - 14, cy + 1);
+      ctx.restore();
+    }
     if (row.out) {
       ctx.fillRect(x + 84, cy, Math.min(w - 100, ctx.measureText(label).width + 6), 3);
     }

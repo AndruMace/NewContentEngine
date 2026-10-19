@@ -15,7 +15,7 @@ const VIEW_TILT = 0.3;
 const RAY_LEN = 0.45;
 const STEP = 0.0025;
 
-interface Box {
+export interface Box {
   c: V3;
   /** Rotation (row-major 3×3) and half sizes. */
   m: number[];
@@ -24,7 +24,8 @@ interface Box {
   hi: V3;
 }
 
-function boxOf(p: Piece): Box | null {
+/** A box piece's oriented box and its world bounds (null for other shapes). */
+export function boxOf(p: Piece): Box | null {
   if (p.shape.kind !== 'box') return null;
   const { x, y, z, w } = p.rot;
   const m = [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w), 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)];
@@ -36,7 +37,7 @@ function boxOf(p: Piece): Box | null {
   return { c: p.pos, m, h, lo: { x: p.pos.x - ex, y: p.pos.y - ey, z: p.pos.z - ez }, hi: { x: p.pos.x + ex, y: p.pos.y + ey, z: p.pos.z + ez } };
 }
 
-function inBox(b: Box, x: number, y: number, z: number) {
+export function inBox(b: Box, x: number, y: number, z: number) {
   const dx = x - b.c.x;
   const dy = y - b.c.y;
   const dz = z - b.c.z;

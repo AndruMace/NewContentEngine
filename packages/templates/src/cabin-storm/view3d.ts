@@ -7,7 +7,13 @@
  *   - a flash's age is measured modulo the loop, so a strike near the end lights the start too.
  */
 import type { RenderCtx } from '@sim/engine';
-import { THREE, canvasTexture, draw3D, sceneCache } from '../three-layer';
+import { THREE, draw3D, sceneCache } from '../three-layer';
+import { drawGrain } from '../ambient/grain';
+import { loadTextureSet, textureMaterial } from '../ambient/assets';
+
+/** Placeholder scene's textures (Phase 2 check that assets load; the real cabin comes in Phase 3). */
+export const preloadCabin = () => Promise.all([loadTextureSet('rough_wood', '2k'), loadTextureSet('wood_floor_worn', '2k'), loadTextureSet('rustic_stone_wall_02', '2k')]).then(() => undefined);
+import { perLoop, timeCircle } from '../ambient/loop';
 import type { CabinState } from './index';
 
 /** 4D simplex noise (Ashima / Stefan Gustavson, MIT). */
@@ -37,16 +43,6 @@ const hash = (n: number) => {
   const s = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return s - Math.floor(s);
 };
-
-/** A point on a circle in noise space: one lap per loop, moving `speed` noise units per second. */
-function timeCircle(out: THREE.Vector2, t: number, L: number, speed: number) {
-  const R = (speed * L) / (2 * Math.PI);
-  const a = (2 * Math.PI * t) / L;
-  return out.set(R * Math.cos(a), R * Math.sin(a));
-}
-
-/** A frequency rounded to a whole number of cycles per loop. */
-const perLoop = (hz: number, L: number) => Math.max(1, Math.round(hz * L)) / L;
 
 /** Brightest flash allowed (fraction of full white on the sky), so lightning never glares. */
 const FLASH_CAP = 0.7;
@@ -78,29 +74,16 @@ const view = sceneCache((s: CabinState) => {
   camera.position.set(0, 1.6, 5.5);
   camera.lookAt(0, 1.3, 0);
 
-  const woodMap = canvasTexture(512, 512, (g) => {
-    for (let y = 0; y < 512; y += 64) {
-      g.fillStyle = `hsl(25, 45%, ${18 + hash(y) * 10}%)`;
-      g.fillRect(0, y, 512, 62);
-      for (let k = 0; k < 40; k++) {
-        g.strokeStyle = `rgba(0,0,0,${0.08 + hash(y + k) * 0.1})`;
-        g.beginPath();
-        g.moveTo(0, y + hash(k * 3 + y) * 62);
-        g.lineTo(512, y + hash(k * 7 + y) * 62);
-        g.stroke();
-      }
-    }
-  });
-  woodMap.wrapS = woodMap.wrapT = THREE.RepeatWrapping;
-  woodMap.repeat.set(3, 2);
-  woodMap.colorSpace = THREE.SRGBColorSpace;
-  const wood = new THREE.MeshStandardMaterial({ map: woodMap, roughness: 0.85, side: THREE.BackSide });
-  const room = new THREE.Mesh(new THREE.BoxGeometry(10, 5, 10), wood);
+  // BoxGeometry face order: +x, -x, +y (ceiling), -y (floor), +z, -z.
+  const wall = textureMaterial('rough_wood', [3, 1.5], { side: THREE.BackSide });
+  const floor = textureMaterial('wood_floor_worn', [3, 3], { side: THREE.BackSide });
+  const roomGeo = new THREE.BoxGeometry(10, 5, 10);
+  const room = new THREE.Mesh(roomGeo, [wall, wall, wall, floor, wall, wall]);
   room.position.set(0, 2.5, 0);
   room.receiveShadow = true;
   scene.add(room);
 
-  const stone = new THREE.MeshStandardMaterial({ color: 0x55504a, roughness: 0.95 });
+  const stone = textureMaterial('rustic_stone_wall_02', [1.5, 1]);
   for (const [x, w] of [[-0.95, 0.5], [0.95, 0.5]] as const) {
     const jamb = new THREE.Mesh(new THREE.BoxGeometry(w, 1.2, 0.8), stone);
     jamb.position.set(x, 0.6, -4.6);
@@ -191,28 +174,15 @@ const view = sceneCache((s: CabinState) => {
   scene.add(new THREE.Points(emberGeo, new THREE.PointsMaterial({ color: 0xffa040, size: 0.03, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false })));
   const emberPeriod = Array.from({ length: EMBERS }, (_, i) => L / Math.max(1, Math.round(L / (2 + hash(i) * 3))));
 
-  // Film grain against banding in the dark: a few noise tiles, a different one and offset every frame.
-  const grain = Array.from({ length: 4 }, (_, k) => {
-    const c = typeof document !== 'undefined' ? Object.assign(document.createElement('canvas'), { width: 256, height: 256 }) : new OffscreenCanvas(256, 256);
-    const g = c.getContext('2d') as CanvasRenderingContext2D;
-    const img = g.createImageData(256, 256);
-    for (let i = 0; i < img.data.length; i += 4) {
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.floor(hash(i * 0.013 + k * 91.7) * 255);
-      img.data[i + 3] = 14;
-    }
-    g.putImageData(img, 0, 0);
-    return c;
-  });
-
-  return { scene, camera, fireMat, fireLight, rainMat, flashLight, emberGeo, emberPos, emberPeriod, grain, patterns: new Map<unknown, CanvasPattern>() };
+  return { scene, camera, fireMat, fireLight, rainMat, flashLight, emberGeo, emberPos, emberPeriod };
 });
 
 export function drawCabin(rc: RenderCtx, s: CabinState) {
   const v = view(s, rc.theme);
   const L = s.loopS;
   const t = rc.t;
-  timeCircle(v.fireMat.uniforms.uTime.value, t, L, 0.6);
-  timeCircle(v.fireMat.uniforms.uRise.value, t, L, 1.4);
+  v.fireMat.uniforms.uTime.value.set(...timeCircle(t, L, 0.6));
+  v.fireMat.uniforms.uRise.value.set(...timeCircle(t, L, 1.4));
   const w = (hz: number) => 2 * Math.PI * perLoop(hz, L) * t;
   const flick = 0.75 + 0.12 * Math.sin(w(1.3)) + 0.08 * Math.sin(w(3.7) + 1) + 0.05 * Math.sin(w(7.9) + 2);
   v.fireLight.intensity = 30 * (0.5 + 0.5 * s.p.fire) * flick;
@@ -232,17 +202,5 @@ export function drawCabin(rc: RenderCtx, s: CabinState) {
   v.camera.updateProjectionMatrix();
   draw3D(rc.ctx, v.scene, v.camera);
 
-  const ctx = rc.ctx;
-  const tile = v.grain[rc.frame % 4];
-  let pattern = v.patterns.get(tile);
-  if (!pattern) {
-    pattern = ctx.createPattern(tile as CanvasImageSource, 'repeat')!;
-    v.patterns.set(tile, pattern);
-  }
-  ctx.save();
-  ctx.translate(-((rc.frame * 37) % 256), -((rc.frame * 91) % 256));
-  ctx.globalCompositeOperation = 'overlay';
-  ctx.fillStyle = pattern;
-  ctx.fillRect(0, 0, rc.width + 256, rc.height + 256);
-  ctx.restore();
+  drawGrain(rc.ctx, rc.frame, rc.width, rc.height);
 }
