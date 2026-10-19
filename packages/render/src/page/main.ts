@@ -7,6 +7,8 @@ import { BufferTarget, CanvasSource, Mp4OutputFormat, Output, getFirstEncodableV
 import { FPS, Runner, VIDEO_HEIGHT, VIDEO_WIDTH, getTheme, type Recipe } from '@sim/engine';
 import { audioBufferToWav, getMelody, renderAudio } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
+import { upload } from './upload';
+import './longform';
 
 declare global {
   interface Window {
@@ -30,21 +32,6 @@ export interface RenderPageResult {
   score: { total: number; parts: Record<string, number>; notes?: string[] };
   encodeMs: number;
   audioMs: number;
-}
-
-/**
- * Send a file to the harness in 4 MB pieces. Playwright sees request bodies through the DevTools
- * protocol, where binary bytes are escaped (up to 6 characters each); a single ~90 MB video upload
- * produced a message longer than Node's maximum string length and crashed the render process.
- */
-const UPLOAD_CHUNK = 4 * 1024 * 1024;
-
-async function upload(name: string, data: ArrayBuffer | string) {
-  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
-  for (let off = 0; off === 0 || off < bytes.length; off += UPLOAD_CHUNK) {
-    const res = await fetch(`upload?name=${encodeURIComponent(name)}${off ? '&append=1' : ''}`, { method: 'POST', body: bytes.subarray(off, off + UPLOAD_CHUNK) });
-    if (!res.ok) throw new Error(`upload ${name} failed: ${res.status}`);
-  }
 }
 
 async function loadFonts() {

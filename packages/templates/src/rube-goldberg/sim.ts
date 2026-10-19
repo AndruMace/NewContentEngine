@@ -42,6 +42,8 @@ export const MATERIALS = {
   brass: { friction: 0.3, restitution: 0.5, density: 8500 },
   rubber: { friction: 0.9, restitution: 0.2, density: 1200 },
   ivory: { friction: 0.4, restitution: 0.4, density: 900 },
+  /** A landing pad: soaks up a drop (no bounce of its own). */
+  felt: { friction: 0.8, restitution: 0, density: 300 },
 } as const;
 export type Material = keyof typeof MATERIALS;
 
@@ -51,7 +53,7 @@ export type Shape =
   | { kind: 'sphere'; r: number }
   | { kind: 'cylinder'; r: number; hh: number }
   | { kind: 'capsule'; r: number; hh: number }
-  | { kind: 'mesh'; positions: Float32Array; indices: Uint32Array }
+  | { kind: 'mesh'; positions: Float32Array; indices: Uint32Array; /** Rapier TriMeshFlags (e.g. fix internal edges, so balls don't catch on seams). */ flags?: number }
   /** Drawing only (a ring in the x–z plane, e.g. a funnel's rolled rim). */
   | { kind: 'torus'; R: number; r: number };
 
@@ -175,7 +177,7 @@ export class Sim {
         d = RAPIER.ColliderDesc.capsule(shape.hh, shape.r);
         break;
       case 'mesh':
-        d = RAPIER.ColliderDesc.trimesh(shape.positions, shape.indices);
+        d = shape.flags ? RAPIER.ColliderDesc.trimesh(shape.positions, shape.indices, shape.flags) : RAPIER.ColliderDesc.trimesh(shape.positions, shape.indices);
         break;
       case 'torus':
         throw new Error('torus pieces are drawing only');
@@ -197,7 +199,7 @@ export class Sim {
     at: V3,
     rot: Quat,
     pieces: BodyPiece[],
-    o: { kind?: 'marble' | 'part'; fixed?: boolean; kinematic?: boolean; ccd?: boolean; angularDamping?: number; linearDamping?: number; sleeping?: boolean } = {},
+    o: { kind?: 'marble' | 'part'; fixed?: boolean; kinematic?: boolean; ccd?: boolean; angularDamping?: number; linearDamping?: number; sleeping?: boolean; canSleep?: boolean } = {},
   ): number {
     const desc = (o.fixed ? RAPIER.RigidBodyDesc.fixed() : o.kinematic ? RAPIER.RigidBodyDesc.kinematicPositionBased() : RAPIER.RigidBodyDesc.dynamic())
       .setTranslation(at.x, at.y, at.z)
@@ -205,7 +207,7 @@ export class Sim {
       .setCcdEnabled(!!o.ccd)
       .setAngularDamping(o.angularDamping ?? 0)
       .setLinearDamping(o.linearDamping ?? 0)
-      .setCanSleep(true);
+      .setCanSleep(o.canSleep ?? true);
     if (o.sleeping) desc.setSleeping(true);
     const b = this.world.createRigidBody(desc);
     const idx = this.bodies.length;

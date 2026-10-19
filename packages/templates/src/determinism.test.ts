@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Runner, getTheme, hashString } from '@sim/engine';
 import { getMelody } from '@sim/audio';
-import { TEMPLATES } from './index';
+import { ALL_TEMPLATES } from './index';
 
 const theme = getTheme('neon-dark');
 const melody = getMelody('ode-to-joy');
@@ -11,13 +11,16 @@ const TEST_PARAMS: Record<string, Record<string, unknown>> = {
   'sand-pour': { fillSeconds: 10, cellSize: 8 },
 };
 
+/** Long-form loops are tested at a few minutes: the schedule logic doesn't depend on length. */
+const TEST_LOOP_S = 180;
+
 function logHash(templateId: string, seed: number, visual: boolean) {
-  const template = TEMPLATES.find((t) => t.id === templateId)!;
-  const r = new Runner(template, { seed, theme, melody, visual, params: TEST_PARAMS[templateId], maxSeconds: 90 }).runToEnd();
+  const template = ALL_TEMPLATES.find((t) => t.id === templateId)!;
+  const r = new Runner(template, { seed, theme, melody, visual, params: TEST_PARAMS[templateId], maxSeconds: 90, loopS: template.longForm ? TEST_LOOP_S : undefined }).runToEnd();
   return { hash: hashString(JSON.stringify(r.events)), runner: r };
 }
 
-describe.each(TEMPLATES.map((t) => t.id))('%s', (id) => {
+describe.each(ALL_TEMPLATES.map((t) => t.id))('%s', (id) => {
   it('is deterministic for a given seed', () => {
     expect(logHash(id, 42, false).hash).toBe(logHash(id, 42, false).hash);
   });

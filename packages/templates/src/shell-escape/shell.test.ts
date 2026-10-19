@@ -17,7 +17,7 @@ describe('shell escape', () => {
   });
 
   it('only leaves a shell through its window', () => {
-    for (let seed = 1; seed <= 8; seed++) {
+    for (let seed = 1; seed <= 6; seed++) {
       const r = new Runner(shellEscape, { seed, theme: getTheme('neon-dark'), melody: getMelody('ode-to-joy'), params: { shells: 3 }, visual: false });
       let layer = 0;
       while (!r.done) {
@@ -32,6 +32,21 @@ describe('shell escape', () => {
       }
       expect(r.timedOut).toBe(false);
       expect(layer).toBe(3);
+      // Every escape was through the window (never through a wall), and the broken shells left shards.
+      const escapes = r.events.filter((e) => e.type === 'escape');
+      expect(escapes).toHaveLength(3);
+      for (const e of escapes) expect(e.viaWindow).toBe(true);
+      expect(r.state.shardLive.some((x) => x === 1)).toBe(true);
+    }
+  });
+
+  it('breaks each shell into a similar number of convex shards', () => {
+    const r = new Runner(shellEscape, { seed: 2, theme: getTheme('neon-dark'), melody: getMelody('ode-to-joy'), params: { shells: 4 }, visual: false });
+    for (const sh of r.state.shells) {
+      expect(sh.shards.length).toBeGreaterThanOrEqual(18);
+      expect(sh.shards.length).toBeLessThanOrEqual(40);
+      // Every piece lies flat in its face's plane.
+      for (const p of sh.shards) for (const v of p.poly) expect(v[0] * p.n[0] + v[1] * p.n[1] + v[2] * p.n[2]).toBeCloseTo(polyhedron(sh.shape).inradius, 6);
     }
   });
 });

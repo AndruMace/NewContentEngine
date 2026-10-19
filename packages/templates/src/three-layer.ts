@@ -23,6 +23,14 @@ interface Shared {
 
 let shared: Shared | null = null;
 
+/** Size the shared renderer to the frame being drawn (Shorts are 1080×1920, long-form 1920×1080). */
+function fit(ctx: Ctx2D): Shared {
+  const sh = get();
+  const { width, height } = ctx.canvas;
+  if (sh.canvas.width !== width || sh.canvas.height !== height) sh.renderer.setSize(width, height, false);
+  return sh;
+}
+
 function get(): Shared {
   if (shared) return shared;
   const canvas: HTMLCanvasElement | OffscreenCanvas =
@@ -48,7 +56,7 @@ export const environmentMap = () => get().env;
 
 /** Render the scene and draw it over the current 2D frame (optionally at another exposure / tone map). */
 export function draw3D(ctx: Ctx2D, scene: THREE.Scene, camera: THREE.Camera, opts: { exposure?: number; toneMapping?: THREE.ToneMapping } = {}) {
-  const { renderer, canvas } = get();
+  const { renderer, canvas } = fit(ctx);
   const exposure = renderer.toneMappingExposure;
   const toneMapping = renderer.toneMapping;
   if (opts.exposure !== undefined) renderer.toneMappingExposure = opts.exposure;
@@ -56,7 +64,7 @@ export function draw3D(ctx: Ctx2D, scene: THREE.Scene, camera: THREE.Camera, opt
   renderer.render(scene, camera);
   renderer.toneMappingExposure = exposure;
   renderer.toneMapping = toneMapping;
-  ctx.drawImage(canvas as CanvasImageSource, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+  ctx.drawImage(canvas as CanvasImageSource, 0, 0, canvas.width, canvas.height);
 }
 
 /**
@@ -96,16 +104,16 @@ export function draw3DComposed(
   camera: THREE.PerspectiveCamera,
   opts: { exposure?: number; toneMapping?: THREE.ToneMapping; ao?: { radius: number; scale?: number }; dof?: { focus: number; aperture: number; maxblur: number } } = {},
 ) {
-  const { renderer, canvas } = get();
+  const { renderer, canvas } = fit(ctx);
   let c = composers.get(scene);
   if (!c || c.camera !== camera) {
     const composer = new EffectComposer(renderer);
     composer.setPixelRatio(1);
-    composer.setSize(VIDEO_WIDTH, VIDEO_HEIGHT);
+    composer.setSize(canvas.width, canvas.height);
     composer.addPass(new RenderPass(scene, camera));
     let ao: GTAOPass | null = null;
     if (opts.ao) {
-      ao = new GTAOPass(scene, camera, VIDEO_WIDTH, VIDEO_HEIGHT);
+      ao = new GTAOPass(scene, camera, canvas.width, canvas.height);
       ao.output = GTAOPass.OUTPUT.Default;
       composer.addPass(ao);
     }
@@ -132,7 +140,7 @@ export function draw3DComposed(
   c.composer.render();
   renderer.toneMappingExposure = exposure;
   renderer.toneMapping = toneMapping;
-  ctx.drawImage(canvas as CanvasImageSource, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+  ctx.drawImage(canvas as CanvasImageSource, 0, 0, canvas.width, canvas.height);
 }
 
 /**

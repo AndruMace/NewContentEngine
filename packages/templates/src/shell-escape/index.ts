@@ -1,8 +1,10 @@
 import { z } from 'zod';
-import { FONT_FAMILY, lighten, paletteAt, type DramaScore, type Template } from '@sim/engine';
+import { FONT_FAMILY, lighten, paletteAt, type DramaScore, type Rng, type Template } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { clamp01, gaussFit } from '../scoring';
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { THREE, canvasTexture, draw3D, environmentMap, sceneCache } from '../three-layer';
+import { SHARD_MASS, ShellWorld, WALL_K, axisQuat, crackShell, prismPoints, qrot, worlds, type ShardSpec } from './physics';
 import { polyhedron, type ShapeId, type V3 } from './polyhedra';
 
 const SHAPES: ShapeId[] = ['cube', 'octahedron', 'dodecahedron', 'icosahedron'];
@@ -30,25 +32,35 @@ interface Shell {
   ballR: number;
   hue: number;
   brokeAt: number | null;
+  /** The glass pieces it breaks into, and the global id of the first. */
+  shards: ShardSpec[];
+  shardBase: number;
 }
 
 interface State {
   p: ShellEscapeParams;
   shells: Shell[];
+  world: ShellWorld;
+  freed: boolean;
+  rng: Rng;
   layer: number;
   pos: V3;
   vel: V3;
   r: number;
-  passing: boolean;
   bounces: number;
   escapes: number[];
   lastRimT: number;
+  lastChipT: number;
+  lastDebrisT: number;
   endAt: number | null;
   t: number;
   visual: boolean;
   trail: V3[];
   /** Recent bounces (which face, where), for the face flash and impact ripple. */
   hits: { t: number; layer: number; face: number; p: V3; n: V3 }[];
+  /** Every shard's pose (x, y, z, qx, qy, qz, qw), copied out of the world each step; and whether it's flying. */
+  shardPose: Float32Array;
+  shardLive: Uint8Array;
 }
 
 /** Each shell's circumradius as a fraction of the inradius of the shell around it. */
@@ -65,7 +77,6 @@ const OUTRO_S = 2.8;
 /** Glass opacity on the camera's side (clear, so the ball shows) and the far side (tinted backdrop). */
 const GLASS_NEAR = 0.05;
 const GLASS_FAR = 0.22;
-const SHATTER_S = 0.9;
 const CAM_EASE_S = 1.5;
 const TRAIL = 34;
 const smooth = (u: number) => u * u * (3 - 2 * u);
@@ -91,16 +102,63 @@ function unitVector(rng: { range(a: number, b: number): number }): V3 {
 }
 
 const shellAngle = (sh: Shell, t: number) => sh.angle0 + sh.omega * t;
+
+/** Set the ball's speed, keeping its direction. */
+function setSpeed(s: State, v: number) {
+  const cur = Math.hypot(...s.vel);
+  if (cur < 1e-12) return;
+  s.vel = scale(s.vel, v / cur);
+  s.world.body(s.world.ball).setLinvel({ x: s.vel[0], y: s.vel[1], z: s.vel[2] }, true);
+}
+
+/**
+ * Break a shell into its shards. Each piece starts where its glass was, moving with the spinning
+ * shell, flung outward, and blasted hardest near the hole the ball came out of.
+ */
+function shatter(s: State, sh: Shell, layer: number, ang: number) {
+  const q = axisQuat(sh.axis, ang);
+  const next = s.shells[layer + 1];
+  const nextPace = next ? s.p.speed * SPEED_K * polyhedron(next.shape).inradius * next.R : targetSpeed(s);
+  const vBall = Math.hypot(...s.vel);
+  // Lighter than the ball, more so the bigger the shell they're now rattling round in.
+  const mass = SHARD_MASS * (sh.R / (next?.R ?? sh.R)) ** 2;
+  const pieces = sh.shards.map((spec, k) => {
+    const id = sh.shardBase + k;
+    const P = qrot(q, scale(spec.c, sh.R));
+    const spinV = cross(scale(sh.axis, sh.omega), P);
+    const nW = qrot(q, spec.n);
+    const away: V3 = [P[0] - s.pos[0], P[1] - s.pos[1], P[2] - s.pos[2]];
+    const d = Math.max(1e-9, Math.hypot(...away));
+    const blast = (vBall * SHATTER_BLAST * dm.exp(-d / (0.4 * sh.R))) / d;
+    const out = nextPace * SHATTER_OUT * s.rng.range(0.5, 1.1);
+    const v: V3 = [0, 1, 2].map((i) => spinV[i] + nW[i] * out + away[i] * blast) as V3;
+    const wv: V3 = [s.rng.range(-6, 6), s.rng.range(-6, 6), s.rng.range(-6, 6)];
+    s.shardLive[id] = 1;
+    s.shardPose.set([P[0], P[1], P[2], q.x, q.y, q.z, q.w], id * 7);
+    return { id, spec, v, w: wv, mass };
+  });
+  s.world.shatter(layer, sh, q, pieces);
+}
+
 const targetSpeed = (s: State) => s.p.speed * SPEED_K * polyhedron(s.shells[Math.min(s.layer, s.shells.length - 1)].shape).inradius * s.shells[Math.min(s.layer, s.shells.length - 1)].R;
+/** The ball's speed drifts back to its pace over this long after the walls' spin or debris change it. */
+const PACE_TAU_S = 1.2;
+/** Breaking glass flies outward at this share of the ball's pace (plus a blast near where the ball got out). */
+const SHATTER_OUT = 0.32;
+const SHATTER_BLAST = 0.55;
+/** Shards are forgotten once this many outer-shell radii away. */
+const SHARD_FAR = 4;
 
 export const shellEscape: Template<ShellEscapeParams, State> = {
   id: 'shell-escape',
   name: 'Shell Escape 3D',
   family: 'bounce',
   description:
-    'A glowing ball bounces inside nested, slowly spinning glass shapes (cubes, octahedra, dodecahedra, icosahedra), rendered in 3D. Each shell has one window; when the ball finds it, the shell shatters and the camera pulls back to the next, bigger shell. Every bounce plays a note and lights up the face it hit. Escape all of them to win.',
+    'A glowing ball bounces inside nested, slowly spinning glass shapes (cubes, octahedra, dodecahedra, icosahedra), rendered in 3D with real rigid-body physics. Each shell has one window; when the ball finds it, the shell shatters into glass shards that fly out and rattle round inside the next, bigger shell (where the ball can knock them about), and the camera pulls back. Every bounce plays a note and lights up the face it hit. Escape all of them to win.',
   schema: shellEscapeSchema,
-  substeps: 4,
+  substeps: 2,
+  // Rapier with flying debris: a run takes about a second to simulate.
+  searchBudget: 30,
   glowScale: 0.5,
   defaultCopy: {
     hook: 'How many bounces to escape every shell?',
@@ -123,12 +181,13 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
     const R = new Array<number>(p.shells);
     R[p.shells - 1] = 1;
     for (let i = p.shells - 2; i >= 0; i--) R[i] = R[i + 1] * polyhedron(shapes[i + 1]).inradius * NEST;
+    let shardBase = 0;
     const shells: Shell[] = shapes.map((shape, i) => {
       const poly = polyhedron(shape);
       // Window area as a share of the whole surface ≈ scale² / faces, so size it per shape for an
       // even pace: many-faced shapes get bigger windows.
       const holeScale = Math.min(0.97, Math.sqrt(ESCAPE_CHANCE * p.holeSize * poly.faces.length));
-      return {
+      const sh: Shell = {
         shape,
         R: R[i],
         axis: unitVector(rng),
@@ -139,111 +198,163 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
         ballR: BALL_K * poly.inradius * R[i],
         hue: (i + 0.5) / p.shells,
         brokeAt: null,
+        shards: [],
+        shardBase,
       };
+      sh.shards = crackShell(sh, rng);
+      shardBase += sh.shards.length;
+      return sh;
     });
+    const world = new ShellWorld(shells, shells[0].ballR, shardBase);
     const s: State = {
       p,
       shells,
+      world,
+      freed: false,
+      rng,
       layer: 0,
       pos: [0, 0, 0],
       vel: [0, 0, 0],
       r: shells[0].ballR,
-      passing: false,
       bounces: 0,
       escapes: [],
       lastRimT: -1,
+      lastChipT: -1,
+      lastDebrisT: -1,
       endAt: null,
       t: 0,
       visual,
       trail: [],
       hits: [],
+      shardPose: new Float32Array(shardBase * 7),
+      shardLive: new Uint8Array(shardBase),
     };
     s.vel = scale(unitVector(rng), targetSpeed(s));
+    world.setBall(s.pos, s.vel);
+    worlds.register(s, world);
     return s;
   },
 
   step(s, { dt, t, emit }) {
     s.t = t + dt;
-    const { pos, vel } = s;
-    for (let k = 0; k < 3; k++) pos[k] += vel[k] * dt;
-    if (s.visual && Math.round(t * 240) % 2 === 0) {
-      s.trail.push([pos[0], pos[1], pos[2]]);
+    if (s.freed) return;
+    const w = s.world;
+    const n = s.shells.length;
+    // Shells turn to where they'll be at the end of this step.
+    s.shells.forEach((sh, i) => {
+      if (sh.brokeAt === null) w.spin(i, axisQuat(sh.axis, shellAngle(sh, t + dt)));
+    });
+    if (s.layer < n) {
+      const want = s.shells[s.layer].ballR;
+      if (Math.abs(want - s.r) > want * 1e-4) {
+        s.r += (want - s.r) * Math.min(1, dt * 5);
+        w.setBallRadius(s.r);
+      }
+    }
+    const contacts = w.advance();
+    const ball = w.body(w.ball);
+    const bp = ball.translation();
+    const bv = ball.linvel();
+    s.pos = [bp.x, bp.y, bp.z];
+    s.vel = [bv.x, bv.y, bv.z];
+    if (s.visual) {
+      s.trail.push([s.pos[0], s.pos[1], s.pos[2]]);
       if (s.trail.length > TRAIL) s.trail.shift();
     }
-    if (s.layer >= s.shells.length) {
-      // Free: glide to a stop while still in frame.
-      const k = dm.exp(-2.2 * dt);
-      for (let i = 0; i < 3; i++) vel[i] *= k;
-      return;
-    }
-    const sh = s.shells[s.layer];
-    const poly = polyhedron(sh.shape);
-    s.r += (sh.ballR - s.r) * Math.min(1, dt * 5);
-    const ang = shellAngle(sh, t + dt);
-    const local = rotate(sh.axis, -ang, pos);
-    const spinV = cross(scale(sh.axis, sh.omega), pos);
+    const curR = s.shells[Math.min(s.layer, n - 1)].R;
+    const pace = targetSpeed(s);
 
-    // The hole face goes first: while the ball is passing through the window, the other faces'
-    // planes (which extend past the shell) must not bounce it back.
-    const order = [sh.hole, ...poly.faces.map((_, f) => f).filter((f) => f !== sh.hole)];
-    for (const f of order) {
-      if (s.passing && f !== sh.hole) break;
-      const face = poly.faces[f];
-      const D = face.d * sh.R;
-      const dist = dot(local, face.n);
-      if (f === sh.hole) {
-        // How far inside the window's edges the ball's centre is (≥ ball radius: it fits through).
-        const inPlane: V3 = [local[0] - face.n[0] * dist, local[1] - face.n[1] * dist, local[2] - face.n[2] * dist];
-        let clearance = Infinity;
-        for (const m of face.edgeNormals) clearance = Math.min(clearance, face.apothem * sh.holeScale * sh.R - dot(inPlane, m));
-        if (s.passing && dist < D - s.r) s.passing = false; // came back in
-        // Mid-pass, the spinning window can slide out from under the ball: unless it's already fully
-        // outside, it then hits the frame and bounces back in like any other wall.
-        const fits = clearance >= s.r || (s.passing && (clearance >= 0 || dist >= D + s.r));
-        if (!fits) s.passing = false;
-        if (dist > D - s.r && fits) {
-          s.passing = true;
-          if (dist > D + s.r * 1.1) {
-            sh.brokeAt = t;
-            s.escapes.push(t);
-            s.layer++;
-            s.passing = false;
-            emit({ type: 'escape', layer: s.layer, of: s.shells.length, bounces: s.bounces });
-            if (s.layer >= s.shells.length) {
-              s.endAt = t;
-              emit({ type: 'free', bounces: s.bounces });
-            } else {
-              // Each shell is bigger and the camera pulls back to match, so the ball keeps the same
-              // speed on screen: scale it to the new shell (direction unchanged).
-              const k = targetSpeed(s) / Math.sqrt(dot(vel, vel));
-              for (let i = 0; i < 3; i++) vel[i] *= k;
-            }
-            return;
-          }
-          continue;
-        }
-        if (dist > D - s.r && clearance > -s.r * 1.5 && t - s.lastRimT > 0.25) {
-          s.lastRimT = t;
-          emit({ type: 'rim', layer: s.layer });
-        }
-      }
-      if (dist <= D - s.r) continue;
-      // Perfectly elastic bounce off the (moving) face: mirror the velocity relative to the spinning
-      // wall. Angle of incidence = angle of reflection in the wall's frame; the wall's motion can add
-      // or take a little speed, as it would for a real ball. No randomness: the spinning walls alone
-      // keep the ball from settling into a path that never finds the window.
-      const n = rotate(sh.axis, ang, face.n);
-      const over = dist - (D - s.r);
-      for (let i = 0; i < 3; i++) pos[i] -= n[i] * over;
-      const u: V3 = [vel[0] - spinV[0], vel[1] - spinV[1], vel[2] - spinV[2]];
-      const un = dot(u, n);
-      if (un > 0) {
-        for (let i = 0; i < 3; i++) vel[i] = u[i] - 2 * un * n[i] + spinV[i];
+    for (const c of contacts) {
+      const ballHit = c.a.kind === 'ball' ? c.b : c.b.kind === 'ball' ? c.a : null;
+      if (ballHit?.kind === 'wall') {
+        if (ballHit.layer !== s.layer) continue;
+        const sh = s.shells[s.layer];
+        const face = polyhedron(sh.shape).faces[ballHit.face];
+        const ang = shellAngle(sh, t + dt);
+        const nw = rotate(sh.axis, ang, face.n);
         s.bounces++;
-        s.hits.push({ t, layer: s.layer, face: f, p: [pos[0] + n[0] * s.r, pos[1] + n[1] * s.r, pos[2] + n[2] * s.r], n });
+        s.hits.push({ t, layer: s.layer, face: ballHit.face, p: [s.pos[0] + nw[0] * s.r, s.pos[1] + nw[1] * s.r, s.pos[2] + nw[2] * s.r], n: nw });
         if (s.hits.length > 8) s.hits.shift();
-        emit({ type: 'bounce', layer: s.layer, x: pos[0] / sh.R });
+        emit({ type: 'bounce', layer: s.layer, x: s.pos[0] / sh.R });
+        if (ballHit.face === sh.hole && t - s.lastRimT > 0.25) {
+          // Struck the window's frame: a near miss when it was within a ball and a half of the opening.
+          const local = rotate(sh.axis, -ang, s.pos);
+          const dist = dot(local, face.n);
+          const inPlane: V3 = [local[0] - face.n[0] * dist, local[1] - face.n[1] * dist, local[2] - face.n[2] * dist];
+          let clearance = Infinity;
+          for (const m of face.edgeNormals) clearance = Math.min(clearance, face.apothem * sh.holeScale * sh.R - dot(inPlane, m));
+          if (clearance > -s.r * 1.5) {
+            s.lastRimT = t;
+            emit({ type: 'rim', layer: s.layer });
+          }
+        }
+      } else if (ballHit?.kind === 'shard') {
+        if (c.speed < pace * 0.05 || t - s.lastChipT < 0.06) continue;
+        s.lastChipT = t;
+        emit({ type: 'chip', speed: c.speed / pace, x: s.pos[0] / curR });
+      } else if (!ballHit && (c.a.kind === 'shard' || c.b.kind === 'shard')) {
+        // Glass on glass: the rattle of debris (thinned, so a cloud of shards doesn't machine-gun).
+        if (c.speed < pace * 0.08 || t - s.lastDebrisT < 0.05) continue;
+        s.lastDebrisT = t;
+        const id = c.a.kind === 'shard' ? c.a.id : (c.b as { id: number }).id;
+        emit({ type: 'debris', speed: c.speed / pace, x: s.shardPose[id * 7] / curR });
       }
+    }
+
+    if (s.layer < n) {
+      const sh = s.shells[s.layer];
+      const poly = polyhedron(sh.shape);
+      const ang = shellAngle(sh, t + dt);
+      const local = rotate(sh.axis, -ang, s.pos);
+      let out = -Infinity;
+      let via = -1;
+      poly.faces.forEach((face, f) => {
+        const d = dot(local, face.n) - face.d * sh.R;
+        if (d > out) {
+          out = d;
+          via = f;
+        }
+      });
+      if (out > s.r * 1.1 + WALL_K * sh.R) {
+        // Out: the shell breaks, and the ball takes on the next shell's pace (direction unchanged).
+        sh.brokeAt = t;
+        s.escapes.push(t);
+        shatter(s, sh, s.layer, ang);
+        s.layer++;
+        emit({ type: 'escape', layer: s.layer, of: n, bounces: s.bounces, viaWindow: via === sh.hole });
+        if (s.layer >= n) {
+          s.endAt = t;
+          emit({ type: 'free', bounces: s.bounces });
+        } else setSpeed(s, targetSpeed(s));
+      } else {
+        // Hold the pace: the spinning walls and knocks from debris drift it a little.
+        const v = Math.hypot(...s.vel);
+        if (v > 1e-9) setSpeed(s, v + (pace - v) * (1 - dm.exp(-dt / PACE_TAU_S)));
+      }
+    } else {
+      // Free: glide to a stop while still in frame.
+      setSpeed(s, Math.hypot(...s.vel) * dm.exp(-2.2 * dt));
+    }
+
+    // Copy the shards out (the view and the sound read them), forgetting the far-flung ones.
+    const far = SHARD_FAR * s.shells[n - 1].R;
+    for (let id = 0; id < s.shardLive.length; id++) {
+      const h = w.shardBodies[id];
+      if (h === null) continue;
+      const b = w.body(h);
+      const p = b.translation();
+      if (Math.abs(p.x) > far || Math.abs(p.y) > far || Math.abs(p.z) > far) {
+        w.dropShard(id);
+        s.shardLive[id] = 0;
+        continue;
+      }
+      const q = b.rotation();
+      s.shardPose.set([p.x, p.y, p.z, q.x, q.y, q.z, q.w], id * 7);
+    }
+
+    if (s.endAt !== null && s.t >= s.endAt + OUTRO_S) {
+      w.free();
+      s.freed = true;
     }
   },
 
@@ -325,21 +436,23 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
         updateAim(g, s, i, ang);
         return;
       }
-      // Shatter: faces fly outward fast, tumbling and fading.
-      const tau = s.t - sh.brokeAt!;
-      g.group.visible = tau < SHATTER_S;
-      g.edges.visible = false;
-      g.aim.visible = false;
-      for (const m of g.faceMats) {
-        m.visible = true;
-        m.emissiveIntensity = 0;
-        m.opacity = GLASS_FAR * clamp01(1 - tau / SHATTER_S);
-      }
-      g.faces.forEach((m, f) => {
-        const c = g.centers[f];
-        m.position.copy(c).multiplyScalar(1 + 4 * tau + 3 * tau * tau);
-        m.rotation.set(tau * (3 + (f % 3)), tau * (2 + (f % 4)), 0);
-      });
+      // Broken: the shell is gone, its shards (drawn below) are flying.
+      g.group.visible = false;
+    });
+    // Shards: wherever the physics has them. Older debris (from shells further in) fades back, so
+    // the newest break and the ball stay readable.
+    v.shardMats.forEach((m, i) => {
+      const age = Math.max(0, s.layer - 1 - i);
+      const k = age === 0 ? 1 : age === 1 ? 0.45 : 0.2;
+      m.glass.opacity = 0.16 * k;
+      m.edge.opacity = 0.4 * k;
+    });
+    v.shards.forEach((m, id) => {
+      m.visible = s.shardLive[id] === 1;
+      if (!m.visible) return;
+      const o = id * 7;
+      m.position.set(s.shardPose[o], s.shardPose[o + 1], s.shardPose[o + 2]);
+      m.quaternion.set(s.shardPose[o + 3], s.shardPose[o + 4], s.shardPose[o + 5], s.shardPose[o + 6]);
     });
     // Final escape: a shockwave ring expanding from where the ball broke out.
     if (s.endAt !== null) {
@@ -399,6 +512,17 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
         return melody.next().map((midi, i) => ({ kind: 'note' as const, midi, vel: i ? 0.28 : 0.62, voice: theme.voice, pan }));
       case 'rim':
         return [{ kind: 'sfx', name: 'tick', vel: 0.45, pitch: 1 }];
+      case 'chip': {
+        // The ball knocking a shard: a glass clink (kept out of the top octave: partials near
+        // Nyquist overshoot the true-peak ceiling once encoded).
+        const v = clamp01((e.speed as number) / 1.2);
+        return [{ kind: 'sfx', name: 'clink', vel: 0.05 + 0.18 * v, pitch: 0.25 + 0.2 * v, pan }];
+      }
+      case 'debris': {
+        // Shards tinkling against the glass and each other.
+        const v = clamp01((e.speed as number) / 1.2);
+        return [{ kind: 'sfx', name: 'clink', vel: 0.025 + 0.08 * v, pitch: 0.4 + 0.15 * v, pan }];
+      }
       case 'escape': {
         const k = e.layer as number;
         const penta = [0, 2, 4, 7, 9];
@@ -625,6 +749,39 @@ const view = sceneCache((s: State, theme) => {
     return { group, edges, edgeMeshes, edgeMats, edgeFaces, faces, centers, faceMats, aim, aimMat, rimMat, rims };
   });
 
+  // Shards: a thin slab of the shell's glass each, with bright cut edges that catch the light.
+  const shards: THREE.Mesh[] = [];
+  const shardMats: { glass: THREE.MeshPhysicalMaterial; edge: THREE.LineBasicMaterial }[] = [];
+  s.shells.forEach((sh) => {
+    const col = paletteAt(theme.palette, sh.hue);
+    const color = new THREE.Color(`rgb(${col.map((c) => Math.round(c)).join(',')})`);
+    const mat = new THREE.MeshPhysicalMaterial({
+      color,
+      transparent: true,
+      opacity: 0.16,
+      roughness: 0.06,
+      metalness: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      envMapIntensity: 0.6,
+      emissive: new THREE.Color(`rgb(${lighten(col, 0.5).map((c) => Math.round(c)).join(',')})`),
+      emissiveIntensity: 0.04,
+    });
+    const edgeMat = new THREE.LineBasicMaterial({ color: new THREE.Color(`rgb(${lighten(col, 0.2).map((c) => Math.round(c)).join(',')})`), transparent: true, opacity: 0.4 });
+    shardMats.push({ glass: mat, edge: edgeMat });
+    for (const spec of sh.shards) {
+      const pts = prismPoints(spec.poly, spec.n, spec.c, sh.R, WALL_K * sh.R);
+      const vs: THREE.Vector3[] = [];
+      for (let i = 0; i < pts.length; i += 3) vs.push(new THREE.Vector3(pts[i], pts[i + 1], pts[i + 2]));
+      const geo = new ConvexGeometry(vs);
+      const m = new THREE.Mesh(geo, mat);
+      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 20), edgeMat));
+      m.visible = false;
+      scene.add(m);
+      shards.push(m);
+    }
+  });
+
   const ballCol = new THREE.Color(theme.ball);
   const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 28), new THREE.MeshStandardMaterial({ color: ballCol, emissive: ballCol, emissiveIntensity: 0.9, roughness: 0.25 }));
   scene.add(ball);
@@ -637,5 +794,5 @@ const view = sceneCache((s: State, theme) => {
   const wave = new THREE.Mesh(new THREE.TorusGeometry(1, 0.02, 12, 96), new THREE.MeshBasicMaterial({ color: new THREE.Color(theme.accent), transparent: true, depthWrite: false }));
   wave.visible = false;
   scene.add(wave);
-  return { scene, camera, light, shells, ball, trail, wave };
+  return { scene, camera, light, shells, shards, shardMats, ball, trail, wave };
 });

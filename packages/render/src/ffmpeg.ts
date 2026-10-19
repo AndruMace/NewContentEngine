@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export function run(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -119,4 +120,143 @@ export async function qc(file: string, expectedDurationS: number): Promise<QcRep
   if (report.freezeSegments) p.push(`${report.freezeSegments} frozen segment(s)`);
   report.pass = p.length === 0;
   return report;
+}
+
+// ---- Long-form (ambient) ----------------------------------------------------------------------
+
+/**
+ * Ambient loudness: well under the −14 LUFS Shorts target, so a sleep/study video sits quietly in the
+ * background (YouTube only ever turns loud videos down). The ceiling leaves thunder its dynamics.
+ */
+export const AMBIENT_LOUDNESS = { I: -21, TP: -2 };
+
+/** Raw interleaved float32 stereo at 48 kHz, as the page renders it. */
+const RAW = ['-f', 'f32le', '-ar', '48000', '-ac', '2'];
+
+/** Integrated loudness and true peak of a raw float32 loop. */
+async function measureRaw(raw: string) {
+  const err = await ffmpeg([...RAW, '-i', raw, '-af', `loudnorm=I=${AMBIENT_LOUDNESS.I}:TP=${AMBIENT_LOUDNESS.TP}:print_format=json`, '-f', 'null', '-']);
+  const json = JSON.parse(err.slice(err.lastIndexOf('{'), err.lastIndexOf('}') + 1));
+  return { i: Number(json.input_i), tp: Number(json.input_tp) };
+}
+
+/**
+ * Build the final long video from one master loop: the loop's audio gets a fixed gain to the ambient
+ * target (measured once on the loop: every repeat is identical) and a soft limiter, is repeated to
+ * the full length and encoded to AAC in one go (no gaps at the repeats), and the loop's video is
+ * repeated by stream copy (no re-encode). The audio fades out over the last few seconds.
+ */
+export async function masterLongForm(dir: string, opts: { loopS: number; totalS: number }) {
+  const raw = join(dir, 'loop.f32');
+  const m = await measureRaw(raw);
+  const gainDb = AMBIENT_LOUDNESS.I - m.i;
+  const fade = Math.min(5, opts.totalS / 4);
+  const limit = Math.pow(10, (AMBIENT_LOUDNESS.TP - 0.7) / 20).toFixed(3);
+  const audio = join(dir, 'audio.m4a');
+  await ffmpeg([
+    '-y', '-stream_loop', '-1', ...RAW, '-i', raw, '-t', opts.totalS.toFixed(3),
+    '-af', `volume=${gainDb.toFixed(2)}dB,alimiter=limit=${limit}:attack=5:release=200:level=false,afade=t=out:st=${(opts.totalS - fade).toFixed(3)}:d=${fade}`,
+    '-c:a', 'aac', '-b:a', '256k', '-ar', '48000', audio,
+  ]);
+  // Lossless copy of the loop's audio, so another final length can be made without re-rendering.
+  await ffmpeg(['-y', ...RAW, '-i', raw, '-c:a', 'flac', '-sample_fmt', 's32', join(dir, 'loop.flac')]);
+  const out = join(dir, 'final.mp4');
+  await ffmpeg([
+    '-y', '-stream_loop', '-1', '-i', join(dir, 'loop.mp4'), '-i', audio, '-t', opts.totalS.toFixed(3),
+    '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy', '-movflags', '+faststart', out,
+  ]);
+  return { final: out, loopLufs: m.i, gainDb };
+}
+
+/** 1280×720 thumbnail at a chosen moment, and a 12-frame contact sheet spread over the loop (seeking, not decoding it all). */
+export async function longFormStills(dir: string, opts: { loopS: number; thumbnailAtS: number }) {
+  const loop = join(dir, 'loop.mp4');
+  await ffmpeg(['-y', '-ss', opts.thumbnailAtS.toFixed(3), '-i', loop, '-frames:v', '1', '-vf', 'scale=1280:720', '-q:v', '2', join(dir, 'thumbnail.jpg')]);
+  const n = 12;
+  for (let i = 0; i < n; i++) {
+    const at = ((i + 0.5) / n) * opts.loopS;
+    await ffmpeg(['-y', '-ss', at.toFixed(3), '-i', loop, '-frames:v', '1', '-vf', 'scale=320:-1', '-q:v', '3', join(dir, `contact-${String(i).padStart(2, '0')}.jpg`)]);
+  }
+  await ffmpeg(['-y', '-i', join(dir, 'contact-%02d.jpg'), '-vf', 'tile=6x2:padding=4:color=black', '-frames:v', '1', '-q:v', '3', join(dir, 'contact.jpg')]);
+  await Promise.all(Array.from({ length: n }, (_, i) => rm(join(dir, `contact-${String(i).padStart(2, '0')}.jpg`), { force: true })));
+}
+
+export interface LongFormQcReport extends QcReport {
+  loopS: number;
+  /** Most frame-average brightness jumps in any one second (photosensitivity: at most 3). */
+  maxFlashesPerSecond: number;
+}
+
+/**
+ * Long-form QC. The full analysis (loudness, black and frozen stretches, flashes) runs on the first
+ * repeat of the loop only, since every repeat is the same; the whole file just has its streams,
+ * size and length checked. Thresholds suit dark, calm scenes: a few seconds of a dim, still frame
+ * is normal here, so only long black or frozen stretches count.
+ */
+export async function qcLongForm(file: string, opts: { loopS: number; totalS: number; width: number; height: number; fps: number }): Promise<LongFormQcReport> {
+  const probe = await run('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file]);
+  const info = JSON.parse(probe.stdout);
+  const v = info.streams.find((s: any) => s.codec_type === 'video') ?? {};
+  const a = info.streams.find((s: any) => s.codec_type === 'audio') ?? {};
+  const [num, den] = String(v.avg_frame_rate ?? '0/1').split('/').map(Number);
+  // Hardware decoding and a small analysis size: an hour of 1080p otherwise takes many minutes.
+  const hw = process.platform === 'darwin' ? ['-hwaccel', 'videotoolbox'] : [];
+  const err = await ffmpeg([
+    '-nostats', ...hw, '-t', opts.loopS.toFixed(3), '-i', file,
+    '-vf', 'scale=480:-2,blackdetect=d=5:pic_th=0.995:pix_th=0.01,freezedetect=n=0.0003:d=20,signalstats,metadata=print:key=lavfi.signalstats.YAVG',
+    '-af', 'ebur128=peak=true', '-f', 'null', '-',
+  ]);
+  const summary = err.slice(err.lastIndexOf('Summary:'));
+  const integratedLufs = Number(/I:\s+(-?[\d.]+) LUFS/.exec(summary)?.[1] ?? NaN);
+  const truePeakDb = Number(/Peak:\s+(-?[\d.]+) dBFS/.exec(summary)?.[1] ?? NaN);
+  const yavg = [...err.matchAll(/lavfi\.signalstats\.YAVG=([\d.]+)/g)].map((m) => Number(m[1]));
+  const report: LongFormQcReport = {
+    pass: true,
+    problems: [],
+    width: v.width,
+    height: v.height,
+    fps: den ? num / den : 0,
+    durationS: Number(info.format?.duration ?? 0),
+    videoCodec: v.codec_name,
+    audioCodec: a.codec_name,
+    integratedLufs,
+    truePeakDb,
+    blackSegments: (err.match(/black_start/g) ?? []).length,
+    freezeSegments: (err.match(/freeze_start/g) ?? []).length,
+    loopS: opts.loopS,
+    maxFlashesPerSecond: maxFlashesPerSecond(yavg, opts.fps),
+  };
+  const p = report.problems;
+  if (report.width !== opts.width || report.height !== opts.height) p.push(`resolution ${report.width}x${report.height}`);
+  if (Math.abs(report.fps - opts.fps) > 0.01) p.push(`fps ${report.fps}`);
+  if (Math.abs(report.durationS - opts.totalS) > 0.5) p.push(`duration ${report.durationS} vs ${opts.totalS}`);
+  if (report.videoCodec !== 'h264') p.push(`video codec ${report.videoCodec}`);
+  if (report.audioCodec !== 'aac') p.push(`audio codec ${report.audioCodec}`);
+  if (!(Math.abs(integratedLufs - AMBIENT_LOUDNESS.I) <= 1.5)) p.push(`loudness ${integratedLufs} LUFS`);
+  if (truePeakDb > -1) p.push(`true peak ${truePeakDb} dBFS`);
+  if (report.blackSegments) p.push(`${report.blackSegments} black segment(s)`);
+  if (report.freezeSegments) p.push(`${report.freezeSegments} frozen segment(s)`);
+  if (report.maxFlashesPerSecond > 3) p.push(`${report.maxFlashesPerSecond} flashes in one second (max 3)`);
+  report.pass = p.length === 0;
+  return report;
+}
+
+/**
+ * Flashes per second from per-frame average brightness (0–255): a flash is a rise of at least 10%
+ * of full brightness within a few frames. Returns the most in any one-second window.
+ */
+export function maxFlashesPerSecond(yavg: number[], fps: number): number {
+  const RISE = 25.5;
+  const WITHIN = 3;
+  const flashes: number[] = [];
+  for (let i = WITHIN; i < yavg.length; i++) {
+    const base = Math.min(...yavg.slice(i - WITHIN, i));
+    if (yavg[i] - base >= RISE && (!flashes.length || i - flashes[flashes.length - 1] > WITHIN)) flashes.push(i);
+  }
+  let most = 0;
+  for (let a = 0, b = 0; b < flashes.length; b++) {
+    while (flashes[b] - flashes[a] >= fps) a++;
+    most = Math.max(most, b - a + 1);
+  }
+  return most;
 }

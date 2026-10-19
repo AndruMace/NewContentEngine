@@ -10,6 +10,20 @@ export interface SynthBus {
   noise: AudioBuffer;
   /** Shared panners by pan position, so dense event lists don't pile up thousands of nodes. */
   panners: Map<number, StereoPannerNode>;
+  /** Sim time at context time 0 (offline segments of a long render start later than 0). */
+  t0: number;
+  /** Long-form loop length: noise offsets repeat with it, so the loop's end flows into its start. 0 = none. */
+  loopS: number;
+}
+
+/** Where in the shared noise buffer a sound starting at context time `when` reads from (same in every segment). */
+function noiseOffset(bus: SynthBus, when: number) {
+  return (((simTime(bus, when) * 0.37) % 1.5) + 1.5) % 1.5;
+}
+
+function simTime(bus: SynthBus, when: number) {
+  const t = when + bus.t0;
+  return bus.loopS ? ((t % bus.loopS) + bus.loopS) % bus.loopS : t;
 }
 
 const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
@@ -29,7 +43,7 @@ function seededNoise(ctx: BaseAudioContext, seconds: number, channels: number, d
   return buf;
 }
 
-export function createBus(ctx: BaseAudioContext, opts: { reverb: number; destination?: AudioNode }): SynthBus {
+export function createBus(ctx: BaseAudioContext, opts: { reverb: number; destination?: AudioNode; t0?: number; loopS?: number }): SynthBus {
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -16;
   comp.knee.value = 10;
@@ -49,7 +63,7 @@ export function createBus(ctx: BaseAudioContext, opts: { reverb: number; destina
     wet.gain.value = opts.reverb;
     input.connect(verb).connect(wet).connect(comp);
   }
-  return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map() };
+  return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map(), t0: opts.t0 ?? 0, loopS: opts.loopS ?? 0 };
 }
 
 function out(bus: SynthBus, pan = 0): AudioNode {
@@ -93,7 +107,7 @@ function noiseBurst(bus: SynthBus, when: number, dur: number, dest: AudioNode, p
   const g = bus.ctx.createGain();
   env(g, when, peak, Math.min(0.01, dur / 4), dur);
   src.connect(f).connect(g).connect(dest);
-  src.start(when, (when * 0.37) % 1.5);
+  src.start(when, noiseOffset(bus, when));
   src.stop(when + dur + 0.05);
 }
 
@@ -275,6 +289,56 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
       [1, 2.32, 4.25].forEach((ratio, k) => osc(bus, 'sine', (3100 + p * 1700) * ratio, when, when + 0.25, dest, (v * 0.22) / (k + 1), 0.0004, 0.06 + 0.05 / (k + 1)));
       break;
     }
+    case 'ambience': {
+      // A stretch of room tone (events every 4 s overlap into a seamless bed), its character set by
+      // pitch: 0 a quiet studio, 0.5 an industrial hall (ventilation rumble and mains hum), 1 wind.
+      const p = ev.pitch ?? 0;
+      const dur = 4.6;
+      const fade = 0.8;
+      const shape = (g: GainNode, peak: number) => {
+        g.gain.setValueAtTime(0, when);
+        g.gain.linearRampToValueAtTime(peak, when + fade);
+        g.gain.setValueAtTime(peak, when + dur - fade);
+        g.gain.linearRampToValueAtTime(0, when + dur);
+      };
+      const layer = (filter: BiquadFilterType, freq: number, q: number, peak: number, freqEnd?: number) => {
+        const src = bus.ctx.createBufferSource();
+        src.buffer = bus.noise;
+        src.loop = true;
+        const f = bus.ctx.createBiquadFilter();
+        f.type = filter;
+        f.frequency.setValueAtTime(freq, when);
+        if (freqEnd) f.frequency.linearRampToValueAtTime(freqEnd, when + dur);
+        f.Q.value = q;
+        const g = bus.ctx.createGain();
+        shape(g, peak);
+        src.connect(f).connect(g).connect(dest);
+        src.start(when, noiseOffset(bus, when));
+        src.stop(when + dur + 0.05);
+      };
+      if (p < 0.25) {
+        layer('lowpass', 520, 0.5, v * 0.5);
+        layer('bandpass', 1800, 0.6, v * 0.06);
+      } else if (p < 0.75) {
+        layer('lowpass', 240, 0.7, v * 0.75);
+        layer('bandpass', 950, 1.1, v * 0.1);
+        for (const [hz, a] of [[50, 0.05], [100, 0.035], [150, 0.015]] as const) {
+          const o = bus.ctx.createOscillator();
+          o.frequency.value = hz;
+          const g = bus.ctx.createGain();
+          shape(g, v * a);
+          o.connect(g).connect(dest);
+          o.start(when);
+          o.stop(when + dur + 0.05);
+        }
+      } else {
+        // Gusts: a band of noise sweeping up or down, over a low roar.
+        const up = Math.floor(simTime(bus, when) / 4) % 2 === 0;
+        layer('bandpass', up ? 320 : 760, 1.4, v * 0.55, up ? 760 : 320);
+        layer('lowpass', 180, 0.7, v * 0.4);
+      }
+      break;
+    }
     case 'ding': {
       // A small brass bell struck: bright strike and long, beating inharmonic partials.
       const p = ev.pitch ?? 0.5;
@@ -300,6 +364,68 @@ export async function renderAudio(
   const bus = createBus(ctx, { reverb: opts.reverb });
   for (const ev of events) if (ev.t < durationS) scheduleEvent(bus, ev, ev.t);
   return ctx.startRendering();
+}
+
+/**
+ * Render sim time [from, to + postRoll) of a long event list offline, as interleaved stereo float32
+ * samples, so a long-form loop can be rendered in segments. Each segment starts `preRoll` seconds
+ * early so reverb, filters and sounds already ringing at `from` match the previous segment;
+ * preRoll must be longer than the longest sound. The post-roll overlaps the next segment and is
+ * crossfaded into it when they are joined: noise bursts can land a fraction of a sample apart in two
+ * renders (inaudible, but not sample-identical), and a short crossfade hides that.
+ *
+ * With `loopS`, events also play at their times one loop earlier and later, so the pre-roll before
+ * t = 0 hears the end of the loop and the post-roll after loopS hears its start.
+ */
+export async function renderAudioRange(
+  events: AudioEvent[],
+  from: number,
+  to: number,
+  opts: { reverb: number; sampleRate?: number; preRoll?: number; postRoll?: number; loopS?: number },
+): Promise<Float32Array> {
+  const sr = opts.sampleRate ?? 48000;
+  const pre = opts.preRoll ?? 12;
+  const post = opts.postRoll ?? 0;
+  const start = from - pre;
+  const end = to + post;
+  const skip = Math.round(pre * sr);
+  const n = Math.round((end - from) * sr);
+  const ctx = new OfflineAudioContext(2, skip + n, sr);
+  const bus = createBus(ctx, { reverb: opts.reverb, t0: start, loopS: opts.loopS });
+  const L = opts.loopS ?? 0;
+  const due: { when: number; ev: AudioEvent }[] = [];
+  for (const ev of events) {
+    for (const shift of L ? [-L, 0, L] : [0]) {
+      const t = ev.t + shift;
+      if (t >= start && t < end) due.push({ when: t - start, ev });
+    }
+  }
+  due.sort((a, b) => a.when - b.when);
+  // Schedule just in time, a couple of seconds ahead: every connected node is processed on every
+  // render quantum even before its sound starts, so scheduling minutes of events up front makes an
+  // offline render slow down with the square of its length.
+  const AHEAD = 2;
+  let next = 0;
+  const scheduleUntil = (t: number) => {
+    for (; next < due.length && due[next].when < t; next++) scheduleEvent(bus, due[next].ev, due[next].when);
+  };
+  scheduleUntil(AHEAD);
+  const lengthS = (skip + n) / sr;
+  for (let k = 1; k * AHEAD < lengthS; k++) {
+    void ctx.suspend(k * AHEAD).then(() => {
+      scheduleUntil((k + 1) * AHEAD);
+      return ctx.resume();
+    });
+  }
+  const buf = await ctx.startRendering();
+  const l = buf.getChannelData(0);
+  const r = buf.getChannelData(1);
+  const out = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    out[i * 2] = l[skip + i];
+    out[i * 2 + 1] = r[skip + i];
+  }
+  return out;
 }
 
 /** 32-bit float stereo WAV, so nothing clips before loudness normalisation. */

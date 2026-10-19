@@ -21,7 +21,8 @@ describe('trick shot', () => {
   it('attempts mode: misses close in on the cup and the planned last shot goes in', () => {
     let firstMiss = 0;
     let lastMiss = 0;
-    for (let seed = 0; seed < 20; seed++) {
+    // Each run test-fires ~100 shots to plan its attempts (Rapier makes that ~0.5 s): a dozen seeds.
+    for (let seed = 0; seed < 12; seed++) {
       const r = run(seed, { mode: 'attempts' }).runToEnd();
       const plan = r.state.plan;
       if (!plan) continue;

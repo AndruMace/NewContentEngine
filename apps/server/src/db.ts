@@ -6,6 +6,7 @@ import type { Recipe } from '@sim/engine';
 import type { Concept, SocialCopy } from '@sim/planner';
 import { ROOT, type QcReport } from '@sim/render';
 import type { PostFeatures } from '@sim/analytics';
+import { LONG_FORM_TEMPLATES } from '@sim/templates';
 
 /** SIM_DATA_DIR points the database (and tokens) elsewhere, e.g. for tests. */
 export const DATA_DIR = process.env.SIM_DATA_DIR ?? join(ROOT, 'data');
@@ -481,8 +482,14 @@ export function postsForRender(renderId: string): PostRow[] {
   return db.prepare('SELECT * FROM posts WHERE render_id = ?').all(renderId).map(toPost);
 }
 
+/** Posts of Shorts. Long-form ambient videos share the channel but are ignored by analytics entirely. */
 export function allPosts(platform?: Platform): PostRow[] {
-  return (platform ? db.prepare('SELECT * FROM posts WHERE platform = ? ORDER BY posted_at').all(platform) : db.prepare('SELECT * FROM posts ORDER BY posted_at').all()).map(toPost);
+  const longForm = LONG_FORM_TEMPLATES.map((t) => t.id);
+  const notLongForm = `p.render_id NOT IN (SELECT id FROM renders WHERE json_extract(recipe, '$.templateId') IN (${longForm.map(() => '?').join(',') || "''"}))`;
+  const rows = platform
+    ? db.prepare(`SELECT p.* FROM posts p WHERE p.platform = ? AND ${notLongForm} ORDER BY p.posted_at`).all(platform, ...longForm)
+    : db.prepare(`SELECT p.* FROM posts p WHERE ${notLongForm} ORDER BY p.posted_at`).all(...longForm);
+  return rows.map(toPost);
 }
 
 export function postByExternalId(platform: Platform, externalId: string): PostRow | undefined {

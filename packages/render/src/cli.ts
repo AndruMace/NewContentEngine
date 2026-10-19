@@ -5,11 +5,27 @@
  *   npm run render -- --template ring-escape --search 500 --target 30 --theme mono-gold --melody fur-elise
  *   npm run render -- --recipe path/to/recipe.json
  *   npm run render -- --recipe-json '{"templateId":"ring-escape",...}'
+ *
+ * Long-form (ambient) templates render a master loop and repeat it to the final length:
+ *   npm run render -- --template cabin-storm --loop 30m --length 3h
+ *   npm run render -- --template cabin-storm --loop 60s --length 3m --test   (quick test: loops under 20m)
+ *   npm run render -- --recipe data/renders/<day>/<id>/recipe.json --out data/renders/<day>/<id>   (resume)
  */
 import { parseArgs } from 'node:util';
 import { relative } from 'node:path';
+import { join } from 'node:path';
 import type { Recipe } from '@sim/engine';
-import { ROOT, readRecipe, renderRecipe, searchSeeds } from './index';
+import { getTemplate } from '@sim/templates';
+import { RENDERS_DIR, ROOT, readRecipe, renderLongForm, renderRecipe, searchSeeds } from './index';
+
+/** "90s", "30m", "2.5h" or plain seconds. */
+function parseDuration(s: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*(s|m|h)?$/.exec(s.trim());
+  if (!m) throw new Error(`Can't read the duration "${s}" (use e.g. 90s, 30m, 3h)`);
+  return Number(m[1]) * { s: 1, m: 60, h: 3600 }[(m[2] ?? 's') as 's' | 'm' | 'h'];
+}
+
+const hms = (s: number) => `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m${s % 60 ? `${Math.round(s % 60)}s` : ''}`;
 
 const { values: a } = parseArgs({
   options: {
@@ -25,8 +41,53 @@ const { values: a } = parseArgs({
     target: { type: 'string' },
     search: { type: 'string' },
     out: { type: 'string' },
+    loop: { type: 'string' },
+    length: { type: 'string' },
+    test: { type: 'boolean', default: false },
+    keep: { type: 'boolean', default: false },
   },
 });
+
+async function longForm(recipe: Recipe) {
+  if (a.loop) recipe.loopS = parseDuration(a.loop);
+  if (a.length) recipe.totalS = parseDuration(a.length);
+  const lf = getTemplate(recipe.templateId).longForm!;
+  if (!a.test && recipe.loopS !== undefined && (recipe.loopS < lf.minLoopS || recipe.loopS > lf.maxLoopS))
+    throw new Error(`Loop must be ${lf.minLoopS / 60}–${lf.maxLoopS / 60} minutes (add --test for a shorter test loop)`);
+  const loopS = recipe.loopS ?? lf.defaultLoopS;
+  recipe.totalS ??= loopS;
+  const stamp = new Date().toISOString();
+  const outDir = a.out ?? join(RENDERS_DIR, stamp.slice(0, 10), `${recipe.templateId}-${recipe.seed}-${stamp.slice(11, 19).replace(/:/g, '')}`);
+  console.log(`Rendering ${recipe.templateId} seed ${recipe.seed}: ${hms(loopS)} loop → ${hms(recipe.totalS)}`);
+  let last = '';
+  const out = await renderLongForm(recipe, {
+    outDir,
+    allowShortLoop: a.test,
+    keepIntermediates: a.keep,
+    onStage: (stage) => process.stdout.write(`\n  ${stage}`),
+    onProgress: (stage, done, total) => {
+      const pct = `${Math.floor((done / total) * 10) * 10}%`;
+      if (pct !== last) process.stdout.write(` ${pct}`);
+      last = pct;
+    },
+  });
+  process.stdout.write('\n');
+  const t = out.timings;
+  console.log(
+    `Timings: frames ${(t.framesMs / 1000).toFixed(1)}s, audio ${(t.audioMs / 1000).toFixed(1)}s, ` +
+      `join+master+QC ${(t.masterMs / 1000).toFixed(1)}s, total ${(t.totalMs / 1000).toFixed(1)}s` +
+      (out.resumedSegments ? ` (resumed ${out.resumedSegments} finished segments)` : ''),
+  );
+  const q = out.qc;
+  console.log(
+    `QC ${q.pass ? 'PASS' : 'FAIL'}: ${q.width}x${q.height} ${q.fps}fps ${q.videoCodec}/${q.audioCodec} ${hms(q.durationS)} ` +
+      `${q.integratedLufs} LUFS, peak ${q.truePeakDb} dBFS, ≤${q.maxFlashesPerSecond} flashes/s, ` +
+      `join step ${out.seam.seamStep.toFixed(2)} (frame step ${out.seam.referenceStep.toFixed(2)})` +
+      (q.problems.length ? ' — ' + q.problems.join('; ') : ''),
+  );
+  console.log(`Output: ${relative(ROOT, out.final)}`);
+  if (!q.pass) process.exitCode = 2;
+}
 
 async function main() {
   let recipe: Recipe = a.recipe
@@ -42,6 +103,7 @@ async function main() {
           copy: { ...(a.hook ? { hook: a.hook } : {}), ...(a.cta ? { cta: a.cta } : {}) },
         };
   if (a.target) recipe.targetS = Number(a.target);
+  if (getTemplate(recipe.templateId).longForm) return longForm(recipe);
 
   if (a.search) {
     const targetS = recipe.targetS ?? 30;

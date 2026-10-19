@@ -7,6 +7,7 @@ import { build } from 'esbuild';
 import { chromium, type Browser } from 'playwright-core';
 import type { Recipe } from '@sim/engine';
 import type { RenderPageOptions, RenderPageResult } from './page/main';
+export type { LongFormInfo, SeamCheck } from './page/longform';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -117,6 +118,38 @@ export class RenderHarness {
       await page.close();
       this.jobs.delete(jobId);
     }
+  }
+
+  /**
+   * A page kept open for a multi-step job (long-form renders call it once per segment). Uploads land
+   * in `outDir`; `call` runs one of the page's window functions.
+   */
+  async openPage(outDir: string, opts: { onProgress?: (frame: number, est: number) => void; onStage?: (stage: string) => void } = {}) {
+    if (!this.browser) throw new Error('RenderHarness not started');
+    await mkdir(outDir, { recursive: true });
+    const jobId = Math.random().toString(36).slice(2);
+    this.jobs.set(jobId, { outDir });
+    const page = await this.browser.newPage({ viewport: { width: 400, height: 400 } });
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+    await page.exposeFunction('reportProgress', (f: number, est: number) => opts.onProgress?.(f, est));
+    await page.exposeFunction('reportStage', (stage: string) => opts.onStage?.(stage));
+    await page.goto(`http://127.0.0.1:${this.port}/${jobId}/`);
+    await page.waitForFunction(() => typeof window.longFormPrepare === 'function');
+    return {
+      call: async <T>(fn: string, ...args: unknown[]): Promise<T> => {
+        try {
+          return (await page.evaluate(([name, a]) => (window as any)[name as string](...(a as unknown[])), [fn, args] as const)) as T;
+        } catch (e) {
+          throw new Error(`${(e as Error).message}${errors.length ? `\nPage errors:\n${errors.join('\n')}` : ''}`);
+        }
+      },
+      close: async () => {
+        await page.close();
+        this.jobs.delete(jobId);
+      },
+    };
   }
 
   async stop() {

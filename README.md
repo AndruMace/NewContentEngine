@@ -55,13 +55,14 @@ aren't approved or exported.
 | `ring-escape` | bounce | Ball escapes rotating rings with gaps; rings shatter; melody note per bounce |
 | `grow-until-full` | bounce | Ball grows on every bounce until it fills the circle; paint trail |
 | `marble-race` | race | Elimination (or finish-line) marble race on a procedural course; flags or colours |
+| `marble-race-3d` | race | 3D, real rolling physics (Rapier): marbles race down a seeded tower (drops, hairpins, helixes, coin funnels, pegs, spinners); elimination rounds with gates, or first past the finish. Looks: classic wood and brass, futuristic, arctic ice (photoreal), or neon |
 | `ball-battle` | race | Weapon balls (sword, daggers, hammer, bow) in a shrinking arena; FFA, teams, giant or bracket |
 | `polyrhythm` | kinetic | Arcs, pendulum wave, polygons, string art, piano keys or 3D pendulums; 5 speed patterns; loops perfectly, all re-sync at the end |
 | `sorting-race` | kinetic | 2-4 sorting algorithms race on the same data with pitch-mapped tones |
 | `sand-pour` | particles | Falling-sand layers into a jar, heart, hourglass or Galton board (bell curve) |
 | `territory-war` | race | 2-4 teams (colours or country flags) flip tiles with bouncing balls; live share bar; biggest territory wins |
 | `snake-ai` | kinetic | AI snake tries to fill the whole board; ends full or trapped a few cells short |
-| `shell-escape` | bounce | 3D: ball bounces inside nested spinning glass polyhedra; each shell shatters when it finds the window |
+| `shell-escape` | bounce | 3D, real rigid-body physics (Rapier): ball bounces inside nested spinning glass polyhedra; each shell shatters into shards that rattle round the next shell and can knock the ball |
 | `gravity-funnel` | race | 3D: marbles (colours or flags) spiral down a coin-funnel; last one still spinning wins |
 | `colliding-blocks` | bounce | Blocks 1 kg vs 100ⁿ kg: the collision counts spell the digits of π (3, 31, 314…), with a velocity-circle diagram |
 | `pathfinding-race` | kinetic | BFS, DFS, Dijkstra, A*, Greedy… race through the same maze/field; badges show who found the shortest route |
@@ -100,6 +101,33 @@ Output goes to `data/renders/<date>/<id>/`:
 | `recipe.json` | Exact recipe to reproduce the video |
 | `events.json` | Sim + audio event log (used for QC and, later, retention analysis) |
 | `result.json` | QC report, drama score, timings |
+
+## Long-form ambient videos
+
+Hours-long background videos (study, work, sleep): 1920×1080 at 30 fps, mastered quietly to
+−21 LUFS. A long-form template renders a seamless **master loop** (20–60 min, default 30), which
+is repeated to the final length without re-encoding. These templates are kept out of batches, the
+planner and analytics entirely (long uploads on the channel are ignored by the YouTube sync).
+
+| Template | What happens |
+|---|---|
+| `cabin-storm` | Inside a log cabin: a crackling fire, rain and lightning through big windows *(placeholder look for now)* |
+
+```bash
+npm run render -- --template cabin-storm --loop 30m --length 3h
+npm run render -- --template cabin-storm --loop 60s --length 3m --test    # quick test loop
+```
+
+The loop renders in 5-minute segments (video streamed to disk as it encodes, audio crossfaded
+where segments join), so memory stays flat and a render interrupted part-way resumes when run
+again with the same `--recipe` and `--out`. Output: `final.mp4`, `thumbnail.jpg` (1280×720),
+`contact.jpg`, plus `loop.mp4` and `loop.flac` (the master loop). QC checks the loop join (picture
+and sound), loudness, flashes per second (at most 3) and long black or frozen stretches.
+
+Rules for long-form templates (on top of the ones below): every frame must depend only on `t`
+(a segment can start anywhere), and everything must repeat exactly over the loop. Run noise on a
+circle in time, give anything periodic a whole number of cycles per loop, and take cue times
+modulo the loop length.
 
 ## Layout
 

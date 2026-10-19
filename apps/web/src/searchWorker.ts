@@ -1,7 +1,14 @@
 /// <reference lib="webworker" />
 import type { Recipe } from '@sim/engine';
-import { makeRunner } from './recipe';
 
+/**
+ * The simulation code is loaded dynamically, after the message handler is in place. Loaded with a
+ * static import, its top-level await (Rapier's WASM set-up) leaves the handler unset while the job
+ * message arrives, and the job is lost: the worker sat idle forever.
+ */
+const sims = import('./recipe');
+
+/** One worker's share of a seed search: `count` seeds from `start`. */
 export interface SearchRequest {
   recipe: Recipe;
   start: number;
@@ -17,7 +24,10 @@ export interface SearchResult {
   notes: string[];
 }
 
-self.onmessage = (e: MessageEvent<SearchRequest>) => {
+export type SearchMessage = { type: 'seed' } | { type: 'done'; results: SearchResult[] };
+
+self.onmessage = async (e: MessageEvent<SearchRequest>) => {
+  const { makeRunner } = await sims;
   const { recipe, start, count, targetS } = e.data;
   const results: SearchResult[] = [];
   for (let i = 0; i < count; i++) {
@@ -25,8 +35,8 @@ self.onmessage = (e: MessageEvent<SearchRequest>) => {
     const r = makeRunner({ ...recipe, seed }, false).runToEnd();
     const score = r.score(targetS);
     results.push({ seed, total: score.total, durationS: r.durationS, timedOut: r.timedOut, notes: score.notes ?? [] });
-    if (i % 25 === 0) self.postMessage({ type: 'progress', done: i, count });
+    // After every seed: heavy templates take a second or more each, so the bar should move.
+    self.postMessage({ type: 'seed' } satisfies SearchMessage);
   }
-  results.sort((a, b) => b.total - a.total);
-  self.postMessage({ type: 'done', results: results.slice(0, 12) });
+  self.postMessage({ type: 'done', results } satisfies SearchMessage);
 };

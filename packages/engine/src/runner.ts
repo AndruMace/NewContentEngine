@@ -2,13 +2,16 @@ import { z } from 'zod';
 import { Rng } from './rng';
 import { MelodyCursor, transposeMelody, type Melody } from './melody';
 import type { Theme } from './themes';
-import type { AudioEvent, Copy, Ctx2D, DramaScore, OverlaySpec, SimEvent, Template } from './types';
+import type { AudioEvent, Copy, Ctx2D, DramaScore, OverlaySpec, SimEvent, Template, VideoFormat } from './types';
 import { drawOverlays, fillCopy, newOverlayState, type OverlayState } from './overlays';
 import { PostFx, fillBackground } from './postfx';
 
 export const VIDEO_WIDTH = 1080;
 export const VIDEO_HEIGHT = 1920;
 export const FPS = 60;
+export const SHORTS_FORMAT: VideoFormat = { width: VIDEO_WIDTH, height: VIDEO_HEIGHT, fps: FPS };
+
+export const formatOf = (template: Template): VideoFormat => template.format ?? SHORTS_FORMAT;
 
 /** Everything needed to reproduce a video exactly. */
 export interface Recipe {
@@ -20,6 +23,18 @@ export interface Recipe {
   copy?: Partial<Copy>;
   /** Target duration the seed was chosen for. */
   targetS?: number;
+  /** Long-form: master loop length (defaults to the template's defaultLoopS). */
+  loopS?: number;
+  /** Long-form: final video length the loop is repeated to. */
+  totalS?: number;
+}
+
+/** A long-form recipe's loop length, clamped to what the template allows (`allowShort` for quick test renders). */
+export function loopLengthOf(template: Template, loopS?: number, allowShort = false): number {
+  const lf = template.longForm;
+  if (!lf) return 0;
+  const s = loopS ?? lf.defaultLoopS;
+  return Math.min(lf.maxLoopS, allowShort ? Math.max(1, s) : Math.max(lf.minLoopS, s));
 }
 
 export interface RunnerOptions {
@@ -32,6 +47,8 @@ export interface RunnerOptions {
   visual?: boolean;
   maxSeconds?: number;
   transpose?: number;
+  /** Long-form: master loop length (already validated, see loopLengthOf). */
+  loopS?: number;
 }
 
 /**
@@ -57,6 +74,11 @@ export class Runner<P = any, S = any> {
   readonly theme: Theme;
   readonly overlays: OverlaySpec[];
   readonly maxSeconds: number;
+  readonly width: number;
+  readonly height: number;
+  readonly fps: number;
+  /** Long-form loop length (0 for Shorts). The run ends exactly at loopS. */
+  readonly loopS: number;
   state: S;
   frame = 0;
   events: SimEvent[] = [];
@@ -74,7 +96,9 @@ export class Runner<P = any, S = any> {
     this.params = parseParams(template, opts.params ?? {});
     this.substeps = template.substeps ?? 4;
     this.theme = opts.theme;
-    this.maxSeconds = opts.maxSeconds ?? 90;
+    ({ width: this.width, height: this.height, fps: this.fps } = formatOf(template));
+    this.loopS = template.longForm ? (opts.loopS ?? loopLengthOf(template)) : 0;
+    this.maxSeconds = this.loopS || (opts.maxSeconds ?? 90);
     this.cursor = new MelodyCursor(opts.melody, opts.transpose ?? 0);
     const rng = new Rng(opts.seed);
     const fxRng = rng.fork(1);
@@ -83,8 +107,9 @@ export class Runner<P = any, S = any> {
       rng,
       fxRng,
       visual: opts.visual ?? true,
-      width: VIDEO_WIDTH,
-      height: VIDEO_HEIGHT,
+      width: this.width,
+      height: this.height,
+      loopS: this.loopS,
       theme: opts.theme,
       melody: transposeMelody(opts.melody, opts.transpose ?? 0),
     });
@@ -103,17 +128,17 @@ export class Runner<P = any, S = any> {
   }
 
   get t(): number {
-    return this.frame / FPS;
+    return this.frame / this.fps;
   }
 
   get durationS(): number {
-    return this.frame / FPS;
+    return this.frame / this.fps;
   }
 
   /** Advance one video frame. Returns the sim events that happened during it. */
   advanceFrame(): SimEvent[] {
     if (this.done) return [];
-    const dt = 1 / (FPS * this.substeps);
+    const dt = 1 / (this.fps * this.substeps);
     const frameEvents: SimEvent[] = [];
     for (let k = 0; k < this.substeps; k++) {
       const t = this.stepIndex * dt;
@@ -130,7 +155,10 @@ export class Runner<P = any, S = any> {
       this.stepIndex++;
     }
     this.frame++;
-    if (this.template.isDone(this.state)) this.done = true;
+    if (this.loopS) {
+      // A loop always ends exactly at loopS: frame loopS·fps is the first frame again, so it isn't rendered.
+      if (this.frame >= Math.round(this.loopS * this.fps)) this.done = true;
+    } else if (this.template.isDone(this.state)) this.done = true;
     else if (this.t >= this.maxSeconds) {
       this.done = true;
       this.timedOut = true;
@@ -147,18 +175,20 @@ export class Runner<P = any, S = any> {
     return this.template.score(this.events, { durationS: this.durationS, targetS, timedOut: this.timedOut });
   }
 
-  /** Render the current state (scene + post fx + overlays) into a 1080x1920 canvas. */
+  /** Render the current state (scene + post fx + overlays) into a canvas of the template's size. */
   draw(canvas: HTMLCanvasElement | OffscreenCanvas) {
     const ctx = canvas.getContext('2d') as Ctx2D;
-    const W = VIDEO_WIDTH;
-    const H = VIDEO_HEIGHT;
-    this.postFx ??= new PostFx(W, H);
+    const W = this.width;
+    const H = this.height;
     ctx.save();
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     fillBackground(ctx, W, H, this.theme);
     this.template.render({ ctx, width: W, height: H, theme: this.theme, t: this.t, frame: this.frame }, this.state);
     ctx.restore();
+    // Long-form scenes do their own grading: no theme bloom, vignette, scanlines or overlays.
+    if (this.loopS) return;
+    this.postFx ??= new PostFx(W, H);
     const g = this.template.glowScale;
     const glowScale = typeof g === 'function' ? g(this.params) : (g ?? 1);
     this.postFx.apply(ctx, canvas, glowScale === 1 ? this.theme : { ...this.theme, glow: this.theme.glow * glowScale });

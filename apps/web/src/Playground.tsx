@@ -6,7 +6,7 @@ import { ParamControls } from './ParamControls';
 import { usePlayer } from './usePlayer';
 import { useAnalysis } from './useAnalysis';
 import { ExportPanel } from './ExportPanel';
-import type { SearchResult } from './searchWorker';
+import type { SearchMessage, SearchResult } from './searchWorker';
 
 const DEFAULT_RECIPE: Recipe = {
   templateId: TEMPLATES[0].id,
@@ -78,18 +78,53 @@ export function Playground() {
   const { analysis: fresh, stale, pending } = useAnalysis(recipe);
   const analysis = fresh ?? stale;
 
+  // Seed search, spread over parallel workers (one per spare core): each simulates its share of the
+  // seeds and reports after every one.
+  const searchWorkers = useRef<Worker[]>([]);
+  const stopSearch = () => {
+    for (const w of searchWorkers.current) w.terminate();
+    searchWorkers.current = [];
+  };
+  useEffect(() => stopSearch, []);
+
   const runSearch = (count: number) => {
-    const worker = new Worker(new URL('./searchWorker.ts', import.meta.url), { type: 'module' });
+    stopSearch();
+    const n = Math.max(1, Math.min(count, (navigator.hardwareConcurrency || 4) - 1, 8));
+    const start = Math.floor(Math.random() * 1e6);
+    const results: SearchResult[] = [];
+    let done = 0;
+    let finished = 0;
     setSearch({ progress: 0, results: [], running: true });
-    worker.onmessage = (e) => {
-      if (e.data.type === 'progress') setSearch((s) => ({ ...s, progress: e.data.done / e.data.count }));
-      else {
-        setSearch({ progress: 1, results: e.data.results, running: false });
-        if (e.data.results[0]) update({ seed: e.data.results[0].seed });
-        worker.terminate();
-      }
+    const finish = () => {
+      if (++finished < n) return;
+      searchWorkers.current = [];
+      results.sort((a, b) => b.total - a.total || a.seed - b.seed);
+      const top = results.slice(0, 12);
+      setSearch({ progress: 1, results: top, running: false });
+      if (top[0]) update({ seed: top[0].seed });
     };
-    worker.postMessage({ recipe, start: Math.floor(Math.random() * 1e6), count, targetS: recipe.targetS ?? 30 });
+    for (let k = 0; k < n; k++) {
+      const from = Math.floor((count * k) / n);
+      const to = Math.floor((count * (k + 1)) / n);
+      const worker = new Worker(new URL('./searchWorker.ts', import.meta.url), { type: 'module' });
+      searchWorkers.current.push(worker);
+      worker.onmessage = (e: MessageEvent<SearchMessage>) => {
+        if (e.data.type === 'seed') {
+          done++;
+          setSearch((s) => ({ ...s, progress: done / count }));
+        } else {
+          results.push(...e.data.results);
+          worker.terminate();
+          finish();
+        }
+      };
+      // A worker that fails still counts as finished (the search completes with the others' seeds).
+      worker.onerror = () => {
+        worker.terminate();
+        finish();
+      };
+      worker.postMessage({ recipe, start: start + from, count: to - from, targetS: recipe.targetS ?? 30 });
+    }
   };
 
   return (
@@ -102,6 +137,7 @@ export function Playground() {
             <select value={recipe.templateId} onChange={(e) => {
                 // Custom copy is written for one template, so it goes back to the new template's defaults.
                 update({ templateId: e.target.value, params: {}, copy: {} });
+                stopSearch();
                 setSearch({ progress: 0, results: [], running: false });
               }}>
               {TEMPLATES.map((t) => (

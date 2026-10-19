@@ -10,13 +10,13 @@ import type { State } from './index';
 import { DT, MARBLE_R, STEPS_PER_FRAME, type Finish, type Piece, type Shape } from './sim';
 
 /** Pseudo-random from an integer (visual texture noise only). */
-const hash = (n: number) => {
+export const hash = (n: number) => {
   const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 };
 
 /** A wood grain texture: long wavy grain lines and pores over a base tone. */
-function woodTexture(base: [number, number, number], dark: [number, number, number], seed: number): THREE.Texture {
+export function woodTexture(base: [number, number, number], dark: [number, number, number], seed: number): THREE.Texture {
   const tex = canvasTexture(512, 512, (ctx) => {
     ctx.fillStyle = `rgb(${base.join(',')})`;
     ctx.fillRect(0, 0, 512, 512);
@@ -45,7 +45,7 @@ function woodTexture(base: [number, number, number], dark: [number, number, numb
 }
 
 /** Box-map UVs (project along each face's dominant axis), in metres × density, so grain scale is real. */
-function boxMapUVs(g: THREE.BufferGeometry, density = 3) {
+export function boxMapUVs(g: THREE.BufferGeometry, density = 3) {
   const pos = g.getAttribute('position');
   const nrm = g.getAttribute('normal');
   const uv = new Float32Array(pos.count * 2);
@@ -64,7 +64,7 @@ function boxMapUVs(g: THREE.BufferGeometry, density = 3) {
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 }
 
-function latheUVs(g: THREE.BufferGeometry) {
+export function latheUVs(g: THREE.BufferGeometry) {
   const pos = g.getAttribute('position');
   let cx = 0;
   let cz = 0;
@@ -112,7 +112,7 @@ function geometry(shape: Shape): THREE.BufferGeometry {
 }
 
 /** A twisted coloured vane: the "cat's eye" inside a glass marble. */
-function vaneGeometry(r: number): THREE.BufferGeometry {
+export function vaneGeometry(r: number): THREE.BufferGeometry {
   const g = new THREE.PlaneGeometry(r * 1.5, r * 1.6, 1, 24);
   const pos = g.getAttribute('position');
   for (let i = 0; i < pos.count; i++) {
@@ -190,7 +190,7 @@ function meshFor(piece: Piece, m: ReturnType<typeof materials>, theme: Theme): T
  * The reflection environment: a dark studio with a big overhead softbox, a strip light either side
  * and a warm bounce card low in front, so metal shows long soft highlights on black.
  */
-const studio = () =>
+export const studio = () =>
   studioEnvironment('rube-goldberg', (scene) => {
     scene.add(new THREE.Mesh(new THREE.SphereGeometry(20, 32, 16), new THREE.MeshBasicMaterial({ color: 0x0c0b0e, side: THREE.BackSide })));
     const panel = (w: number, h: number, color: number, at: [number, number, number], look: [number, number, number]) => {
@@ -327,7 +327,7 @@ function brickTexture(): THREE.Texture {
 }
 
 /** Concrete: mid grey with speckle and faint form-board seams. */
-function concreteTexture(): THREE.Texture {
+export function concreteTexture(): THREE.Texture {
   const tex = canvasTexture(512, 512, (ctx) => {
     ctx.fillStyle = 'rgb(118,116,112)';
     ctx.fillRect(0, 0, 512, 512);

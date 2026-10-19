@@ -88,4 +88,3 @@ export function decay(rate: number, dt: number): number {
 }
 
 export * from './world';
-export * from './world3d';

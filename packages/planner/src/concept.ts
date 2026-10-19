@@ -334,6 +334,23 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  'marble-race-3d': [
+    {
+      // Rotates the looks so batches don't repeat one style, and lets the learner compare them.
+      param: 'look',
+      values: ['classic', 'futuristic', 'arctic', 'neon'],
+      guide: {
+        classic:
+          'Look: classic (fixed for this video). Marbles race down a photoreal 3D tower that looks like a handmade wall-mounted marble run: maple lanes with walnut rails, spun-brass turns and funnels, green felt. Cosy, satisfying "handmade marble run" angles work. Don\'t claim it is real footage. Never predict the winner.',
+        futuristic:
+          'Look: futuristic (fixed for this video). Marbles race down a photoreal 3D test rig in a dark hangar: carbon-fibre lanes, brushed titanium, light strips and laser gates. Sci-fi / "high-tech marble race" angles work. Don\'t claim it is real footage. Never predict the winner.',
+        arctic:
+          'Look: arctic (fixed for this video). Marbles race down a photoreal 3D track carved from ice in a snowfield: frosted ice lanes, snow-capped rails, falling snow. Icy, wintry angles work ("slippery", "ice race"). Don\'t claim it is real footage. Never predict the winner.',
+        neon:
+          'Look: neon (fixed for this video). Marbles race down a stylised 3D tower of glowing neon lanes in the video\'s colours. Bright, glowing, arcade-style angles work. Never predict the winner.',
+      },
+    },
+  ],
   'snake-ai': [
     {
       param: 'ending',
@@ -377,6 +394,7 @@ export const TITLE_EMOJI_SHARE = 0.75;
 const TITLE_EMOJI: Record<string, string[]> = {
   'ring-escape': ['😱', '🤯', '👀'],
   'marble-race': ['🏁', '🔥', '😱'],
+  'marble-race-3d': ['🏁', '🔥', '😱'],
   'ball-battle': ['⚔️', '🔥', '😤'],
   'sand-pour': ['🤯', '😍', '✨'],
   polyrhythm: ['🎶', '🤯', '✨'],

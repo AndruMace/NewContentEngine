@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { FONT_FAMILY, Rng, type DramaScore, type OverlaySpec, type StepCtx, type Template } from '@sim/engine';
-import { World3D, type Body3, type Contact3, type Shape3 } from '@sim/physics';
 import * as dm from '@sim/physics/math';
 import { COLOR_TEAMS, pickDistinctTeams, type Team } from '../fx';
 import { clamp01, gaussFit } from '../scoring';
 import { BALL_R, CUP_H, HALF_X, HEIGHT, buildCourse, type Course } from './course';
+import { Table, quatMat, rotation, tables, type Ball3, type Touch } from './physics';
 import { REPLAY_FROM_S, REPLAY_LEN_S, REPLAY_SPEED, drawTrickShot3D, initialCamera, updateCamera, type Cam } from './view3d';
 
 export const TRICK_SHOT_MODES = ['bounce', 'attempts', 'race'] as const;
@@ -38,7 +38,7 @@ export interface Aim {
 }
 
 export interface Shot {
-  body: Body3;
+  body: Ball3;
   team: Team;
   cannon: number;
   aim: Aim;
@@ -69,7 +69,9 @@ export interface Cannon extends Pt3 {
 
 export interface State {
   p: TrickShotParams;
-  world: World3D;
+  table: Table;
+  /** Attempts mode: the world with just the course in it, which every shot (and test shot) starts from. */
+  snap: Uint8Array | null;
   course: Course;
   cannons: Cannon[];
   shots: Shot[];
@@ -112,6 +114,10 @@ const TEST_PITCH = 8;
 const TEST_MAX_S = 8;
 const AIM_RANGE = { yaw: [-0.75, 0.75], pitch: [-0.75, 0.3] } as const;
 const BALL_TEAM: Team = { label: 'Ball', color: '#ffffff' };
+/** Every ball: a lively, slightly grippy sphere (it spins up on what it hits and rolls down boards). */
+const ballSurface = (p: TrickShotParams) => ({ restitution: p.bounciness, friction: 0.2 });
+/** Steps a ball must be clear of the floor (or a bumper) before it gets another springy bounce (or kick). */
+const REARM_STEPS = 6;
 
 const teamName = (t: Team) => `${t.icon ? t.icon + ' ' : ''}${t.label}`;
 const pan = (x: number) => Math.max(-0.7, Math.min(0.7, (x / HALF_X) * 0.7));
@@ -121,7 +127,7 @@ export const trickShot: Template<TrickShotParams, State> = {
   name: 'Trick Shot',
   family: 'bounce',
   description:
-    'A 3D glass cabinet: a cannon at the top, tilted boards, rods, pegs, bumpers and spinners in between, and a cup standing on the floor. In bounce mode one ball ricochets around in 3D (the floor keeps throwing it back up) until it finally drops into the cup, with a bounce counter. In attempts mode an AI cannon fires shot after shot, each miss landing closer (missed shots leave faint ghost trails), until one goes in. In race mode several coloured balls bounce around together and the first to sink {racePoints} cups wins. The camera opens wide, follows the ball, and every success ends with a slow-motion replay from beside the cup. Narrower cups and more obstacles make it take longer.',
+    'A 3D glass cabinet: a cannon at the top, tilted boards, rods, pegs, bumpers, spinners and swinging paddles in between, and a cup standing on the floor. In bounce mode one ball ricochets around in 3D (the floor keeps throwing it back up) until it finally drops into the cup, with a bounce counter. In attempts mode an AI cannon fires shot after shot, each miss landing closer (missed shots leave faint ghost trails), until one goes in. In race mode several coloured balls bounce around together and the first to sink {racePoints} cups wins. The camera opens wide, follows the ball, and every success ends with a slow-motion replay from beside the cup. Narrower cups and more obstacles make it take longer.',
   schema: trickShotSchema,
   substeps: 4,
   searchBudget: 200,
@@ -133,8 +139,7 @@ export const trickShot: Template<TrickShotParams, State> = {
   nudges: ['How many bounces will it take? 👇', 'Did you think it would go in? 👇', 'Guess when it lands 👇', 'Rate the shot 1–10 👇', 'Pick a ball 👇', 'Call it now 👇'],
 
   init({ params: p, rng, fxRng, visual }) {
-    const world = new World3D();
-    world.gravity = p.gravity;
+    const table = new Table(p.gravity);
     const n = p.mode === 'race' ? p.racers : 1;
     const side = rng.chance(0.5) ? 1 : -1;
     const cannons: Cannon[] = [];
@@ -146,28 +151,22 @@ export const trickShot: Template<TrickShotParams, State> = {
       const aim = { yaw: 0, pitch: 0 };
       cannons.push({ x, y: HEIGHT - 0.9, z, home, aim, aimFrom: aim, aimTo: aim, aimStartT: 0, firedAt: -10 });
     }
-    // Built from its own seed so attempts mode can rebuild the identical course for test shots.
     const courseSeed = rng.u32();
-    const courseOpts = { count: p.obstacles, mix: p.mix, spinners: p.mode === 'attempts' ? 0 : p.spinners, cupSize: p.cupSize, restitution: p.bounciness, cannons };
-    const course = buildCourse(world, new Rng(courseSeed), courseOpts);
+    const courseOpts = { count: p.obstacles, mix: p.mix, spinners: p.mode === 'attempts' ? 0 : p.spinners, swings: p.mode !== 'attempts', cupSize: p.cupSize, restitution: p.bounciness, cannons };
+    const course = buildCourse(table, new Rng(courseSeed), courseOpts);
     for (const c of cannons) {
       const aim = { yaw: rng.range(AIM_RANGE.yaw[0], AIM_RANGE.yaw[1]), pitch: rng.range(AIM_RANGE.pitch[0], AIM_RANGE.pitch[1]) };
       c.aim = c.aimFrom = c.aimTo = aim;
     }
     const shotSpeed = rng.range(5, 7.5);
-    const plan =
-      p.mode === 'attempts'
-        ? planAttempts(rng, p, shotSpeed, cannons[0], () => {
-            const w = new World3D();
-            w.gravity = p.gravity;
-            return { world: w, course: buildCourse(w, new Rng(courseSeed), courseOpts) };
-          })
-        : null;
+    const snap = p.mode === 'attempts' ? table.snapshot() : null;
+    const plan = snap ? planAttempts(rng, p, shotSpeed, cannons[0], table, snap, course) : null;
     if (plan) cannons[0].aim = cannons[0].aimFrom = cannons[0].aimTo = plan[0];
     const teams = p.mode === 'race' ? pickDistinctTeams(COLOR_TEAMS.slice(0, 8), n, rng) : [BALL_TEAM];
     const s: State = {
       p,
-      world,
+      table,
+      snap,
       course,
       cannons,
       shots: [],
@@ -189,6 +188,7 @@ export const trickShot: Template<TrickShotParams, State> = {
       fxRng,
     };
     s.cam = initialCamera(s);
+    tables.register(s, table);
     return s;
   },
 
@@ -207,20 +207,40 @@ export const trickShot: Template<TrickShotParams, State> = {
       fire(s, cannon, { yaw: s.rng.range(AIM_RANGE.yaw[0], AIM_RANGE.yaw[1]), pitch: s.rng.range(AIM_RANGE.pitch[0], AIM_RANGE.pitch[1]) }, t, emit);
     }
 
-    s.world.step(dt, (c) => onContact(s, c, t, emit));
+    for (const o of s.course.obstacles) {
+      if (!o.spin || o.shape.kind !== 'box') continue;
+      o.spin.angle += o.spin.omega * dt;
+      s.table.setYaw(o.spin.body, o.spin.angle);
+      o.shape.rot = rotation(o.spin.angle);
+    }
+    s.table.advance();
+    if (s.visual)
+      for (const o of s.course.obstacles) {
+        if (o.swing === undefined || o.shape.kind !== 'box') continue;
+        const { t: at, q } = s.table.pose(o.swing);
+        o.shape.cx = at.x;
+        o.shape.cy = at.y;
+        o.shape.cz = at.z;
+        o.shape.rot = quatMat(q);
+      }
 
     const cup = s.course.cup;
     for (let i = 0; i < s.shots.length; i++) {
       const sh = s.shots[i];
       if (sh.done) continue;
       const b = sh.body;
-      clampSpeed3(b, MAX_V);
+      const live = s.endAt === null;
+      const floor = settle(s.table, b, p.mode !== 'attempts' && live ? { gravity: p.gravity, rng: s.rng } : null, live ? (c) => onTouch(s, i, c, t, emit) : undefined);
+      if (live && floor && p.mode === 'attempts') {
+        miss(s, i, t, emit, 'floor');
+        continue;
+      }
       if (s.visual && Math.floor(t * 60) !== Math.floor((t - dt) * 60)) {
         sh.trail.push({ x: b.x, y: b.y, z: b.z });
         sh.recent.push({ t, x: b.x, y: b.y, z: b.z });
         while (sh.recent.length && sh.recent[0].t < t - REPLAY_LEN_S - 0.2) sh.recent.shift();
       }
-      if (s.endAt !== null) continue;
+      if (!live) continue;
       const flat = dm.hypot(b.x - cup.x, b.z - cup.z);
       // Near miss: over the cup's mouth, then away again without dropping in.
       const mouth = flat < cup.r + BALL_R * 1.5 && b.y > CUP_H && b.y < CUP_H + 0.6;
@@ -243,6 +263,7 @@ export const trickShot: Template<TrickShotParams, State> = {
           b.vx += s.rng.range(-1.5, 1.5);
           b.vz += s.rng.range(-1.5, 1.5);
           b.vy += s.rng.range(3, 5);
+          s.table.write(b);
           emit({ type: 'unstick', who: i, x: b.x });
         }
       }
@@ -252,7 +273,10 @@ export const trickShot: Template<TrickShotParams, State> = {
   },
 
   isDone(s) {
-    return s.endAt !== null && s.t >= s.endAt + (s.success ? OUTRO_WIN_S : OUTRO_FAIL_S);
+    const done = s.endAt !== null && s.t >= s.endAt + (s.success ? OUTRO_WIN_S : OUTRO_FAIL_S);
+    // Nothing reads the world once the run is over (the view draws the balls' copied poses).
+    if (done) s.table.free();
+    return done;
   },
 
   hud(s) {
@@ -408,16 +432,56 @@ export const trickShot: Template<TrickShotParams, State> = {
 };
 
 const smooth = (u: number) => u * u * (3 - 2 * u);
-const speed3 = (b: Body3) => Math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz);
+const speed3 = (b: Ball3) => Math.sqrt(b.vx * b.vx + b.vy * b.vy + b.vz * b.vz);
 
-function clampSpeed3(b: Body3, max: number) {
+/**
+ * After a physics step, the rules every ball follows (live and in test shots alike, so a test shot
+ * plays out exactly as the live shot will): bumpers kick it away, the springy floor (bounce and race)
+ * throws it back up with a seeded nudge sideways, and it never goes faster than MAX_V. Copies the
+ * ball's pose out of the world and reports what it touched. Returns whether it touched the floor.
+ */
+function settle(table: Table, b: Ball3, floorRule: { gravity: number; rng: Rng } | null, onTouch?: (c: Touch) => void): boolean {
+  table.read(b);
+  let floor = false;
+  let changed = false;
+  for (const c of table.touches(b)) {
+    if (c.info?.tag === 'floor') {
+      floor = true;
+      if (floorRule && table.step - b.floorStep > REARM_STEPS) {
+        // Bounce and race: a springy floor that always sends the ball back up into the cabinet.
+        // A seeded sideways nudge on every floor bounce keeps the ball roaming the cabinet (otherwise
+        // it can settle into bouncing straight up and down in one spot, forever).
+        b.floorStep = table.step;
+        const vMin = Math.sqrt(2 * floorRule.gravity * MIN_REBOUND_H);
+        if (b.vy < vMin) b.vy = vMin;
+        b.vx += floorRule.rng.range(-FLOOR_NUDGE, FLOOR_NUDGE);
+        b.vz += floorRule.rng.range(-FLOOR_NUDGE, FLOOR_NUDGE);
+        changed = true;
+      }
+    }
+    const at = c.info?.at;
+    if (c.info?.kick && at && table.step - b.kickStep > REARM_STEPS) {
+      // Bumpers: an extra shove straight out from the centre.
+      b.kickStep = table.step;
+      const dx = b.x - at.x, dy = b.y - at.y, dz = b.z - at.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      b.vx += (dx / d) * c.info.kick;
+      b.vy += (dy / d) * c.info.kick;
+      b.vz += (dz / d) * c.info.kick;
+      changed = true;
+    }
+    onTouch?.(c);
+  }
   const v = speed3(b);
-  if (v > max) {
-    const k = max / v;
+  if (v > MAX_V) {
+    const k = MAX_V / v;
     b.vx *= k;
     b.vy *= k;
     b.vz *= k;
+    changed = true;
   }
+  if (changed) table.write(b);
+  return floor;
 }
 
 /** Launch velocity for an aim from a cannon. */
@@ -437,25 +501,23 @@ export function muzzle(c: Pt3 & { home: number }, aim: Aim, v: number): { at: Pt
 }
 
 /**
- * Fire one test shot on a fresh copy of the course: does it go in, and if not, where does it land?
- * Mirrors the live step exactly (contact, speed clamp, cup and stuck checks in the same order), so the
- * live shot at the same aim plays out identically.
+ * Fire one test shot on a fresh copy of the course (the world restored to just after it was built):
+ * does it go in, and if not, where does it land? Mirrors the live step exactly (the same rules, then
+ * the cup and stuck checks in the same order), and the live shot starts from the same restored world,
+ * so the live shot at the same aim plays out identically.
  */
-function testShot(fresh: () => { world: World3D; course: Course }, p: TrickShotParams, cannon: Cannon, aim: Aim, v: number): { in: boolean; err: number; dx: number } {
-  const { world, course } = fresh();
+function testShot(table: Table, snap: Uint8Array, course: Course, p: TrickShotParams, cannon: Cannon, aim: Aim, v: number): { in: boolean; err: number; dx: number } {
+  table.restore(snap);
   const m = muzzle(cannon, aim, v);
-  const b = world.addBody({ ...m.at, vx: m.vel.x, vy: m.vel.y, vz: m.vel.z, r: BALL_R, restitution: p.bounciness, friction: 0.04 });
+  const b = table.addBall(m.at, m.vel, BALL_R, ballSurface(p));
   const cup = course.cup;
   const dt = 1 / 240;
   let inCupS = 0;
   let slowS = 0;
   const out = () => ({ in: false, err: dm.hypot(b.x - cup.x, b.z - cup.z), dx: b.x - cup.x });
   for (let k = 1; k <= TEST_MAX_S * 240; k++) {
-    world.step(dt, (c) => {
-      if (c.kind === 'shape' && (c.other as Shape3).tag === 'floor') b.alive = false;
-    });
-    if (!b.alive) return out();
-    clampSpeed3(b, MAX_V);
+    table.advance();
+    if (settle(table, b, null)) return out();
     inCupS = dm.hypot(b.x - cup.x, b.z - cup.z) < cup.r && b.y < CUP_H ? inCupS + dt : 0;
     if (inCupS >= SINK_HOLD_S) return { in: true, err: 0, dx: 0 };
     slowS = speed3(b) < STUCK_V ? slowS + dt : 0;
@@ -470,7 +532,7 @@ function testShot(fresh: () => { world: World3D; course: Course }, p: TrickShotP
  * Every planned shot was really fired here, so the live run replays it exactly. Null when no test
  * shot goes in (the live run then aims blind and almost always fails).
  */
-function planAttempts(rng: Rng, p: TrickShotParams, v: number, cannon: Cannon, fresh: () => { world: World3D; course: Course }): Aim[] | null {
+function planAttempts(rng: Rng, p: TrickShotParams, v: number, cannon: Cannon, table: Table, snap: Uint8Array, course: Course): Aim[] | null {
   const tests: (Aim & { in: boolean; err: number; dx: number })[] = [];
   for (let i = 0; i < TEST_YAW; i++)
     for (let j = 0; j < TEST_PITCH; j++) {
@@ -478,7 +540,7 @@ function planAttempts(rng: Rng, p: TrickShotParams, v: number, cannon: Cannon, f
         yaw: AIM_RANGE.yaw[0] + ((AIM_RANGE.yaw[1] - AIM_RANGE.yaw[0]) * (i + 0.5)) / TEST_YAW,
         pitch: AIM_RANGE.pitch[0] + ((AIM_RANGE.pitch[1] - AIM_RANGE.pitch[0]) * (j + 0.5)) / TEST_PITCH,
       };
-      tests.push({ ...aim, ...testShot(fresh, p, cannon, aim, v) });
+      tests.push({ ...aim, ...testShot(table, snap, course, p, cannon, aim, v) });
     }
   const ins = tests.filter((x) => x.in);
   if (!ins.length) return null;
@@ -515,49 +577,37 @@ function launch(s: State, t: number, emit: StepCtx['emit']) {
 function fire(s: State, ci: number, aim: Aim, t: number, emit: StepCtx['emit']) {
   const c = s.cannons[ci];
   const m = muzzle(c, aim, s.speed);
-  const body = s.world.addBody({ ...m.at, vx: m.vel.x, vy: m.vel.y, vz: m.vel.z, r: BALL_R, restitution: s.p.bounciness, friction: 0.04 });
+  // Attempts: every shot starts from the course as built, exactly as its test shot did.
+  if (s.snap) s.table.restore(s.snap);
+  const body = s.table.addBall(m.at, m.vel, BALL_R, ballSurface(s.p));
   c.firedAt = t;
   c.aim = c.aimFrom = c.aimTo = aim;
   s.shots.push({ body, team: s.teams[ci], cannon: ci, aim, trail: [], recent: [], done: false, inCupS: 0, slowS: 0, inMouth: false, lastHitT: -10, steps: 0, launchedAt: t });
   emit({ type: 'launch', attempt: s.shots.length, x: c.x });
 }
 
-function onContact(s: State, c: Contact3, t: number, emit: StepCtx['emit']) {
-  if (s.endAt !== null) return;
-  const i = s.shots.findIndex((sh) => sh.body === c.body);
-  if (i < 0) return;
+/** A ball pushed against something: count and sound the real impacts, and flash what it hit. */
+function onTouch(s: State, i: number, c: Touch, t: number, emit: StepCtx['emit']) {
   const sh = s.shots[i];
   if (sh.done) return;
-  const tag = c.kind === 'body' ? 'ball' : (c.other as Shape3).tag;
-  if (tag === 'floor') {
-    if (s.p.mode === 'attempts') {
-      miss(s, i, t, emit, 'floor');
-      return;
-    }
-    // Bounce and race: a springy floor that always sends the ball back up into the cabinet.
-    // A seeded sideways nudge on every floor bounce keeps the ball roaming the cabinet (otherwise it
-    // can settle into bouncing straight up and down in one spot, forever).
-    const vMin = Math.sqrt(2 * s.p.gravity * MIN_REBOUND_H);
-    if (c.body.vy < vMin) c.body.vy = vMin;
-    c.body.vx += s.rng.range(-FLOOR_NUDGE, FLOOR_NUDGE);
-    c.body.vz += s.rng.range(-FLOOR_NUDGE, FLOOR_NUDGE);
-  }
+  // Two balls touching show up for both: count it once (for the earlier ball).
+  if (c.ball && s.shots.findIndex((o) => o.body === c.ball) < i) return;
+  const tag = c.ball ? 'ball' : (c.info?.tag ?? 'wall');
+  if (tag === 'floor' && s.p.mode === 'attempts') return;
   if (c.impulse < 0.6 || t - sh.lastHitT < 0.05) return;
   sh.lastHitT = t;
   const kind = tag === 'cup' ? (c.y > CUP_H - 0.08 ? 'rim' : 'cup') : tag;
   if (kind === 'cupFloor' || kind === 'cup') return;
   s.hits++;
   emit({ type: 'hit', kind, x: c.x, impulse: c.impulse, who: i });
-  if (c.kind === 'shape') {
-    const ob = s.course.obstacles.find((o) => o.shape === c.other);
-    if (ob) ob.hitAt = t;
-  }
+  const ob = c.info && c.info.obstacle >= 0 ? s.course.obstacles[c.info.obstacle] : null;
+  if (ob) ob.hitAt = t;
 }
 
 function miss(s: State, i: number, t: number, emit: StepCtx['emit'], why: 'floor' | 'stuck' | 'timeout') {
   const sh = s.shots[i];
   sh.done = true;
-  sh.body.alive = false;
+  s.table.removeBall(sh.body);
   const { cup } = s.course;
   emit({ type: 'miss', attempt: s.shots.length, err: dm.hypot(sh.body.x - cup.x, sh.body.z - cup.z), why, x: sh.body.x });
   if (s.shots.length >= s.p.maxAttempts) {
@@ -578,7 +628,7 @@ function sink(s: State, i: number, t: number, emit: StepCtx['emit']) {
   if (s.p.mode === 'race' && ++s.points[sh.cannon] < s.p.racePoints) {
     // Not the winning cup yet: score it, clear the ball and reload its cannon.
     sh.done = true;
-    sh.body.alive = false;
+    s.table.removeBall(sh.body);
     s.reloads.push({ cannon: sh.cannon, at: t + RELOAD_S });
     const lead = Math.max(...s.points);
     emit({ type: 'point', who: sh.cannon, points: s.points[sh.cannon], lead: s.points[sh.cannon] === lead && s.points.filter((x) => x === lead).length === 1, x: sh.body.x });

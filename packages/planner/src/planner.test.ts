@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, paramsJsonSchema } from '@sim/engine';
 import { TEMPLATES, getTemplate } from '@sim/templates';
-import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema, summarizePerformance, uploadCopyFromClaude, variantHook, coerceParams, describeTemplate } from './index';
+import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, variantGuide, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema, summarizePerformance, uploadCopyFromClaude, variantHook, coerceParams, describeTemplate } from './index';
 
 describe('arm selection', () => {
   it('spreads arms across templates and respects the filters', () => {
@@ -173,6 +173,21 @@ describe('title emoji', () => {
       expect(concept.copy.hook).toBe(hooks[subject]);
     }
     expect(seen.size).toBe(5);
+  });
+
+  it('rotates Marble Race 3D through its looks, each with its own copy guide', async () => {
+    const mr = { ...arm, templateId: 'marble-race-3d' };
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      const { concept } = await planOne(mr, 30, i % 2 ? 'mock' : 'fallback', { recentHooks: [] }, new Rng(i));
+      const look = concept.params.look as string;
+      seen.add(look);
+      const [guide] = variantGuide('marble-race-3d', { look });
+      expect(guide).toMatch(new RegExp(`^Look: ${look} `));
+      expect(guide).toMatch(/Never predict the winner/);
+      expect(/real footage/.test(guide)).toBe(look !== 'neon');
+    }
+    expect([...seen].sort()).toEqual(['arctic', 'classic', 'futuristic', 'neon']);
   });
 
   it('uses settings chosen up front (taste model) whatever the model returns, keeping planned variants', async () => {

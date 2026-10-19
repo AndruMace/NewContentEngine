@@ -13,7 +13,7 @@ export interface SimEvent {
 }
 
 export type VoiceId = 'marimba' | 'bell' | 'pluck' | 'glass' | 'softsine';
-export type SfxId = 'shatter' | 'pop' | 'boom' | 'tick' | 'whoosh' | 'chime' | 'sand' | 'bubble' | 'clack' | 'clang' | 'grind' | 'rip' | 'knock' | 'clink' | 'ding';
+export type SfxId = 'shatter' | 'pop' | 'boom' | 'tick' | 'whoosh' | 'chime' | 'sand' | 'bubble' | 'clack' | 'clang' | 'grind' | 'rip' | 'knock' | 'clink' | 'ding' | 'ambience';
 
 export type AudioEvent =
   | { t: number; kind: 'note'; midi: number; vel: number; voice?: VoiceId; dur?: number; pan?: number }
@@ -45,6 +45,8 @@ export interface InitCtx<P> {
   visual: boolean;
   width: number;
   height: number;
+  /** Long-form templates: the master loop's length. The final frame (t = loopS) must equal the first. */
+  loopS: number;
   /** For templates whose sim state carries colours (e.g. mixing liquids). Never affects physics. */
   theme: Theme;
   /** The video's melody (already transposed), for templates whose run is built from it. */
@@ -104,14 +106,39 @@ export interface Copy {
   nudge?: string;
 }
 
+/** Output size and frame rate. Shorts use the default 1080×1920 at 60 fps. */
+export interface VideoFormat {
+  width: number;
+  height: number;
+  fps: number;
+}
+
+/**
+ * Long-form (ambient) templates render a seamless master loop that is repeated to the final length.
+ * Every frame must depend only on t (so segments can start anywhere) and t = loopS must look and sound
+ * exactly like t = 0. They are kept out of batches, the planner and analytics.
+ */
+export interface LongFormSpec {
+  /** Allowed master-loop lengths in seconds. */
+  minLoopS: number;
+  maxLoopS: number;
+  defaultLoopS: number;
+  /** A representative moment for the thumbnail (e.g. mid lightning flash). */
+  thumbnailAt?: (state: any) => number;
+}
+
 export interface Template<P = any, S = any> {
   id: string;
   name: string;
   family: Family;
   description: string;
   schema: z.ZodType<P>;
-  /** Physics substeps per 60fps frame (default 4 = 240 Hz). */
+  /** Physics substeps per frame (default 4 = 240 Hz at 60 fps). */
   substeps?: number;
+  /** Defaults to 1080×1920 at 60 fps. */
+  format?: VideoFormat;
+  /** Set for long-form ambient templates (see LongFormSpec). */
+  longForm?: LongFormSpec;
   /** Seeds worth simulating in a seed search (heavy sims use fewer). Default 400. */
   searchBudget?: number;
   /** Template ignores the melody setting (e.g. uses its own scale). */

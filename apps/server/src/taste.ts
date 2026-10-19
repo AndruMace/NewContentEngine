@@ -75,7 +75,8 @@ function labelFor(r: RenderRow, reviewed: Set<string>, now: number): Label | nul
 /** What the model sees about one render (stored score/length; nothing is re-simulated). */
 export function tasteInput(r: RenderRow): LearnerInput | null {
   const template = findTemplate(r.recipe.templateId);
-  if (!template) return null;
+  // Long-form ambient videos don't teach anything about Shorts.
+  if (!template || template.longForm) return null;
   const concept = r.conceptId ? getConcept(r.conceptId)?.concept : undefined;
   const durationS = r.durationS ?? r.recipe.targetS ?? 30;
   return {

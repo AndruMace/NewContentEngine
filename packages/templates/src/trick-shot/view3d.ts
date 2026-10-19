@@ -144,6 +144,13 @@ const view = sceneCache((s: State, theme: Theme) => {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       group.add(mesh);
+      if (o.kind === 'swing') {
+        // The hinge pin along the paddle's top edge.
+        const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, sh.hz * 2 + 0.12, 16), new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.8, roughness: 0.3 }));
+        pin.rotation.x = Math.PI / 2;
+        pin.position.y = sh.hy;
+        group.add(pin);
+      }
       if (o.kind === 'spinner') {
         const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.4, 20), new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.8, roughness: 0.3 }));
         group.add(hub);
@@ -198,6 +205,7 @@ const view = sceneCache((s: State, theme: Theme) => {
   });
 
   const ballGeo = new THREE.SphereGeometry(BALL_R, 40, 28);
+  const seamGeo = new THREE.TorusGeometry(BALL_R * 0.995, 0.014, 8, 48);
   const balls: THREE.Mesh[] = [];
   const ghostTrails = new Map<number, THREE.Mesh>();
   const trail = new THREE.InstancedMesh(new THREE.SphereGeometry(BALL_R, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, depthWrite: false }), TRAIL * MAX_LIVE);
@@ -221,7 +229,7 @@ const view = sceneCache((s: State, theme: Theme) => {
   confetti.frustumCulled = false;
   scene.add(confetti);
 
-  return { scene, camera, obstacles, cannons, balls, ballGeo, ghostTrails, trail, replayDots, replayBall, confetti, rimMat, baseMat };
+  return { scene, camera, obstacles, cannons, balls, ballGeo, seamGeo, ghostTrails, trail, replayDots, replayBall, confetti, rimMat, baseMat };
 });
 
 type View = ReturnType<typeof view>;
@@ -233,6 +241,13 @@ function ballMesh(v: View, i: number, color: string): THREE.Mesh {
   while (v.balls.length <= i) {
     const mesh = new THREE.Mesh(v.ballGeo, new THREE.MeshPhysicalMaterial({ color: new THREE.Color(color), roughness: 0.18, metalness: 0.1, clearcoat: 1, emissive: new THREE.Color(color), emissiveIntensity: 0.12 }));
     mesh.castShadow = true;
+    // Two seams round the ball at right angles, so its spin shows from any side.
+    const seamMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.45), roughness: 0.4, transparent: true });
+    for (const tilt of [0, Math.PI / 2]) {
+      const seam = new THREE.Mesh(v.seamGeo, seamMat);
+      seam.rotation.x = tilt;
+      mesh.add(seam);
+    }
     v.scene.add(mesh);
     v.balls.push(mesh);
   }
@@ -290,9 +305,12 @@ export function drawTrickShot3D(ctx: Ctx2D, theme: Theme, s: State, t: number) {
     // Scored race balls leave the cabinet; missed attempts stay where they stopped, dimmed.
     mesh.visible = !(sh.done && s.p.mode === 'race' && !winner);
     mesh.position.set(sh.body.x, sh.body.y, sh.body.z);
+    const q = sh.body.q;
+    mesh.quaternion.set(q.x, q.y, q.z, q.w);
     const mat = mesh.material as THREE.MeshPhysicalMaterial;
     mat.transparent = sh.done && !winner;
     mat.opacity = sh.done && !winner ? 0.35 : 1;
+    (mesh.children[0] as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>).material.opacity = mat.opacity;
     if (sh.done && !winner && s.p.mode === 'attempts') ghostTrail(v, i, sh);
     if (!sh.done && live < MAX_LIVE) {
       const tail = sh.trail.slice(-TRAIL);

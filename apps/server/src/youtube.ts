@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { normalizeTitle, titleSimilarity, youtubeShortUrl } from '@sim/analytics';
+import { isLongForm } from '@sim/templates';
 import {
   DATA_DIR,
   allPosts,
@@ -28,6 +29,8 @@ const SCOPES = ['https://www.googleapis.com/auth/youtube.readonly', 'https://www
 const DATA_API = 'https://www.googleapis.com/youtube/v3';
 const ANALYTICS_API = 'https://youtubeanalytics.googleapis.com/v2/reports';
 const HOUR = 3_600_000;
+/** Uploads longer than this can't be Shorts from this tool (they're the long-form ambient videos). */
+const LONG_UPLOAD_S = 10 * 60;
 const DAY = 24 * HOUR;
 
 interface StoredToken {
@@ -210,11 +213,14 @@ function linkableRenders(): { id: string; title: string; exportedAt: number }[] 
   return (
     db
       .prepare(
-        `SELECT r.id, r.copy, MAX(e.created_at) AS exported_at FROM renders r JOIN exports e ON e.render_id = r.id
+        `SELECT r.id, r.copy, json_extract(r.recipe, '$.templateId') AS template_id, MAX(e.created_at) AS exported_at FROM renders r JOIN exports e ON e.render_id = r.id
          WHERE r.id NOT IN (SELECT render_id FROM posts WHERE platform = 'youtube') GROUP BY r.id`,
       )
-      .all() as { id: string; copy: string | null; exported_at: number }[]
-  ).map((r) => ({ id: r.id, title: r.copy ? (JSON.parse(r.copy).title ?? '') : '', exportedAt: r.exported_at }));
+      .all() as { id: string; copy: string | null; template_id: string; exported_at: number }[]
+  )
+    // Long-form ambient videos are never linked: analytics ignores them.
+    .filter((r) => !isLongForm(r.template_id))
+    .map((r) => ({ id: r.id, title: r.copy ? (JSON.parse(r.copy).title ?? '') : '', exportedAt: r.exported_at }));
 }
 
 export function linkableRendersView() {
@@ -233,6 +239,17 @@ export async function syncUploads(): Promise<SyncResult> {
     thumbnail: it.snippet.thumbnails?.medium?.url ?? it.snippet.thumbnails?.default?.url ?? null,
   }));
   const ignored = new Set(getKv<string[]>('youtube_ignored', []));
+  // Long uploads on the same channel are the ambient videos (Shorts are at most 3 minutes): ignore them
+  // for good so they never show up as unlinked uploads or reach analytics.
+  const fresh = uploads.filter((u) => !ignored.has(u.videoId) && !postByExternalId('youtube', u.videoId));
+  if (fresh.length) {
+    const details = await api(`${DATA_API}/videos?part=contentDetails&id=${fresh.map((u) => u.videoId).join(',')}`);
+    const long = (details.items ?? []).filter((v: any) => parseIsoDuration(v.contentDetails?.duration) > LONG_UPLOAD_S).map((v: any) => v.id as string);
+    if (long.length) {
+      for (const id of long) ignored.add(id);
+      setKv('youtube_ignored', [...ignored]);
+    }
+  }
   const result: SyncResult = { autoLinked: [], suggestions: [], unlinked: [] };
   let candidates = linkableRenders();
   for (const u of uploads) {
@@ -255,7 +272,9 @@ export async function syncUploads(): Promise<SyncResult> {
 }
 
 export function linkUpload(u: Pick<Upload, 'videoId' | 'publishedAt'>, renderId: string, linkedBy: 'paste' | 'auto') {
-  if (!getRender(renderId)) throw new Error('Video not found');
+  const render = getRender(renderId);
+  if (!render) throw new Error('Video not found');
+  if (isLongForm(render.recipe.templateId)) throw new Error('Long-form ambient videos are not tracked in analytics');
   const other = postByExternalId('youtube', u.videoId);
   if (other && other.renderId !== renderId) throw new Error('That upload is already linked to another video');
   upsertPost({ renderId, platform: 'youtube', url: youtubeShortUrl(u.videoId), postedAt: u.publishedAt, externalId: u.videoId, publishedAt: u.publishedAt, linkedBy });
