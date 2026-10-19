@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { findTemplate } from '@sim/templates';
 import { SOURCE_INFO, api, formatBytes, previewVideoRef, type LibraryEntry } from './api';
 
-type Group = 'all' | 'batch' | 'playground' | 'cli';
+type Group = 'all' | 'batch' | 'playground' | 'cli' | 'ambient';
 
 const when = (ms: number) =>
   new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+const length = (s: number) => (s >= 600 ? `${Math.floor(s / 3600)}:${String(Math.round((s % 3600) / 60)).padStart(2, '0')} h` : `${s.toFixed(1)}s`);
 
 function templateName(id: string | undefined) {
   return id ? (findTemplate(id)?.name ?? id) : 'Unknown';
@@ -27,7 +29,7 @@ function LibraryCard({ e, onOpenBatch, onDeleted }: { e: LibraryEntry; onOpenBat
             ref={previewVideoRef}
           />
         ) : e.hasCover ? (
-          <img src={`/files/${e.dir}/cover.jpg`} alt="" loading="lazy" />
+          <img src={`/files/${e.dir}/${e.cover ?? 'cover.jpg'}`} alt="" loading="lazy" />
         ) : (
           <div className="card-placeholder">▶</div>
         )}
@@ -44,8 +46,8 @@ function LibraryCard({ e, onOpenBatch, onDeleted }: { e: LibraryEntry; onOpenBat
         {e.hook && <p className="hook small-text">“{e.hook}”</p>}
         <p className="hint meta">
           {when(e.createdAt)}
-          {e.durationS ? ` · ${e.durationS.toFixed(1)}s` : ''} · {formatBytes(e.sizeBytes)}
-          {e.recipe ? ` · ${e.recipe.themeId} · seed ${e.recipe.seed}` : ''}
+          {e.durationS ? ` · ${length(e.durationS)}` : ''} · {formatBytes(e.sizeBytes)}
+          {e.recipe ? (e.source === 'ambient' ? ` · seed ${e.recipe.seed}` : ` · ${e.recipe.themeId} · seed ${e.recipe.seed}`) : ''}
         </p>
         {e.batchId && e.source === 'batch' && <p className="hint meta">From the batch of {e.batchCreatedAt ? when(e.batchCreatedAt) : '—'}</p>}
         <div className="row wrap">
@@ -90,6 +92,7 @@ export function LibraryView({ entries, onOpenBatch, onChanged }: { entries: Libr
     { id: 'batch', label: 'Batches' },
     { id: 'playground', label: 'Playground' },
     { id: 'cli', label: 'Command line' },
+    { id: 'ambient', label: 'Long-form' },
   ];
   const inGroup = (e: LibraryEntry, g: Group) => g === 'all' || SOURCE_INFO[e.source].group === g;
   const shown = entries.filter((e) => inGroup(e, group));
@@ -115,7 +118,8 @@ export function LibraryView({ entries, onOpenBatch, onChanged }: { entries: Libr
       <p className="hint legend">
         <span className="badge src src-batch">Batch</span> made by a batch run ·{' '}
         <span className="badge src src-playground">Playground → Review</span> / <span className="badge src src-playground">Playground export</span> made by you in the Playground ·{' '}
-        <span className="badge src src-cli">Command line</span> made with npm run render
+        <span className="badge src src-cli">Command line</span> made with npm run render ·{' '}
+        <span className="badge src src-ambient">Long-form</span> ambient videos from the Ambient tab (copy and progress live there)
       </p>
       {shown.length === 0 ? (
         <p className="hint">No renders here yet.</p>

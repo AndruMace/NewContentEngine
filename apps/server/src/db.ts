@@ -172,6 +172,14 @@ const MIGRATIONS = [
    ALTER TABLE renders ADD COLUMN note TEXT;`,
   // Playground exports: bundle for upload once rendered.
   `ALTER TABLE renders ADD COLUMN auto_export INTEGER NOT NULL DEFAULT 0;`,
+  // Long-form (ambient) videos: their own table, so they never mix with the Shorts renders that
+  // batches, review, the taste model and analytics read.
+  `CREATE TABLE longform_jobs (
+     id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, recipe TEXT NOT NULL, notes TEXT,
+     status TEXT NOT NULL, stage TEXT, progress REAL NOT NULL DEFAULT 0, dir TEXT, result TEXT, error TEXT,
+     copy TEXT, copy_status TEXT NOT NULL DEFAULT 'none', copy_error TEXT,
+     started_at INTEGER, finished_at INTEGER);
+   CREATE INDEX longform_status ON longform_jobs(status);`,
 ];
 
 {

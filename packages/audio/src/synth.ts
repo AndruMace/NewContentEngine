@@ -487,11 +487,11 @@ export async function renderAudioRange(
 }
 
 /**
- * A bed: its recording looped from the point matching the segment's start time, so every segment
- * (and every repeat of the loop, since the recording's length divides the loop) lines up. The level
- * swells slowly, as a function of time within the loop.
+ * A bed: its recording looped from the point matching the sim time at context time `at` (so every
+ * segment, and every repeat of the loop, since the recording's length divides the loop, lines up). The
+ * level swells slowly, as a function of time within the loop. Returns the source, to stop it.
  */
-function playBed(bus: SynthBus, bed: AmbientBed, lengthS: number) {
+function playBed(bus: SynthBus, bed: AmbientBed, lengthS: number, at = 0): AudioBufferSourceNode {
   const buffer = bus.samples.get(bed.sound);
   if (!buffer) throw new Error(`Sound not loaded: ${bed.sound}`);
   const ctx = bus.ctx;
@@ -509,10 +509,26 @@ function playBed(bus: SynthBus, bed: AmbientBed, lengthS: number) {
     return bed.gain * (1 + (bed.swell.depth * s) / cycles.length);
   };
   const STEP = 0.5;
-  g.gain.setValueAtTime(level(bus.t0), 0);
-  for (let k = 1; k * STEP <= lengthS + STEP; k++) g.gain.linearRampToValueAtTime(level(bus.t0 + k * STEP), k * STEP);
+  const t0 = bus.t0 + at;
+  g.gain.setValueAtTime(level(t0), at);
+  for (let k = 1; k * STEP <= lengthS + STEP; k++) g.gain.linearRampToValueAtTime(level(t0 + k * STEP), at + k * STEP);
   src.connect(g).connect(out(bus, bed.pan ?? 0));
-  src.start(0, ((bus.t0 % B) + B) % B);
+  src.start(at, ((t0 % B) + B) % B);
+  return src;
+}
+
+/** Start beds live (the preview player): from context time `at` for `lengthS`. Call the result to stop them. */
+export function playBeds(bus: SynthBus, beds: AmbientBed[], at: number, lengthS: number): () => void {
+  const srcs = beds.map((b) => playBed(bus, b, lengthS, at));
+  return () => {
+    for (const s of srcs) {
+      try {
+        s.stop();
+      } catch {
+        /* not started */
+      }
+    }
+  };
 }
 
 /** 32-bit float stereo WAV, so nothing clips before loudness normalisation. */

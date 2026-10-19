@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { createReadStream, existsSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import type { Recipe } from '@sim/engine';
 import { RENDERS_DIR, ROOT } from '@sim/render';
-import { COPY_TARGETS, PLATFORMS, claudeAvailable, type CopyTarget, type Platform, type SocialCopy } from '@sim/planner';
+import { COPY_TARGETS, PLATFORMS, claudeAvailable, type CopyTarget, type LongFormCopy, type Platform, type SocialCopy } from '@sim/planner';
+import { LongFormService } from './longform';
+import { getLongFormJob, listLongFormJobs } from './longformJobs';
 import { REWARD_PRESETS, parsePostUrl } from '@sim/analytics';
 import { tasteStatus } from './taste';
 
@@ -46,6 +49,9 @@ const scheduler = new RenderScheduler();
 const pool = new SearchPool();
 const batches = new BatchRunner(scheduler, pool);
 const review = new ReviewActions(scheduler, pool, batches);
+const longformChanged = new EventEmitter();
+const longform = new LongFormService(scheduler, (id) => longformChanged.emit('changed', id));
+scheduler.on('longform', (j: { id: string }) => longformChanged.emit('changed', j.id));
 
 /** Resolve a path relative to a root, refusing anything that escapes it. */
 function safePath(root: string, rel: string): string | null {
@@ -77,6 +83,8 @@ function sse(req: FastifyRequest, reply: FastifyReply, subscribe: (send: (data: 
 const errorReply = (reply: FastifyReply, e: unknown, code = 400) => reply.code(code).send({ error: e instanceof Error ? e.message : String(e) });
 
 await app.register(fastifyStatic, { root: RENDERS_DIR, prefix: '/files/', decorateReply: true });
+// The long-form templates' textures, models and recordings, for the Ambient page's live preview.
+await app.register(fastifyStatic, { root: join(ROOT, 'assets/ambient'), prefix: '/ambient-assets/', decorateReply: false });
 
 // ---- status & settings ----------------------------------------------------------------------
 
@@ -382,6 +390,77 @@ app.put<{ Body: { preset?: string; weights?: Record<string, number> } }>('/api/a
 
 /** Exported videos not yet linked to a YouTube upload (for manual linking). */
 app.get('/api/analytics/linkable', async () => youtube.linkableRendersView());
+
+// ---- long-form (ambient) videos ---------------------------------------------------------------
+
+app.get('/api/longform', async () => ({ jobs: listLongFormJobs(), current: scheduler.currentLongForm, shortsRendering: scheduler.current }));
+
+app.post<{ Body: { recipe: Recipe; notes?: string } }>('/api/longform', async (req, reply) => {
+  try {
+    return longform.create(req.body.recipe, req.body.notes);
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+// Every job's live state (progress while rendering, copy as Claude writes it).
+app.get('/api/longform/stream', (req, reply) => {
+  sse(req, reply, (send) => {
+    let timer: NodeJS.Timeout | null = null;
+    const push = () => send({ jobs: listLongFormJobs(), current: scheduler.currentLongForm, shortsRendering: scheduler.current });
+    const onChange = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        push();
+      }, 300);
+    };
+    longformChanged.on('changed', onChange);
+    push();
+    return () => {
+      longformChanged.off('changed', onChange);
+      if (timer) clearTimeout(timer);
+    };
+  });
+});
+
+app.post<{ Params: { id: string } }>('/api/longform/:id/cancel', async (req) => {
+  longform.cancel(req.params.id);
+  return { ok: true };
+});
+
+app.post<{ Params: { id: string } }>('/api/longform/:id/retry', async (req, reply) => {
+  try {
+    longform.retry(req.params.id);
+    return { ok: true };
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.patch<{ Params: { id: string }; Body: Partial<LongFormCopy> }>('/api/longform/:id/copy', async (req, reply) => {
+  try {
+    longform.editCopy(req.params.id, req.body);
+    return getLongFormJob(req.params.id);
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
+
+app.post<{ Params: { id: string }; Body: { notes?: string } }>('/api/longform/:id/copy/regenerate', async (req, reply) => {
+  if (!getLongFormJob(req.params.id)) return reply.code(404).send({ error: 'not found' });
+  void longform.writeCopy(req.params.id, req.body?.notes);
+  return { ok: true };
+});
+
+app.delete<{ Params: { id: string }; Querystring: { files?: string } }>('/api/longform/:id', async (req, reply) => {
+  try {
+    await longform.remove(req.params.id, req.query.files === '1');
+    return { ok: true };
+  } catch (e) {
+    return errorReply(reply, e);
+  }
+});
 
 // Local-only convenience: reveal a render in Finder.
 app.post<{ Body: { path: string; root?: 'renders' | 'exports' } }>('/api/reveal', async (req, reply) => {

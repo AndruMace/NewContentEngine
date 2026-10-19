@@ -5,5 +5,5 @@ const api = `http://127.0.0.1:${process.env.SIM_SERVER_PORT ?? 5174}`;
 
 export default defineConfig({
   plugins: [react()],
-  server: { port: 5173, proxy: { '/api': api, '/files': api } },
+  server: { port: 5173, proxy: { '/api': api, '/files': api, '/ambient-assets': api } },
 });

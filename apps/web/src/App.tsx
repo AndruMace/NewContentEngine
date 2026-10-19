@@ -3,8 +3,9 @@ import { Playground } from './Playground';
 import { ReviewPage } from './ReviewPage';
 import { AnalyticsPage } from './AnalyticsPage';
 import { UploadPage } from './UploadPage';
+import { AmbientPage } from './AmbientPage';
 
-type Route = 'playground' | 'review' | 'upload' | 'analytics';
+type Route = 'playground' | 'ambient' | 'review' | 'upload' | 'analytics';
 const routeFromHash = (): Route =>
   location.hash.startsWith('#/review/upload/')
     ? 'upload'
@@ -12,7 +13,9 @@ const routeFromHash = (): Route =>
       ? 'review'
       : location.hash.startsWith('#/analytics')
         ? 'analytics'
-        : 'playground';
+        : location.hash.startsWith('#/ambient')
+          ? 'ambient'
+          : 'playground';
 const uploadId = () => location.hash.slice('#/review/upload/'.length);
 
 export function App() {
@@ -34,6 +37,9 @@ export function App() {
           <a className={`tab${route === 'playground' ? ' active' : ''}`} href="#/">
             Playground
           </a>
+          <a className={`tab${route === 'ambient' ? ' active' : ''}`} href="#/ambient">
+            Ambient
+          </a>
           <a className={`tab${route === 'review' || route === 'upload' ? ' active' : ''}`} href="#/review">
             Batches &amp; Review
           </a>
@@ -42,7 +48,7 @@ export function App() {
           </a>
         </nav>
       </header>
-      {route === 'playground' ? <Playground /> : route === 'review' ? <ReviewPage /> : route === 'upload' ? <UploadPage id={id} /> : <AnalyticsPage />}
+      {route === 'playground' ? <Playground /> : route === 'ambient' ? <AmbientPage /> : route === 'review' ? <ReviewPage /> : route === 'upload' ? <UploadPage id={id} /> : <AnalyticsPage />}
     </div>
   );
 }

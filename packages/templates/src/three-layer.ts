@@ -69,6 +69,42 @@ export function draw3D(ctx: Ctx2D, scene: THREE.Scene, camera: THREE.Camera, opt
 }
 
 /**
+ * Render a fragment shader once into a texture (e.g. a planet's surface map, generated at load).
+ * The shader gets `vUv` (0..1 over the texture). Linear float data is kept (HalfFloat).
+ */
+export function bakeTexture(fragmentShader: string, uniforms: Record<string, THREE.IUniform>, width: number, height: number): THREE.Texture {
+  const { renderer } = get();
+  const target = new THREE.WebGLRenderTarget(width, height, { type: THREE.HalfFloatType, magFilter: THREE.LinearFilter, minFilter: THREE.LinearMipmapLinearFilter, generateMipmaps: true, wrapS: THREE.RepeatWrapping });
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const mat = new THREE.ShaderMaterial({ vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }', fragmentShader, uniforms });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  scene.add(quad);
+  const prev = renderer.getRenderTarget();
+  const tone = renderer.toneMapping;
+  renderer.toneMapping = THREE.NoToneMapping;
+  renderer.setRenderTarget(target);
+  // In strips, each finished before the next is sent: one draw over millions of pixels of heavy noise
+  // is a single long GPU job, the kind a GPU watchdog kills (on the software renderer it came out black).
+  const strips = Math.max(1, Math.ceil((width * height) / 262_144));
+  const rows = Math.ceil(height / strips);
+  target.scissorTest = true;
+  const gl = renderer.getContext();
+  for (let y = 0; y < height; y += rows) {
+    target.scissor.set(0, y, width, Math.min(rows, height - y));
+    renderer.setRenderTarget(target);
+    renderer.render(scene, camera);
+    gl.finish();
+  }
+  target.scissorTest = false;
+  renderer.setRenderTarget(prev);
+  renderer.toneMapping = tone;
+  quad.geometry.dispose();
+  mat.dispose();
+  return target.texture;
+}
+
+/**
  * A studio environment of our own for reflections: a dark room lit by a few large softboxes, so
  * metal reflects soft highlights on black (a product-photo look) rather than a bright white room.
  * Built once per call site and cached by key.

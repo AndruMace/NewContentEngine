@@ -1,11 +1,9 @@
 /**
- * Fourier style: a chain of rotating circles (epicycles) whose pen draws a figure. Every circle turns
- * a whole number of times per loop, so each is one voice of the polyrhythm (it rings each time it
- * comes back to its starting angle) and the pen closes the drawing exactly at the end.
- *
- * Each term of the figure's Fourier series, frequency k, turns L·k + 1 times per loop: the pen traces
- * the figure L times while the whole figure turns once, so the trail builds a rosette of the figure
- * and every circle lines up only at the end.
+ * Fourier style: a chain of rotating circles (epicycles) whose pen draws a figure once over the loop,
+ * finishing exactly at the end. Each circle is a clock face with its own number of ticks, and rings
+ * every time its arm sweeps past a tick, so every circle is one voice of the polyrhythm: a circle
+ * that turns k times with m ticks plays k·m evenly spaced notes. Everything starts together, drifts,
+ * and comes back home at the end as the drawing closes.
  */
 import { lighten, mixRgb, rgbToCss, type Ctx2D, type RGB } from '@sim/engine';
 import * as dm from '@sim/physics/math';
@@ -27,9 +25,9 @@ export interface Epicycles {
   figure: Figure;
   /** Largest circle first (the order they chain in). */
   arms: Arm[];
-  /** Times the pen traces the figure per loop. */
-  traces: number;
-  /** Pixels per unit, so the drawing fills the circle the rosette sweeps. */
+  /** Ticks (notes per turn) on each circle. */
+  ticks: number[];
+  /** Pixels per unit, so the drawing fills its space. */
   scale: number;
 }
 
@@ -38,9 +36,7 @@ const SAMPLES = 256;
 const MIN_AMP = 0.007;
 const CX = 540;
 const CY = 1000;
-const R_FIG = 440;
-/** The rosette fades out over the last moments so the final frame matches the first. */
-const FADE_S = 1.4;
+const R_FIG = 430;
 
 /** The figure's outline as flat x,y pairs (×1000, y down, centred, furthest point at 1000). */
 function outline(figure: Figure): number[] {
@@ -102,67 +98,33 @@ function outline(figure: Figure): number[] {
   return pts.map((v, j) => ((v - (j % 2 ? my : mx)) / far) * 1000);
 }
 
-const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : Math.abs(a));
-
 /**
  * The circles for a figure: its biggest Fourier terms (at most `maxArms`, none too small to see),
- * spun up so the loop plays about `notesPerS` notes a second (one per circle turn).
+ * each turning its own whole number of times per loop. `ticksFor(n)` gives each circle's ticks,
+ * biggest circle first.
  */
-export function buildEpicycles(figure: Figure, maxArms: number, loopSeconds: number, notesPerS: number): Epicycles {
+export function buildEpicycles(figure: Figure, maxArms: number, ticksFor: (n: number) => number[]): Epicycles {
   const { terms } = dft(outline(figure));
-  const kept = terms.filter((t) => t.amp >= MIN_AMP).slice(0, maxArms);
-  let traces = 2;
-  let bestErr = Infinity;
-  for (let L = 2; L <= 24; L++) {
-    const f = kept.map((t) => L * t.freq + 1);
-    // No common factor, so the circles all line up only at the very end.
-    if (f.reduce(gcd, 0) !== 1) continue;
-    const rate = f.reduce((a, x) => a + Math.abs(x), 0) / loopSeconds;
-    const err = Math.abs(Math.log(rate / notesPerS));
-    if (err < bestErr) [bestErr, traces] = [err, L];
-  }
-  const arms = kept.map((t) => ({ freq: traces * t.freq + 1, re: t.re, im: t.im, amp: t.amp }));
-  // The figure's furthest point from the centre (turning it doesn't change that).
+  const arms = terms
+    .filter((t) => t.amp >= MIN_AMP)
+    .slice(0, maxArms)
+    .map((t) => ({ freq: t.freq, re: t.re, im: t.im, amp: t.amp }));
+  // Fit the drawing to its space: the pen's furthest point from the centre.
   let far = 0;
-  for (let j = 0; j < 512; j++) {
-    let x = 0;
-    let y = 0;
-    for (const a of kept) {
-      const th = (2 * Math.PI * a.freq * j) / 512;
-      x += a.re * dm.cos(th) - a.im * dm.sin(th);
-      y += a.re * dm.sin(th) + a.im * dm.cos(th);
-    }
-    far = Math.max(far, dm.hypot(x, y));
-  }
-  return { figure, arms, traces, scale: R_FIG / Math.max(1e-6, far) };
+  for (let j = 0; j < 512; j++) far = Math.max(far, dm.hypot(...penAt(arms, j / 512)));
+  return { figure, arms, ticks: ticksFor(arms.length), scale: R_FIG / Math.max(1e-6, far) };
 }
 
-/** Where arm `i`'s circle is centred (the tip of the arms before it) and where its own tip is. */
-function chain(e: Epicycles, u: number, out: Float64Array) {
-  let x = CX;
-  let y = CY;
-  out[0] = x;
-  out[1] = y;
-  e.arms.forEach((a, i) => {
+/** Pen position (units, around the centre) at loop fraction u. */
+function penAt(arms: Arm[], u: number): [number, number] {
+  let x = 0;
+  let y = 0;
+  for (const a of arms) {
     const th = 2 * Math.PI * a.freq * u;
     const c = dm.cos(th);
     const s = dm.sin(th);
-    x += (a.re * c - a.im * s) * e.scale;
-    y += (a.re * s + a.im * c) * e.scale;
-    out[2 * i + 2] = x;
-    out[2 * i + 3] = y;
-  });
-}
-
-function pen(e: Epicycles, u: number): [number, number] {
-  let x = CX;
-  let y = CY;
-  for (const a of e.arms) {
-    const th = 2 * Math.PI * a.freq * u;
-    const c = dm.cos(th);
-    const s = dm.sin(th);
-    x += (a.re * c - a.im * s) * e.scale;
-    y += (a.re * s + a.im * c) * e.scale;
+    x += a.re * c - a.im * s;
+    y += a.re * s + a.im * c;
   }
   return [x, y];
 }
@@ -170,99 +132,98 @@ function pen(e: Epicycles, u: number): [number, number] {
 export interface EpicycleView {
   epi: Epicycles;
   p: { loopSeconds: number };
+  hits: number[];
   flash: number[];
 }
 
-/** `color(i)` colours circle i; `paint(u)` colours the trail at loop fraction u. */
+/** `color(i)` colours circle i; `paint(u)` colours the drawing at loop fraction u. */
 export function drawEpicycles(ctx: Ctx2D, s: EpicycleView, t: number, frame: number, color: (i: number) => RGB, paint: (u: number) => RGB) {
   const e = s.epi;
   const T = s.p.loopSeconds;
-  const u = t / T;
-  // How finely to sample the pen: a few px per step at the pen's fastest.
-  const perLoop = 900 * e.traces;
+  const u = Math.min(1, t / T);
+  const toScreen = ([x, y]: [number, number]): [number, number] => [CX + x * e.scale, CY + y * e.scale];
+  // Pen samples per loop: a few px apart at the pen's fastest.
+  const perLoop = 600 + e.arms.reduce((a, arm) => a + Math.abs(arm.freq) * arm.amp * e.scale, 0);
 
-  const layer = traceLayer(s, frame, t, (lc, t0, t1) => {
+  // The drawing so far: a soft glow under a solid line, coloured along the loop.
+  const layer = traceLayer(s, frame, Math.min(t, T), (lc, t0, t1) => {
     const steps = Math.max(1, Math.ceil(((t1 - t0) / T) * perLoop));
-    lc.lineWidth = 1.6;
     lc.lineCap = 'round';
-    let [px, py] = pen(e, t0 / T);
+    let [px, py] = toScreen(penAt(e.arms, t0 / T));
     for (let k = 1; k <= steps; k++) {
       const uu = (t0 + ((t1 - t0) * k) / steps) / T;
-      const [x, y] = pen(e, uu);
-      lc.strokeStyle = rgbToCss(paint(uu % 1), 0.3);
-      lc.beginPath();
-      lc.moveTo(px, py);
-      lc.lineTo(x, y);
-      lc.stroke();
+      const [x, y] = toScreen(penAt(e.arms, uu));
+      const col = lighten(paint(uu), 0.15);
+      for (const [w, a] of [
+        [18, 0.1],
+        [6, 1],
+      ]) {
+        lc.strokeStyle = rgbToCss(col, a);
+        lc.lineWidth = w;
+        lc.beginPath();
+        lc.moveTo(px, py);
+        lc.lineTo(x, y);
+        lc.stroke();
+      }
       [px, py] = [x, y];
     }
   });
-  ctx.globalAlpha = Math.min(1, Math.max(0, (T - t) / FADE_S));
   ctx.drawImage(layer as CanvasImageSource, 0, 0);
-  ctx.globalAlpha = 1;
 
-  // The last full trace of the figure, bright at the pen and fading behind it. It is drawn turned
-  // along with the figure (each point carried round by the turn since the pen passed it), so it
-  // shows the figure itself, crisp, rather than the smeared path; it meets the pen at its tip.
-  const window = 1 / e.traces;
-  const ghost = (uu: number): [number, number] => {
-    const [x, y] = pen(e, uu);
-    const turn = 2 * Math.PI * (u - uu);
-    const c = dm.cos(turn);
-    const sn = dm.sin(turn);
-    return [CX + (x - CX) * c - (y - CY) * sn, CY + (x - CX) * sn + (y - CY) * c];
-  };
-  const chunks = 40;
-  const per = Math.ceil(perLoop / e.traces / chunks);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  for (let c = 0; c < chunks; c++) {
-    const age = 1 - c / chunks; // oldest chunk first
-    const ua = u - window * age;
-    const ub = u - window * (age - 1 / chunks);
-    ctx.strokeStyle = rgbToCss(lighten(paint(((ub % 1) + 1) % 1), 0.25), 0.9 * (1 - age) ** 1.5);
-    ctx.lineWidth = 1.5 + 3.5 * (1 - age);
-    ctx.beginPath();
-    for (let k = 0; k <= per; k++) {
-      const [x, y] = ghost(ua + ((ub - ua) * k) / per);
-      if (k === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-  }
-
-  // The circles, each with a tick at its starting angle (where it rings), and the arms.
-  const pts = new Float64Array(2 * e.arms.length + 2);
-  chain(e, u, pts);
+  // The circles: clock faces with a tick per note (the home tick brighter), the tick just struck lit
+  // in the circle's colour.
+  let cx = CX;
+  let cy = CY;
+  const joints: [number, number][] = [[cx, cy]];
   e.arms.forEach((a, i) => {
-    const cx = pts[2 * i];
-    const cy = pts[2 * i + 1];
     const r = a.amp * e.scale;
     const fl = s.flash[i];
     const col = color(i);
-    // Near-white so the machinery stands apart from the coloured drawing; tinted as it rings.
-    ctx.strokeStyle = rgbToCss(mixRgb([235, 240, 255], lighten(col, 0.3), 0.25 + 0.75 * fl), 0.4 + 0.55 * fl);
-    ctx.lineWidth = 2.5 + 3 * fl;
+    const home = Math.atan2(a.im, a.re);
+    ctx.strokeStyle = rgbToCss(mixRgb([235, 240, 255], lighten(col, 0.3), 0.3 + 0.7 * fl), 0.42 + 0.5 * fl);
+    ctx.lineWidth = 2.5 + 2 * fl;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
-    const home = Math.atan2(a.im, a.re);
-    ctx.fillStyle = rgbToCss(lighten(col, 0.5), 0.35 + 0.65 * fl);
-    ctx.beginPath();
-    ctx.arc(cx + dm.cos(home) * r, cy + dm.sin(home) * r, Math.min(r, 3 + 7 * fl), 0, Math.PI * 2);
-    ctx.fill();
+    const m = e.ticks[i];
+    if (r >= 9) {
+      const len = Math.min(14, r * 0.28);
+      const lit = s.hits[i] >= 0 ? s.hits[i] % m : -1;
+      for (let j = 0; j < m; j++) {
+        // Ticks run the way the arm turns, from its starting angle.
+        const ang = home + (Math.sign(a.freq) * 2 * Math.PI * j) / m;
+        const on = j === lit ? fl : 0;
+        ctx.strokeStyle = on > 0.02 ? rgbToCss(lighten(col, 0.5), 0.5 + 0.5 * on) : j === 0 ? 'rgba(255,255,255,0.8)' : 'rgba(235,240,255,0.4)';
+        ctx.lineWidth = j === 0 ? 3.5 : 2 + 2 * on;
+        const inner = r - len * (1 + on);
+        ctx.beginPath();
+        ctx.moveTo(cx + dm.cos(ang) * inner, cy + dm.sin(ang) * inner);
+        ctx.lineTo(cx + dm.cos(ang) * r, cy + dm.sin(ang) * r);
+        ctx.stroke();
+      }
+    }
+    const th = home + 2 * Math.PI * a.freq * u;
+    cx += dm.cos(th) * r;
+    cy += dm.sin(th) * r;
+    joints.push([cx, cy]);
   });
-  ctx.lineWidth = 2.5;
+  // The arms, each in its circle's colour.
+  ctx.lineCap = 'round';
   e.arms.forEach((_, i) => {
-    ctx.strokeStyle = rgbToCss(lighten(color(i), 0.35), 0.85);
+    ctx.strokeStyle = rgbToCss(lighten(color(i), 0.35 + 0.4 * s.flash[i]));
+    ctx.lineWidth = 3.5 + 2 * s.flash[i];
     ctx.beginPath();
-    ctx.moveTo(pts[2 * i], pts[2 * i + 1]);
-    ctx.lineTo(pts[2 * i + 2], pts[2 * i + 3]);
+    ctx.moveTo(...joints[i]);
+    ctx.lineTo(...joints[i + 1]);
     ctx.stroke();
   });
-  const end = 2 * e.arms.length;
+  const [ex, ey] = joints[joints.length - 1];
+  ctx.fillStyle = rgbToCss(lighten(paint(u % 1), 0.5), 0.35);
+  ctx.beginPath();
+  ctx.arc(ex, ey, 18, 0, Math.PI * 2);
+  ctx.fill();
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.beginPath();
-  ctx.arc(pts[end], pts[end + 1], 8, 0, Math.PI * 2);
+  ctx.arc(ex, ey, 8, 0, Math.PI * 2);
   ctx.fill();
 }

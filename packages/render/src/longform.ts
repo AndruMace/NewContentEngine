@@ -29,6 +29,13 @@ const MAX_JOIN_MISMATCH = 0.15;
 /** 1080p30 ambient: YouTube's recommended upload bitrate. */
 export const LONG_FORM_BITRATE = 8_000_000;
 
+/** Thrown when a long-form render is cancelled through its signal. */
+export class LongFormCancelled extends Error {
+  constructor() {
+    super('cancelled');
+  }
+}
+
 export type LongFormStage = 'prepare' | 'frames' | 'audio' | 'joining' | 'mastering' | 'qc';
 
 export interface LongFormOutput {
@@ -71,7 +78,7 @@ function diskEstimate(loopS: number, totalS: number) {
  * which is crossfaded into it (linearly: the two are nearly identical); the last segment's overlap is
  * the loop's start again and is crossfaded into the first segment, closing the loop.
  */
-async function joinAudio(segments: string[], out: string): Promise<number[]> {
+export async function joinAudio(segments: string[], out: string): Promise<number[]> {
   const overlap = Math.round(AUDIO_OVERLAP_S * SAMPLE_RATE) * 2;
   // How much the two sides of each join differ before blending (RMS of the difference over RMS of the
   // signal): near 0 normally, near 1 or more if a segment is missing sounds the other has.
@@ -116,7 +123,7 @@ async function joinAudio(segments: string[], out: string): Promise<number[]> {
  * Is the loop's last sample → first sample step like any other? Compares it with every step in the
  * loop's first and last 10 seconds (reading only those, the raw loop can be over a gigabyte).
  */
-async function audioSeamCheck(raw: string) {
+export async function audioSeamCheck(raw: string) {
   const fh = await open(raw, 'r');
   try {
     const size = (await fh.stat()).size;
@@ -148,8 +155,13 @@ export async function renderLongForm(
     onStage?: (stage: LongFormStage) => void;
     onProgress?: (stage: LongFormStage, done: number, total: number) => void;
     keepIntermediates?: boolean;
+    /** Stops after the segment being rendered (finished segments are kept, so it can resume). */
+    signal?: AbortSignal;
   },
 ): Promise<LongFormOutput> {
+  const checkCancelled = () => {
+    if (opts.signal?.aborted) throw new LongFormCancelled();
+  };
   const t0 = performance.now();
   const template = getTemplate(recipe.templateId);
   if (!template.longForm) throw new Error(`${template.id} is not a long-form template`);
@@ -195,6 +207,7 @@ export async function renderLongForm(
       for (let i = 0; i < nSeg; i++) {
         const name = `seg-${pad(i)}.mp4`;
         if (manifest.segments.video.includes(name) && (await exists(join(dir, name)))) continue;
+        checkCancelled();
         const f0 = Math.round(i * SEGMENT_S * info.fps);
         const f1 = Math.min(info.frames, Math.round((i + 1) * SEGMENT_S * info.fps));
         const r = await page.call<{ codec: string }>('longFormVideoSegment', job, { name: `${name}.part`, f0, f1, bitrate: LONG_FORM_BITRATE });
@@ -211,6 +224,7 @@ export async function renderLongForm(
       for (let i = 0; i < nSeg; i++) {
         const name = `aseg-${pad(i)}.f32`;
         if (manifest.segments.audio.includes(name) && (await exists(join(dir, name)))) continue;
+        checkCancelled();
         const to = Math.min(loopS, (i + 1) * SEGMENT_S);
         await page.call('longFormAudioSegment', job, { name: `${name}.part`, from: i * SEGMENT_S, to, overlap: AUDIO_OVERLAP_S });
         await rename(join(dir, `${name}.part`), join(dir, name));
@@ -238,6 +252,7 @@ export async function renderLongForm(
   const browserEvents = JSON.parse(await readFile(join(dir, 'events.json'), 'utf8')).events;
   const diverged = hashString(JSON.stringify(node.events)) !== hashString(JSON.stringify(browserEvents));
 
+  checkCancelled();
   const tm = performance.now();
   opts.onStage?.('joining');
   const video = manifest.segments.video.sort();

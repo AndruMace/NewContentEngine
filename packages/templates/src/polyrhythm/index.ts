@@ -8,7 +8,7 @@ import { drawPendulums3D } from './pendulum3d';
 import { FIGURES, buildEpicycles, drawEpicycles, type Epicycles, type Figure } from './epicycles';
 import { MAX_LISSAJOUS, drawLissajous, lissajousColumnX } from './lissajous';
 import { MAX_PLANETS, drawOrrery, orbitRadius } from './orrery3d';
-import { drawRipples, rippleSpot } from './ripples';
+import { drawRipples, ripplePan, rippleSyncS } from './ripples';
 
 export const POLYRHYTHM_STYLES = ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d', 'orrery', 'lissajous', 'fourier', 'ripples'] as const;
 export type PolyrhythmStyle = (typeof POLYRHYTHM_STYLES)[number];
@@ -25,6 +25,8 @@ export const polyrhythmSchema = z.object({
   hitVolume: z.number().min(0.1).max(1).default(0.45).meta({ title: 'Note volume', step: 0.05 }),
   voice: z.enum(['theme', ...VOICES]).default('theme').meta({ title: 'Instrument (theme = the theme\'s own)' }),
   figure: z.enum(['random', ...FIGURES]).default('random').meta({ title: 'Fourier figure' }),
+  orreryStart: z.enum(['aligned', 'scattered']).default('aligned').meta({ title: 'Orrery start (scattered: planets align only at the end)' }),
+  rippleLife: z.number().min(1).max(8).default(2.8).meta({ title: 'Ripple lifetime (s)', step: 0.1 }),
 });
 
 export type PolyrhythmParams = z.infer<typeof polyrhythmSchema>;
@@ -44,6 +46,19 @@ interface State {
   vel: number[];
   /** Fourier: the circles and the figure they draw. */
   epi?: Epicycles;
+  /**
+   * Seconds the final sync is held after the loop (0: the video loops seamlessly). Styles that build
+   * to a finish (a drawing completing, planets coming into line) end on the sync chord and hold it.
+   */
+  holdS: number;
+  /**
+   * Seconds into the loop of the sync (0: the video opens on it). Every beat is shifted by it, so the
+   * loop stays seamless: ripples open with every drop already falling and land together just after.
+   */
+  syncS: number;
+  /** With a hold: beats per loop (may be fractional) and where in its beat each element starts. */
+  beatRate: number[];
+  beatOffset: number[];
   hits: number[];
   flash: number[];
   t: number;
@@ -56,8 +71,17 @@ const R_MIN = 70;
 const R_MAX = 470;
 const MAX_POLYGONS = 10;
 const MAX_LANES = 24;
-/** Fourier: notes per second the circle speeds aim for at the default cycles (10). */
-const FOURIER_NOTES_PER_S = 0.6;
+/** How long a style that builds to its finish holds the final sync. */
+const HOLD_S = 2;
+const DEFAULT_COPY = {
+  hook: 'Wait for them to line up again…',
+  cta: 'It loops perfectly. Watch again 🔁',
+};
+/** Default copy for the finishes that don't loop (the seamless-loop lines would be untrue). */
+const HELD_COPY: Partial<Record<PolyrhythmStyle, typeof DEFAULT_COPY>> = {
+  orrery: { hook: 'Wait for the planets to align…', cta: 'Perfect alignment ✨ Watch again 🔁' },
+  fourier: { hook: 'Watch what the circles draw…', cta: 'Every circle in sync ✨ Watch again 🔁' },
+};
 /** String art fades out over the last moments so the final frame matches the first (seamless). */
 const ART_FADE_S = 1.4;
 
@@ -105,8 +129,8 @@ const STYLE_TEXT: Record<PolyrhythmStyle, string> = {
   'pendulum-3d': 'a real-looking 3D pendulum-wave apparatus (balls on strings) swinging in and out of sync',
   orrery: 'a 3D orrery: planets circling a sun at whole-number laps, a note each time one crosses the alignment beam, all aligned again at the end',
   lissajous: 'a Lissajous table: orbiting dots along the top and side, every cell tracing the curve made by its row and column, all closing at the end',
-  fourier: 'a chain of spinning circles (Fourier epicycles) drawing a figure (heart, star, flower, infinity, butterfly) that turns into a rosette, each circle ringing as it comes round; the speed pattern does not apply',
-  ripples: 'raindrops falling onto still water in a ring, every landing a note and a ripple, all landing together at the end',
+  fourier: 'a chain of spinning circles (Fourier epicycles) whose pen draws a figure (heart, star, flower, infinity, butterfly) over the video, finishing exactly as everything lines up; each circle is a clock face that rings as its arm sweeps past each tick. "Watch what it draws" / "guess the shape" angles work',
+  ripples: 'a ring of drops hanging from a rail over still water; each swells on its tip (its size shows when it will fall), falls and lands with a note and a ripple; the video opens with every drop falling together, and ends as they all let go together again',
 };
 
 /** How many elements a style shows (some layouts only read up to a point). */
@@ -117,10 +141,10 @@ function elementCount(style: PolyrhythmStyle, count: number): number {
     case 'orrery':
       return Math.min(MAX_PLANETS, count);
     case 'lissajous':
-      return Math.min(MAX_LISSAJOUS, count);
+      // Circles per side: the count is shared between the top row and the side column.
+      return Math.max(3, Math.min(MAX_LISSAJOUS, Math.round(count / 2)));
     case 'piano':
     case 'pendulum-3d':
-    case 'ripples':
       return Math.min(MAX_LANES, count);
     default:
       return count;
@@ -139,10 +163,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
   ownMusic: true,
   seamlessLoop: true,
   glowScale: 0.8,
-  defaultCopy: {
-    hook: 'Wait for them to line up again…',
-    cta: 'It loops perfectly. Watch again 🔁',
-  },
+  defaultCopy: DEFAULT_COPY,
   nudges: ['Comment the second they sync 👇', 'Rate this rhythm 1–10 👇', 'Which dot is your favourite? 👇', 'Can you hear the pattern? 👇', 'Guess when they line up 👇', 'Rate the sync moment 👇'],
 
   init({ params: p, rng }) {
@@ -154,6 +175,9 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     let degree = cycles.map((_, i) => i);
     let vel = cycles.map(() => 1);
     let epi: Epicycles | undefined;
+    let holdS = 0;
+    let syncS = 0;
+    let beatOffset: number[] | undefined;
     switch (p.style) {
       case 'polygons': {
         // Each shape's dot laps at its own whole-number rate (so the dots drift apart and meet again at
@@ -164,37 +188,75 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         break;
       }
       case 'lissajous': {
-        // Columns and rows share the rates (the classic table: the diagonal draws circles). The rows
-        // double the columns an octave up, softer.
-        const rates = patternRates(p.pattern, n, Math.max(1, Math.round(p.baseCycles / 4)), p.cycleStep, rng);
-        cycles = [...rates, ...rates];
-        notesPerLoop = cycles.slice();
-        degree = [...rates.map((_, i) => i), ...rates.map((_, i) => i + SCALES[scale].length)];
-        vel = [...rates.map(() => 1), ...rates.map(() => 0.55)];
+        // One run of rates dealt alternately to the columns and the rows, so every circle has its own
+        // rate (and note: they climb the scale column, row, column…). Each dot rings at the top and
+        // bottom of its circle.
+        const rates = patternRates(p.pattern, 2 * n, Math.max(1, Math.round(p.baseCycles / 2)), p.cycleStep, rng);
+        const order = [...rates.keys()].filter((k) => k % 2 === 0).concat([...rates.keys()].filter((k) => k % 2 === 1));
+        cycles = order.map((k) => rates[k]);
+        notesPerLoop = cycles.map((c) => 2 * c);
+        degree = order;
+        vel = cycles.map(() => 1);
         break;
       }
       case 'fourier': {
+        // The circles turn as the figure's Fourier series says (the drawing appears once over the
+        // loop); their ticks come from the speed pattern, biggest circle slowest.
         const figure: Figure = p.figure === 'random' ? rng.pick([...FIGURES]) : p.figure;
-        epi = buildEpicycles(figure, p.count, p.loopSeconds, FOURIER_NOTES_PER_S * p.baseCycles);
-        cycles = epi.arms.map((a) => Math.abs(a.freq));
-        notesPerLoop = cycles.slice(); // one note per turn
-        // Slowest circle lowest; small circles quieter.
-        const bySpeed = cycles.map((c, i) => [c, i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-        degree = cycles.map(() => 0);
+        epi = buildEpicycles(figure, p.count, (k) => patternRates(p.pattern, k, p.baseCycles, p.cycleStep, rng));
+        const e = epi;
+        cycles = e.arms.map((a) => Math.abs(a.freq));
+        notesPerLoop = e.arms.map((a, i) => Math.abs(a.freq) * e.ticks[i]);
+        // Fewest notes lowest; small circles quieter.
+        const bySpeed = notesPerLoop.map((c, i) => [c, i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        degree = notesPerLoop.map(() => 0);
         bySpeed.forEach(([, i], rank) => (degree[i] = rank));
-        vel = epi.arms.map((a) => 0.45 + 0.55 * Math.sqrt(a.amp / epi!.arms[0].amp));
+        vel = e.arms.map((a) => 0.5 + 0.5 * Math.sqrt(a.amp / e.arms[0].amp));
+        holdS = HOLD_S;
         break;
       }
+      case 'orrery':
+        notesPerLoop = cycles.slice(); // one note per lap
+        if (p.orreryStart === 'scattered') {
+          // Each planet gets part of an extra lap, so they start spread round their orbits and come
+          // into line only at the very end (the video ends on the alignment, not a seamless loop).
+          const spread = rng.range(0, 1);
+          beatOffset = cycles.map((_, i) => 0.12 + 0.76 * frac(spread + i * 0.6180339887));
+          holdS = HOLD_S;
+        }
+        break;
+      case 'ripples':
+        // One note per drop. The landings are shifted a moment into the loop, so it opens (and ends)
+        // with every drop in the air together.
+        notesPerLoop = cycles.slice();
+        syncS = rippleSyncS(notesPerLoop, p.loopSeconds);
+        break;
       case 'string-art':
       case 'piano':
-      case 'orrery':
-      case 'ripples':
-        notesPerLoop = cycles.slice(); // one note per lap / bounce / drop
+        notesPerLoop = cycles.slice(); // one note per lap / bounce
         break;
       default:
         notesPerLoop = cycles.map((c) => 2 * c); // a note at each end of the swing
     }
-    return { p, scale, cycles, notesPerLoop, sides, degree, vel, epi, hits: cycles.map(() => -1), flash: cycles.map(() => 0), t: 0, colorShift: rng.range(0, 0.2) };
+    const offsets = beatOffset ?? notesPerLoop.map(() => 0);
+    return {
+      p,
+      scale,
+      cycles,
+      notesPerLoop,
+      sides,
+      degree,
+      vel,
+      epi,
+      holdS,
+      syncS,
+      beatRate: notesPerLoop.map((m, i) => m + offsets[i]),
+      beatOffset: offsets,
+      hits: cycles.map(() => -1),
+      flash: cycles.map(() => 0),
+      t: 0,
+      colorShift: rng.range(0, 0.2),
+    };
   },
 
   step(s, { dt, t, emit }) {
@@ -204,8 +266,10 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     for (let i = 0; i < s.notesPerLoop.length; i++) {
       // Notes fall at k * T / notesPerLoop. hits starts at -1 so every element sounds at t=0 (the
       // sync chord opens the video); the note at exactly t=T is the next loop's t=0, so it is skipped.
+      // With a sync shift they fall at syncS + k · T / notesPerLoop. With a hold, notes fall at
+      // (k + offset) · T / beatRate and the one at exactly t=T is the finale, so it plays.
       const m = s.notesPerLoop[i];
-      const k = Math.min(Math.floor((m * t1) / T + 1e-9), m - 1);
+      const k = s.holdS ? Math.floor((s.beatRate[i] * t1) / T - s.beatOffset[i] + 1e-9) : Math.min(Math.floor((m * (t1 - s.syncS)) / T + 1e-9), m - 1);
       while (s.hits[i] < k) {
         s.hits[i]++;
         s.flash[i] = 1;
@@ -218,27 +282,38 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
   },
 
   isDone(s) {
-    return s.t >= s.p.loopSeconds - 1e-9;
+    return s.t >= s.p.loopSeconds + s.holdS - 1e-9;
   },
 
   hud(s) {
-    const left = Math.max(0, s.p.loopSeconds - s.t);
+    // Runs down to the next sync: with a shift, the opening one, then the one just after the loop
+    // ends (which the replay shows), so the counter loops too.
+    const left = Math.max(0, (s.t < s.syncS ? s.syncS : s.p.loopSeconds + s.syncS) - s.t);
     return { syncIn: `${left.toFixed(1)}s`, outro: false };
   },
 
   overlays(p, copy) {
     // The piano's keys sit low, so its end card goes up top.
     // The Lissajous table runs down past the usual spot, so its end card sits below it.
-    const ctaY = p.style === 'piano' ? 0.33 : p.style === 'lissajous' ? 0.88 : 0.74;
+    // The Fourier drawing fills the middle, so its end card sits below it.
+    const ctaY = p.style === 'piano' ? 0.33 : p.style === 'lissajous' || p.style === 'fourier' ? 0.88 : 0.74;
+    const hold = holdFor(p);
+    const end = p.loopSeconds;
+    // Held finishes swap in their own lines when the copy is still the template's default.
+    const held = hold ? HELD_COPY[p.style] : undefined;
+    if (held) copy = { ...copy, hook: copy.hook === DEFAULT_COPY.hook ? held.hook : copy.hook, cta: copy.cta === DEFAULT_COPY.cta ? held.cta : copy.cta };
     return [
       { kind: 'hook', text: copy.hook, from: 0, to: 3, y: 0.13 },
       { kind: 'counter', key: 'syncIn', label: 'NEXT SYNC IN', y: 0.24, size: 84 },
-      { kind: 'cta', text: copy.cta, when: { from: p.loopSeconds - 3.2, to: p.loopSeconds + 1 }, y: ctaY },
+      // A held finish shows the card from just before the sync to the end.
+      { kind: 'cta', text: copy.cta, when: hold ? { from: end - 1, to: end + hold + 1 } : { from: p.loopSeconds - 3.2, to: p.loopSeconds + 1 }, y: ctaY },
     ];
   },
 
   render(rc, s) {
-    const { ctx, theme, t } = rc;
+    const { ctx, theme } = rc;
+    // A held finish freezes on the sync.
+    const t = Math.min(rc.t, s.p.loopSeconds);
     const n = s.cycles.length;
     const color = (i: number) => paletteAt(theme.palette, ((i / Math.max(1, n - 1)) * 0.95 + s.colorShift) % 1);
     ctx.lineCap = 'round';
@@ -260,9 +335,9 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
       case 'lissajous':
         return drawLissajous(ctx, s, t, rc.frame, color);
       case 'fourier':
-        return drawEpicycles(ctx, { epi: s.epi!, p: s.p, flash: s.flash }, t, rc.frame, color, (u) => paletteAt(theme.palette, (u + s.colorShift) % 1));
+        return drawEpicycles(ctx, { epi: s.epi!, p: s.p, hits: s.hits, flash: s.flash }, t, rc.frame, color, (u) => paletteAt(theme.palette, (u + s.colorShift) % 1));
       case 'ripples':
-        return drawRipples(ctx, s, t, color, paletteAt(theme.palette, (0.55 + s.colorShift) % 1));
+        return drawRipples(ctx, theme, s, t, color);
     }
   },
 
@@ -279,6 +354,12 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     return { total: durFit * (0.6 + 0.4 * rateFit), parts: { durFit, rateFit }, notes: [`${hits} notes (${rate.toFixed(1)}/s)`] };
   },
 };
+
+/** Seconds a video with these settings holds its final sync (0: it loops seamlessly). */
+function holdFor(p: PolyrhythmParams): number {
+  return p.style === 'fourier' || (p.style === 'orrery' && p.orreryStart === 'scattered') ? HOLD_S : 0;
+}
+
 
 /** Stereo position of a note (-1..1): which side it sounds on, matching where it happens on screen. */
 function panFor(s: State, i: number): number {
@@ -304,11 +385,13 @@ function panFor(s: State, i: number): number {
       return i < cols ? (lissajousColumnX(i, cols) - CX) / CX : -0.6;
     }
     case 'fourier': {
+      // Where the tick being struck sits on its circle.
       const a = s.epi!.arms[i];
-      return 0.6 * (a.re / Math.max(1e-9, a.amp));
+      const m = s.epi!.ticks[i];
+      return 0.6 * dm.cos(dm.atan2(a.im, a.re) + (Math.sign(a.freq) * 2 * Math.PI * (s.hits[i] % m)) / m);
     }
     case 'ripples':
-      return (rippleSpot(i, n).x - CX) / 450;
+      return 0.8 * ripplePan(i, n);
   }
 }
 

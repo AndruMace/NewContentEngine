@@ -10,7 +10,7 @@ import { extractStills, master, qc, type QcReport } from './ffmpeg';
 export { RenderHarness } from './harness';
 export { searchSeeds, type SeedResult } from './search';
 export type { QcReport, LongFormQcReport } from './ffmpeg';
-export { renderLongForm, renderLongFormStills, SEGMENT_S, type LongFormOutput, type LongFormStage } from './longform';
+export { renderLongForm, renderLongFormStills, LongFormCancelled, SEGMENT_S, type LongFormOutput, type LongFormStage } from './longform';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 export const RENDERS_DIR = join(ROOT, 'data/renders');

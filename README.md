@@ -112,6 +112,19 @@ planner and analytics entirely (long uploads on the channel are ignored by the Y
 | Template | What happens |
 |---|---|
 | `cabin-storm` | Inside a log cabin: a stone fireplace with a crackling fire between two big windows, a thunderstorm (or snow) outside with swaying pines, rain on the glass, and lightning that throws the window shapes across the floor. Settings: storm, lightning per hour, thunder volume, fire size, rain or snow, rain sound |
+| `orbital-viewport` | Looking out of a spaceship's viewport at a large planet turning below (earthlike, ocean, desert, ice or a gas giant), clouds drifting and reshaping, an atmosphere glowing at the horizon, the occasional shooting star; optional rings and moons; cool, amber or red cabin lighting; the ship's room tone and hum with soft console blips |
+
+**In the app:** open the **Ambient** tab. Pick a scene, a seed and its settings, and watch the
+16:9 preview with its sound; the scrub bar covers the whole master loop (it plays on from the top
+at the end). Choose the loop length (20–60 min) and the final length (1–12 h), add optional notes
+for Claude, and press **Render**. Renders queue behind any Shorts in the render queue and keep the
+Mac awake while they run (`caffeinate`). Each one shows its stage, progress and time left.
+**Cancel** stops after the current 5-minute segment, and **Retry** resumes from there; a server
+restart resumes on its own. While it renders, Claude writes the YouTube title, description, tags
+and thumbnail text (plain copy without an API key). Each field can be copied, edited, or rewritten
+with new notes. When it's done the card has the video, its thumbnail, the QC result and size, and
+**Show in Finder**. Uploading is manual for now (YouTube only); the YouTube sync ignores these
+videos. They also appear under **All renders** with a *Long-form* label.
 
 ```bash
 npm run render -- --template cabin-storm --loop 30m --length 3h

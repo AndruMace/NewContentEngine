@@ -178,7 +178,12 @@ export class RenderHarness {
               fail(new Error(`${fn} took longer than ${Math.round(CALL_TIMEOUT_MS / 1000)}s; the page was closed`));
             }, CALL_TIMEOUT_MS);
           });
-          return (await Promise.race([page.evaluate(([name, a]) => (window as any)[name as string](...(a as unknown[])), [fn, args] as const), stuck])) as T;
+          const result = (await Promise.race([page.evaluate(([name, a]) => (window as any)[name as string](...(a as unknown[])), [fn, args] as const), stuck])) as T;
+          // A shader that doesn't compile (or a lost GPU context) only logs to the console and draws
+          // nothing: treat it as a failure, not a silently black render.
+          const gpu = errors.filter((e) => /Shader Error|shader error|CONTEXT_LOST|context lost/i.test(e));
+          if (gpu.length) throw new Error(`WebGL error during ${fn}:\n${gpu.join('\n').slice(0, 4000)}`);
+          return result;
         } catch (e) {
           throw new Error(`${(e as Error).message}${errors.length ? `\nPage errors:\n${errors.join('\n')}` : ''}`);
         } finally {

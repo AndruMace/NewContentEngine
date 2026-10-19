@@ -21,8 +21,9 @@ import { marbleMachine } from './marble-machine';
 import { rubeGoldberg } from './rube-goldberg';
 import { marbleRace3d } from './marble-race-3d';
 import { cabinStorm } from './cabin-storm';
+import { orbitalViewport } from './orbital-viewport';
 
-export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, cabinStorm, FOURIER_GUESS };
+export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, cabinStorm, orbitalViewport, FOURIER_GUESS };
 
 export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, collidingBlocks, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d];
 
@@ -32,7 +33,7 @@ export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, bal
  */
 export { setAssetBase, loadedSounds } from './ambient/assets';
 
-export const LONG_FORM_TEMPLATES: Template[] = [cabinStorm];
+export const LONG_FORM_TEMPLATES: Template[] = [cabinStorm, orbitalViewport];
 
 export const ALL_TEMPLATES: Template[] = [...TEMPLATES, ...LONG_FORM_TEMPLATES];
 

@@ -162,7 +162,7 @@ export async function masterLongForm(dir: string, opts: { loopS: number; totalS:
     '-y', ...RAW, '-i', raw,
     '-filter_complex',
     `[0]asplit=2[a][b];[a]atrim=start=${(opts.loopS - lead).toFixed(6)},asetpts=PTS-STARTPTS[lead];[lead][b]concat=n=2:v=0:a=1,` +
-      `volume=${gainDb.toFixed(2)}dB,aresample=192000,alimiter=limit=${limit}:attack=5:release=200:level=false,aresample=48000,` +
+      `volume=${gainDb.toFixed(2)}dB,aresample=192000,alimiter=limit=${limit}:attack=5:release=200:level=false:latency=1,aresample=48000,` +
       `atrim=start=${lead.toFixed(6)},asetpts=PTS-STARTPTS[out]`,
     '-map', '[out]', '-f', 'f32le', '-ar', '48000', '-ac', '2', mastered,
   ]);

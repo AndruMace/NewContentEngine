@@ -115,6 +115,83 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
+// ---- long-form (ambient) videos: types mirror apps/server/src/longformJobs.ts ----------------
+
+export interface LongFormCopy {
+  title: string;
+  description: string;
+  tags: string[];
+  thumbnailText: string;
+}
+
+export interface LongFormJob {
+  id: string;
+  createdAt: number;
+  recipe: Recipe & { loopS: number; totalS: number };
+  notes: string | null;
+  status: 'queued' | 'rendering' | 'ready' | 'failed' | 'cancelled';
+  stage: string | null;
+  progress: number;
+  dir: string | null;
+  result: {
+    qcPass: boolean;
+    problems: string[];
+    integratedLufs: number;
+    truePeakDb: number;
+    durationS: number;
+    loopS: number;
+    sizeBytes: number;
+    timings: { framesMs: number; audioMs: number; masterMs: number; totalMs: number };
+  } | null;
+  error: string | null;
+  copy: LongFormCopy | null;
+  copyStatus: 'none' | 'writing' | 'ready' | 'failed';
+  copyError: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
+export interface LongFormState {
+  jobs: LongFormJob[];
+  /** The long-form job rendering now. */
+  current: string | null;
+  /** A Shorts render in progress (long-form jobs wait for it). */
+  shortsRendering: string | null;
+}
+
+export const longFormApi = {
+  list: () => call<LongFormState>('GET', '/api/longform'),
+  create: (recipe: Recipe, notes: string) => call<LongFormJob>('POST', '/api/longform', { recipe, notes }),
+  cancel: (id: string) => call('POST', `/api/longform/${id}/cancel`),
+  retry: (id: string) => call('POST', `/api/longform/${id}/retry`),
+  editCopy: (id: string, patch: Partial<LongFormCopy>) => call<LongFormJob>('PATCH', `/api/longform/${id}/copy`, patch),
+  regenerateCopy: (id: string, notes?: string) => call('POST', `/api/longform/${id}/copy/regenerate`, { notes }),
+  remove: (id: string, files: boolean) => call('DELETE', `/api/longform/${id}${files ? '?files=1' : ''}`),
+  /**
+   * Live updates; returns a function that closes the stream. Renders run for half an hour or more,
+   * so this reconnects if the server restarts (an error response closes an EventSource for good).
+   */
+  stream: (onState: (s: LongFormState) => void) => {
+    let es: EventSource | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    const open = () => {
+      es = new EventSource('/api/longform/stream');
+      es.onmessage = (e) => onState(JSON.parse(e.data) as LongFormState);
+      es.onerror = () => {
+        if (closed || es?.readyState !== EventSource.CLOSED) return;
+        timer = setTimeout(open, 3000);
+      };
+    };
+    open();
+    return () => {
+      closed = true;
+      clearTimeout(timer);
+      es?.close();
+    };
+  },
+};
+
 export const api = {
   status: () => call<{ claude: boolean; busy: boolean }>('GET', '/api/status'),
   settings: () => call<BatchSettings>('GET', '/api/batch-settings'),
@@ -267,7 +344,7 @@ export interface PostsResponse {
 export const coverUrl = (c: PostView['cover']) =>
   !c ? null : c.kind === 'render' ? `/files/${c.path}` : `/api/exports/${c.exportId}/file?name=cover.jpg&inline=1`;
 
-export type RenderSource = 'batch' | 'playground-review' | 'playground-export' | 'cli';
+export type RenderSource = 'batch' | 'playground-review' | 'playground-export' | 'cli' | 'ambient';
 
 export interface LibraryEntry {
   dir: string;
@@ -278,6 +355,7 @@ export interface LibraryEntry {
   recipe: Recipe | null;
   qcPass: boolean | null;
   hasCover: boolean;
+  cover: string | null;
   renderId: string | null;
   batchId: string | null;
   batchCreatedAt: number | null;
@@ -285,11 +363,12 @@ export interface LibraryEntry {
   hook: string | null;
 }
 
-export const SOURCE_INFO: Record<RenderSource, { label: string; group: 'batch' | 'playground' | 'cli'; help: string }> = {
+export const SOURCE_INFO: Record<RenderSource, { label: string; group: 'batch' | 'playground' | 'cli' | 'ambient'; help: string }> = {
   batch: { label: 'Batch', group: 'batch', help: 'Made by a batch run' },
   'playground-review': { label: 'Playground → Review', group: 'playground', help: 'Sent from the Playground with "Add to review queue"' },
   'playground-export': { label: 'Playground export', group: 'playground', help: 'Made with "Export MP4" in the Playground' },
   cli: { label: 'Command line', group: 'cli', help: 'Made with npm run render (not tracked in the review database)' },
+  ambient: { label: 'Long-form', group: 'ambient', help: 'A long-form ambient video (Ambient tab or npm run render); never in batches or analytics' },
 };
 
 export const exportFileUrl = (exportId: string, name: string) => `/api/exports/${exportId}/file?name=${encodeURIComponent(name)}`;

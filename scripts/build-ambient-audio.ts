@@ -68,14 +68,23 @@ function decode(file: string): Float32Array {
   return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4).slice();
 }
 
-/** Encode float32 stereo to Opus, at a loudness target (or peak-normalised one-shots). */
-function encode(samples: Float32Array, out: string, opts: { lufs?: number; peakDb?: number; crestDb?: number; kbps: number }) {
+function writeRaw(samples: Float32Array) {
   const tmp = join(OUT, '.tmp.f32');
   writeFileSync(tmp, Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength));
-  const raw = ['-f', 'f32le', '-ar', String(SR), '-ac', '2', '-i', tmp];
+  return { tmp, args: ['-f', 'f32le', '-ar', String(SR), '-ac', '2', '-i', tmp] };
+}
+
+/**
+ * Level float32 stereo: gain to a loudness target (or a peak), and for beds a fast transient limiter.
+ * Returns the processed samples, sample-aligned with the input: the limiter's lookahead delay is
+ * compensated (latency=1). Without that it shifted a bed by its lookahead, so a bed made seamless
+ * before limiting no longer joined end to start.
+ */
+function level(samples: Float32Array, opts: { lufs?: number; peakDb?: number; crestDb?: number }): Float32Array {
+  const { tmp, args } = writeRaw(samples);
   let gainDb = 0;
   if (opts.lufs !== undefined) {
-    const err = ff([...raw, '-af', 'ebur128', '-f', 'null', '-']);
+    const err = ff([...args, '-af', 'ebur128', '-f', 'null', '-']);
     const i = Number(/I:\s+(-?[\d.]+) LUFS/.exec(err.slice(err.lastIndexOf('Summary:')))?.[1]);
     gainDb = opts.lufs - i;
   } else if (opts.peakDb !== undefined) {
@@ -83,11 +92,24 @@ function encode(samples: Float32Array, out: string, opts: { lufs?: number; peakD
     for (const x of samples) peak = Math.max(peak, Math.abs(x));
     gainDb = opts.peakDb - 20 * Math.log10(peak);
   }
-  // Beds: shave transients (fire pops, big drops) to at most CREST_DB above the bed's loudness, with a
-  // limiter fast enough (0.5 ms in, 15 ms out) to touch only the pop, not the sound around it.
+  // Shave transients (fire pops, big drops) to at most CREST_DB above the loudness, with a limiter fast
+  // enough (0.5 ms in, 15 ms out) to touch only the pop, not the sound around it.
   const ceiling = opts.lufs !== undefined ? Math.pow(10, Math.min(-1, opts.lufs + (opts.crestDb ?? CREST_DB)) / 20).toFixed(4) : null;
-  const af = `volume=${gainDb.toFixed(2)}dB${ceiling ? `,alimiter=limit=${ceiling}:attack=0.5:release=15:level=false` : ''}`;
-  ff([...raw, '-af', af, '-c:a', 'libopus', '-b:a', `${opts.kbps}k`, '-ar', String(SR), out]);
+  const af = `volume=${gainDb.toFixed(2)}dB${ceiling ? `,alimiter=limit=${ceiling}:attack=0.5:release=15:level=false:latency=1` : ''}`;
+  const out = join(OUT, '.tmp-out.f32');
+  ff([...args, '-af', af, '-f', 'f32le', '-ar', String(SR), '-ac', '2', out]);
+  const b = readFileSync(out);
+  rmSync(tmp);
+  rmSync(out);
+  const y = new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4).slice();
+  if (y.length !== samples.length) throw new Error(`levelling changed the length: ${samples.length} → ${y.length} samples`);
+  return y;
+}
+
+/** Encode float32 stereo to Opus as it is (no filters, so a seamless loop stays seamless). */
+function toOpus(samples: Float32Array, out: string, kbps: number) {
+  const { tmp, args } = writeRaw(samples);
+  ff([...args, '-c:a', 'libopus', '-b:a', `${kbps}k`, '-ar', String(SR), out]);
   rmSync(tmp);
 }
 
@@ -137,7 +159,11 @@ function main() {
     if ('bed' in s.build) {
       const { name, lengthS, fromS, lufs } = s.build.bed;
       const rel = `audio/${name}-${lengthS}.opus`;
-      encode(loopBed(x, fromS, lengthS), join(ROOT, 'assets/ambient', rel), { lufs, kbps: 112 });
+      // Level the stretch the bed is cut from (plus its crossfade tail), then make the loop: the loop
+      // is the last step, so nothing afterwards can shift it.
+      const a = fromS * SR;
+      const region = x.slice(a * 2, Math.min(x.length, (a + (lengthS + 4) * SR) * 2));
+      toOpus(loopBed(level(region, { lufs }), 0, lengthS), join(ROOT, 'assets/ambient', rel), 112);
       entries.push({ id: name, kind: 'sound', use: s.use, files: [rel], durationS: lengthS, derived: `${lengthS} s seamless loop from ${fromS} s, normalised to ${lufs} LUFS`, ...meta(s) });
       console.log(`bed ${rel}`);
     } else {
@@ -145,7 +171,7 @@ function main() {
         const rel = `audio/thunder-${clip.class}-${++counts[clip.class]}.opus`;
         const [a, b] = [Math.round(clip.from * SR), Math.min(x.length / 2, Math.round(clip.to * SR))];
         // Close claps keep their punch; distant rolls sit lower. The template scales both by strength.
-        encode(shape(x, a, b), join(ROOT, 'assets/ambient', rel), { lufs: clip.class === 'close' ? -18 : -23, crestDb: 20, kbps: 128 });
+        toOpus(level(shape(x, a, b), { lufs: clip.class === 'close' ? -18 : -23, crestDb: 20 }), join(ROOT, 'assets/ambient', rel), 128);
         entries.push({ id: `thunder-${clip.class}-${counts[clip.class]}`, kind: 'sound', use: s.use, files: [rel], durationS: +((b - a) / SR).toFixed(3), derived: `clip ${clip.from}–${clip.to} s of the original, faded`, ...meta(s) });
         console.log(`one-shot ${rel} (${((b - a) / SR).toFixed(1)} s from ${s.author})`);
       }

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,5 +42,26 @@ describe('ambient asset manifest', () => {
       expect(a.source, a.id).toMatch(/^https:\/\/(polyhaven\.com|freesound\.org)\//);
       expect(a.authors.length, a.id).toBeGreaterThan(0);
     }
+  });
+});
+
+const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
+
+describe.skipIf(!hasFfmpeg)('ambient beds loop seamlessly', () => {
+  const beds = manifest.assets.filter((a) => a.kind === 'sound' && !a.id.startsWith('thunder'));
+
+  it.each(beds.map((b) => [b.id, b.files[0]] as const))('%s joins end to start like any other step', (_id, file) => {
+    // Every bed repeats many times in a long video (a 2-minute one wraps 30 times an hour), so its
+    // last sample must flow into its first: compare that step with every step near the ends.
+    const r = spawnSync('ffmpeg', ['-v', 'error', '-i', join(ROOT, file), '-f', 'f32le', '-ac', '2', '-ar', '48000', '-'], { maxBuffer: 1 << 30 });
+    const b = r.stdout;
+    const x = new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+    const n = x.length / 2;
+    const W = 48000 * 10;
+    const steps: number[] = [];
+    for (const [a, z] of [[1, W], [n - W, n]]) for (let i = a; i < z; i++) steps.push(Math.max(Math.abs(x[i * 2] - x[(i - 1) * 2]), Math.abs(x[i * 2 + 1] - x[(i - 1) * 2 + 1])));
+    const seam = Math.max(Math.abs(x[0] - x[(n - 1) * 2]), Math.abs(x[1] - x[(n - 1) * 2 + 1]));
+    const below = steps.filter((s) => s < seam).length / steps.length;
+    expect(below).toBeLessThan(0.995);
   });
 });
