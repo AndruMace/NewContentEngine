@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng, Runner, getTheme } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { PATTERNS, patternRates, polygonSides } from './patterns';
+import { FIGURES, buildEpicycles } from './epicycles';
 import { POLYRHYTHM_STYLES, noteName, polyrhythm } from './index';
 
 const run = (params: Record<string, unknown>, seed = 1) =>
@@ -51,5 +52,28 @@ describe('polyrhythm', () => {
   it('caps polygons and lanes to what reads on screen', () => {
     expect(run({ style: 'polygons', count: 30 }).state.sides).toHaveLength(10);
     expect(run({ style: 'piano', count: 30 }).state.cycles).toHaveLength(24);
+    expect(run({ style: 'orrery', count: 30 }).state.cycles).toHaveLength(8);
+    expect(run({ style: 'ripples', count: 30 }).state.cycles).toHaveLength(24);
+    // Six columns and six rows.
+    expect(run({ style: 'lissajous', count: 30 }).state.cycles).toHaveLength(12);
+  });
+
+  it.each(FIGURES)('fourier %s: circles turn whole, distinct-enough rates and only all line up at the end', (figure) => {
+    const e = buildEpicycles(figure, 32, 36, 6);
+    expect(e.arms.length).toBeGreaterThanOrEqual(3);
+    const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : Math.abs(a));
+    for (const a of e.arms) {
+      expect(Number.isInteger(a.freq)).toBe(true);
+      expect(a.freq).not.toBe(0);
+    }
+    expect(e.arms.map((a) => a.freq).reduce(gcd, 0)).toBe(1);
+    // Biggest circle first.
+    expect(e.arms.map((a) => a.amp)).toEqual([...e.arms.map((a) => a.amp)].sort((a, b) => b - a));
+  });
+
+  it('uses the chosen instrument, or the theme\'s by default', () => {
+    const voices = (params: Record<string, unknown>) => new Set(run({ style: 'arcs', count: 6, ...params }).audio.map((a) => (a.kind === 'note' ? a.voice : null)));
+    expect(voices({})).toEqual(new Set([getTheme('neon-dark').voice]));
+    expect(voices({ voice: 'kalimba' })).toEqual(new Set(['kalimba']));
   });
 });

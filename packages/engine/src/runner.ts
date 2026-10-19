@@ -34,7 +34,12 @@ export function loopLengthOf(template: Template, loopS?: number, allowShort = fa
   const lf = template.longForm;
   if (!lf) return 0;
   const s = loopS ?? lf.defaultLoopS;
-  return Math.min(lf.maxLoopS, allowShort ? Math.max(1, s) : Math.max(lf.minLoopS, s));
+  if (allowShort) return Math.min(lf.maxLoopS, Math.max(1, s));
+  // Whole multiples of the step (beds' lengths must divide the loop), within the allowed range.
+  const step = lf.loopStepS ?? 1;
+  const lo = Math.ceil(lf.minLoopS / step) * step;
+  const hi = Math.floor(lf.maxLoopS / step) * step;
+  return Math.min(hi, Math.max(lo, Math.round(s / step) * step));
 }
 
 export interface RunnerOptions {

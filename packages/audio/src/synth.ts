@@ -177,6 +177,30 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
       osc(bus, 'triangle', f, when, when + d + 0.1, dest, a * 0.8, 0.012, d);
       break;
     }
+    case 'kalimba': {
+      // Plucked tine: warm fundamental, a bright inharmonic overtone that dies fast, a soft thumb click.
+      const d = 1.1 * dur;
+      osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.9, 0.002, d);
+      osc(bus, 'sine', f * 5.95, when, when + 0.12, dest, a * 0.22, 0.001, 0.07);
+      noiseBurst(bus, when, 0.015, dest, a * 0.12, 'bandpass', Math.min(9000, f * 4), 2);
+      break;
+    }
+    case 'musicbox': {
+      // Comb tooth: near-harmonic partials, the upper ones short and glassy.
+      const d = 1.6 * dur;
+      osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.7, 0.001, d);
+      osc(bus, 'sine', f * 2, when, when + d * 0.5, dest, a * 0.28, 0.001, d * 0.4);
+      osc(bus, 'sine', f * 4.07, when, when + 0.25, dest, a * 0.14, 0.001, 0.18);
+      break;
+    }
+    case 'handpan': {
+      // Steel tone field: fundamental tuned with its octave and compound fifth, soft mallet attack.
+      const d = 2.2 * dur;
+      osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.85, 0.006, d);
+      osc(bus, 'sine', f * 2, when, when + d * 0.7, dest, a * 0.3, 0.005, d * 0.6);
+      osc(bus, 'sine', f * 3, when, when + d * 0.4, dest, a * 0.12, 0.004, d * 0.35);
+      break;
+    }
   }
 }
 

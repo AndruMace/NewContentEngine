@@ -56,6 +56,7 @@ declare global {
     longFormSeamCheck: (job: LongFormJob) => Promise<SeamCheck>;
     longFormVideoSegment: (job: LongFormJob, seg: { name: string; f0: number; f1: number; bitrate: number }) => Promise<{ frames: number; bytes: number; codec: string; ms: number }>;
     longFormAudioSegment: (job: LongFormJob, seg: { name: string; from: number; to: number; overlap: number }) => Promise<{ samples: number; ms: number }>;
+    longFormStill: (job: LongFormJob, still: { name: string; t: number }) => Promise<{ ms: number }>;
   }
 }
 
@@ -199,3 +200,16 @@ window.longFormAudioSegment = async (job, seg) => {
   return { samples: samples.length / 2, ms: performance.now() - t0 };
 };
 
+
+/** One frame as a PNG (for looking at a scene without rendering the loop). */
+window.longFormStill = async (job, still) => {
+  const t0 = performance.now();
+  await preload(job);
+  const probe = runnerFor(job, false);
+  const r = drawingRunnerAt(job, Math.round(still.t * probe.fps));
+  const canvas = Object.assign(document.createElement('canvas'), { width: r.width, height: r.height });
+  r.draw(canvas);
+  const blob = await new Promise<Blob>((ok) => canvas.toBlob((b) => ok(b!), 'image/png'));
+  await upload(still.name, await blob.arrayBuffer());
+  return { ms: performance.now() - t0 };
+};

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { rm } from 'node:fs/promises';
+import { rm, stat, truncate } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export function run(cmd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -141,10 +141,14 @@ async function measureRaw(raw: string) {
 }
 
 /**
- * Build the final long video from one master loop: the loop's audio gets a fixed gain to the ambient
- * target (measured once on the loop: every repeat is identical) and a soft limiter, is repeated to
- * the full length and encoded to AAC in one go (no gaps at the repeats), and the loop's video is
- * repeated by stream copy (no re-encode). The audio fades out over the last few seconds.
+ * Build the final long video from one master loop.
+ *
+ * The loop's audio is mastered once: a fixed gain to the ambient target (every repeat is identical,
+ * so one measurement does) and a limiter run at 4× oversampling, which also catches the peaks
+ * between samples (thunder through plain limiting and AAC came out at −0.3 dBFS true peak). The
+ * limiter runs on the loop with the loop's own last seconds in front, so the mastered loop is exactly
+ * periodic. That mastered loop is repeated to the full length and encoded to AAC in one go (no gaps
+ * at the repeats), with a fade-out at the very end; the video is repeated by stream copy.
  */
 export async function masterLongForm(dir: string, opts: { loopS: number; totalS: number }) {
   const raw = join(dir, 'loop.f32');
@@ -152,14 +156,31 @@ export async function masterLongForm(dir: string, opts: { loopS: number; totalS:
   const gainDb = AMBIENT_LOUDNESS.I - m.i;
   const fade = Math.min(5, opts.totalS / 4);
   const limit = Math.pow(10, (AMBIENT_LOUDNESS.TP - 0.7) / 20).toFixed(3);
+  const lead = Math.min(2, opts.loopS / 2);
+  const mastered = join(dir, 'loop-master.f32');
+  await ffmpeg([
+    '-y', ...RAW, '-i', raw,
+    '-filter_complex',
+    `[0]asplit=2[a][b];[a]atrim=start=${(opts.loopS - lead).toFixed(6)},asetpts=PTS-STARTPTS[lead];[lead][b]concat=n=2:v=0:a=1,` +
+      `volume=${gainDb.toFixed(2)}dB,aresample=192000,alimiter=limit=${limit}:attack=5:release=200:level=false,aresample=48000,` +
+      `atrim=start=${lead.toFixed(6)},asetpts=PTS-STARTPTS[out]`,
+    '-map', '[out]', '-f', 'f32le', '-ar', '48000', '-ac', '2', mastered,
+  ]);
+  // The mastered loop must be exactly the loop's length, or the repeats would drift.
+  const want = Math.round(opts.loopS * 48000) * 8;
+  const got = (await stat(mastered)).size;
+  if (got < want) throw new Error(`mastered loop is ${got} bytes, expected ${want}`);
+  if (got > want) await truncate(mastered, want);
+  // Lossless copy of the mastered loop (below full scale, so nothing clips), for making another
+  // final length without re-rendering.
+  await ffmpeg(['-y', ...RAW, '-i', mastered, '-c:a', 'flac', '-sample_fmt', 's32', join(dir, 'loop.flac')]);
   const audio = join(dir, 'audio.m4a');
   await ffmpeg([
-    '-y', '-stream_loop', '-1', ...RAW, '-i', raw, '-t', opts.totalS.toFixed(3),
-    '-af', `volume=${gainDb.toFixed(2)}dB,alimiter=limit=${limit}:attack=5:release=200:level=false,afade=t=out:st=${(opts.totalS - fade).toFixed(3)}:d=${fade}`,
+    '-y', '-stream_loop', '-1', ...RAW, '-i', mastered, '-t', opts.totalS.toFixed(3),
+    '-af', `afade=t=out:st=${(opts.totalS - fade).toFixed(3)}:d=${fade}`,
     '-c:a', 'aac', '-b:a', '256k', '-ar', '48000', audio,
   ]);
-  // Lossless copy of the loop's audio, so another final length can be made without re-rendering.
-  await ffmpeg(['-y', ...RAW, '-i', raw, '-c:a', 'flac', '-sample_fmt', 's32', join(dir, 'loop.flac')]);
+  await rm(mastered, { force: true });
   const out = join(dir, 'final.mp4');
   await ffmpeg([
     '-y', '-stream_loop', '-1', '-i', join(dir, 'loop.mp4'), '-i', audio, '-t', opts.totalS.toFixed(3),

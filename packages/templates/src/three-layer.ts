@@ -13,6 +13,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { VIDEO_HEIGHT, VIDEO_WIDTH, type Ctx2D, type Theme } from '@sim/engine';
 
 interface Shared {
@@ -90,6 +91,7 @@ interface Composed {
   composer: EffectComposer;
   ao: GTAOPass | null;
   bokeh: BokehPass | null;
+  bloom: UnrealBloomPass | null;
   camera: THREE.Camera;
 }
 const composers = new WeakMap<THREE.Scene, Composed>();
@@ -102,7 +104,14 @@ export function draw3DComposed(
   ctx: Ctx2D,
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
-  opts: { exposure?: number; toneMapping?: THREE.ToneMapping; ao?: { radius: number; scale?: number }; dof?: { focus: number; aperture: number; maxblur: number } } = {},
+  opts: {
+    exposure?: number;
+    toneMapping?: THREE.ToneMapping;
+    ao?: { radius: number; scale?: number };
+    dof?: { focus: number; aperture: number; maxblur: number };
+    /** Glow around bright things (flames, lightning), in linear light before tone mapping. */
+    bloom?: { strength: number; radius: number; threshold: number };
+  } = {},
 ) {
   const { renderer, canvas } = fit(ctx);
   let c = composers.get(scene);
@@ -122,9 +131,19 @@ export function draw3DComposed(
       bokeh = new BokehPass(scene, camera, { focus: opts.dof.focus, aperture: opts.dof.aperture, maxblur: opts.dof.maxblur });
       composer.addPass(bokeh);
     }
+    let bloom: UnrealBloomPass | null = null;
+    if (opts.bloom) {
+      bloom = new UnrealBloomPass(new THREE.Vector2(canvas.width / 2, canvas.height / 2), opts.bloom.strength, opts.bloom.radius, opts.bloom.threshold);
+      composer.addPass(bloom);
+    }
     composer.addPass(new OutputPass());
-    c = { composer, ao, bokeh, camera };
+    c = { composer, ao, bokeh, bloom, camera };
     composers.set(scene, c);
+  }
+  if (c.bloom && opts.bloom) {
+    c.bloom.strength = opts.bloom.strength;
+    c.bloom.radius = opts.bloom.radius;
+    c.bloom.threshold = opts.bloom.threshold;
   }
   if (c.ao && opts.ao) c.ao.updateGtaoMaterial({ radius: opts.ao.radius, scale: opts.ao.scale ?? 1, thickness: opts.ao.radius });
   if (c.bokeh && opts.dof) {

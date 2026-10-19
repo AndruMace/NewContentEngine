@@ -55,6 +55,10 @@ describe('cabin-storm (long-form)', () => {
     expect(loopLengthOf(cabinStorm)).toBe(1800);
     expect(loopLengthOf(cabinStorm, 600)).toBe(1200);
     expect(loopLengthOf(cabinStorm, 7200)).toBe(3600);
+    // Whole multiples of the 10-minute beds, so they line up at the loop's join.
+    expect(loopLengthOf(cabinStorm, 25 * 60)).toBe(30 * 60);
+    expect(loopLengthOf(cabinStorm, 44 * 60)).toBe(40 * 60);
+    for (const bed of cabinStorm.longForm!.beds!(cabinStorm.schema.parse({}))) expect(['audio/rain-window-600.opus', 'audio/fire-hearth-600.opus', 'audio/wind-howl-60.opus']).toContain(bed.sound);
     expect(loopLengthOf(cabinStorm, 60, true)).toBe(60);
   });
 

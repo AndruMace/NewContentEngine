@@ -155,6 +155,44 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  'grow-until-full': [
+    {
+      param: 'mode',
+      values: ['single', 'crowd', 'mitosis'],
+      guide: {
+        single:
+          'Mode: single (fixed for this video). One ball grows a little on every bounce until it fills the arena; the counter shows the bounces. "Guess how many bounces" angles work. Never give away the final count.',
+        crowd:
+          'Mode: crowd (fixed for this video). Several coloured balls (Red, Blue, Yellow…) grow on every wall bounce and jostle for space until together they fill the arena; the biggest one when it fills wins (in a circle). In a square, hexagon or triangle arena there are 4 squares, 3 hexagons or 3 triangles, and they keep bouncing and growing until they pack the arena as tightly as they can; the first to reach full size wins. "Pick a colour" angles work, and the CTA may use {winner} (a colour name). Never predict the winner.',
+        mitosis:
+          'Mode: mitosis (fixed for this video). The ball grows on every bounce and splits in two whenever it gets big enough; the halves keep growing and splitting until the arena is full. The counter shows the number of balls, so "guess how many balls when it fills" angles work. Never give away the final count.',
+      },
+    },
+    {
+      param: 'arena',
+      values: ['circle', 'square', 'hexagon', 'triangle'],
+      guide: {
+        circle: 'Arena: circle (fixed for this video).',
+        square:
+          'Arena: square (fixed for this video). The "balls" are squares too (they never rotate) bouncing around a square box; in single mode the square grows until it fills the box perfectly. Say "square" or "block" rather than "ball".',
+        hexagon:
+          'Arena: hexagon (fixed for this video). The "balls" are hexagons too (they never rotate) bouncing around a hexagon; in single mode the hexagon grows until it fills it perfectly. Say "hexagon" rather than "ball".',
+        triangle:
+          'Arena: triangle (fixed for this video). The "balls" are triangles too (they never rotate) bouncing around a triangle; in single mode the triangle grows until it fills it perfectly. Say "triangle" rather than "ball".',
+      },
+    },
+    {
+      // Rotates the looks so batches don't repeat one style, and lets the learner compare them.
+      param: 'style',
+      values: ['paint', 'clean', 'rings', 'face'],
+      guide: {
+        paint: 'Style: paint (fixed for this video). The ball leaves a colourful outline trail as it bounces.',
+        clean: 'Style: clean (fixed for this video). Solid balls that change colour as they grow.',
+        rings: 'Style: rings (fixed for this video). Each ball looks like tree rings or a jawbreaker: a new coloured band for every bounce.',
+        face: 'Style: face (fixed for this video). The balls have cartoon faces: calm at first, then worried, then panicking as space runs out, and happy when it fills. Playful, character-driven angles work.',
+      },
+    },
+  ],
   'gravity-funnel': [
     {
       param: 'teams',

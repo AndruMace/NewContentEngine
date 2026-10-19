@@ -1,12 +1,16 @@
 import { z } from 'zod';
-import { FONT_FAMILY, lighten, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type RGB, type Template } from '@sim/engine';
+import { FONT_FAMILY, VOICES, lighten, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type RGB, type Template, type VoiceId } from '@sim/engine';
 import { gaussFit } from '../scoring';
 import { SCALES, scaleNote, type ScaleName } from '../music';
 import * as dm from '@sim/physics/math';
 import { PATTERNS, patternRates, polygonSides } from './patterns';
 import { drawPendulums3D } from './pendulum3d';
+import { FIGURES, buildEpicycles, drawEpicycles, type Epicycles, type Figure } from './epicycles';
+import { MAX_LISSAJOUS, drawLissajous, lissajousColumnX } from './lissajous';
+import { MAX_PLANETS, drawOrrery, orbitRadius } from './orrery3d';
+import { drawRipples, rippleSpot } from './ripples';
 
-export const POLYRHYTHM_STYLES = ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d'] as const;
+export const POLYRHYTHM_STYLES = ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d', 'orrery', 'lissajous', 'fourier', 'ripples'] as const;
 export type PolyrhythmStyle = (typeof POLYRHYTHM_STYLES)[number];
 
 export const polyrhythmSchema = z.object({
@@ -19,6 +23,8 @@ export const polyrhythmSchema = z.object({
   scale: z.enum(['random', ...(Object.keys(SCALES) as ScaleName[])]).default('random').meta({ title: 'Scale' }),
   rootNote: z.number().int().min(36).max(72).default(55).meta({ title: 'Root note (MIDI)' }),
   hitVolume: z.number().min(0.1).max(1).default(0.45).meta({ title: 'Note volume', step: 0.05 }),
+  voice: z.enum(['theme', ...VOICES]).default('theme').meta({ title: 'Instrument (theme = the theme\'s own)' }),
+  figure: z.enum(['random', ...FIGURES]).default('random').meta({ title: 'Fourier figure' }),
 });
 
 export type PolyrhythmParams = z.infer<typeof polyrhythmSchema>;
@@ -32,6 +38,12 @@ interface State {
   notesPerLoop: number[];
   /** Polygons: sides of each shape (innermost first). */
   sides: number[];
+  /** Scale degree each element plays (usually its index: slowest lowest). */
+  degree: number[];
+  /** Each element's share of the note volume. */
+  vel: number[];
+  /** Fourier: the circles and the figure they draw. */
+  epi?: Epicycles;
   hits: number[];
   flash: number[];
   t: number;
@@ -44,6 +56,8 @@ const R_MIN = 70;
 const R_MAX = 470;
 const MAX_POLYGONS = 10;
 const MAX_LANES = 24;
+/** Fourier: notes per second the circle speeds aim for at the default cycles (10). */
+const FOURIER_NOTES_PER_S = 0.6;
 /** String art fades out over the last moments so the final frame matches the first (seamless). */
 const ART_FADE_S = 1.4;
 
@@ -89,7 +103,29 @@ const STYLE_TEXT: Record<PolyrhythmStyle, string> = {
   'string-art': 'dots orbiting rings, joined by strings that draw a mandala as they go, a note each time a dot passes the top',
   piano: 'balls bouncing on piano keys, each key playing its note',
   'pendulum-3d': 'a real-looking 3D pendulum-wave apparatus (balls on strings) swinging in and out of sync',
+  orrery: 'a 3D orrery: planets circling a sun at whole-number laps, a note each time one crosses the alignment beam, all aligned again at the end',
+  lissajous: 'a Lissajous table: orbiting dots along the top and side, every cell tracing the curve made by its row and column, all closing at the end',
+  fourier: 'a chain of spinning circles (Fourier epicycles) drawing a figure (heart, star, flower, infinity, butterfly) that turns into a rosette, each circle ringing as it comes round; the speed pattern does not apply',
+  ripples: 'raindrops falling onto still water in a ring, every landing a note and a ripple, all landing together at the end',
 };
+
+/** How many elements a style shows (some layouts only read up to a point). */
+function elementCount(style: PolyrhythmStyle, count: number): number {
+  switch (style) {
+    case 'polygons':
+      return Math.min(MAX_POLYGONS, count);
+    case 'orrery':
+      return Math.min(MAX_PLANETS, count);
+    case 'lissajous':
+      return Math.min(MAX_LISSAJOUS, count);
+    case 'piano':
+    case 'pendulum-3d':
+    case 'ripples':
+      return Math.min(MAX_LANES, count);
+    default:
+      return count;
+  }
+}
 
 export const polyrhythm: Template<PolyrhythmParams, State> = {
   id: 'polyrhythm',
@@ -111,10 +147,13 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
 
   init({ params: p, rng }) {
     const scale = p.scale === 'random' ? rng.pick(Object.keys(SCALES) as ScaleName[]) : p.scale;
-    const n = p.style === 'polygons' ? Math.min(MAX_POLYGONS, p.count) : p.style === 'piano' || p.style === 'pendulum-3d' ? Math.min(MAX_LANES, p.count) : p.count;
+    const n = elementCount(p.style, p.count);
     let cycles = patternRates(p.pattern, n, p.baseCycles, p.cycleStep, rng);
     let sides: number[] = [];
     let notesPerLoop: number[];
+    let degree = cycles.map((_, i) => i);
+    let vel = cycles.map(() => 1);
+    let epi: Epicycles | undefined;
     switch (p.style) {
       case 'polygons': {
         // Each shape's dot laps at its own whole-number rate (so the dots drift apart and meet again at
@@ -124,19 +163,44 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         notesPerLoop = sides.map((k, i) => k * cycles[i]);
         break;
       }
+      case 'lissajous': {
+        // Columns and rows share the rates (the classic table: the diagonal draws circles). The rows
+        // double the columns an octave up, softer.
+        const rates = patternRates(p.pattern, n, Math.max(1, Math.round(p.baseCycles / 4)), p.cycleStep, rng);
+        cycles = [...rates, ...rates];
+        notesPerLoop = cycles.slice();
+        degree = [...rates.map((_, i) => i), ...rates.map((_, i) => i + SCALES[scale].length)];
+        vel = [...rates.map(() => 1), ...rates.map(() => 0.55)];
+        break;
+      }
+      case 'fourier': {
+        const figure: Figure = p.figure === 'random' ? rng.pick([...FIGURES]) : p.figure;
+        epi = buildEpicycles(figure, p.count, p.loopSeconds, FOURIER_NOTES_PER_S * p.baseCycles);
+        cycles = epi.arms.map((a) => Math.abs(a.freq));
+        notesPerLoop = cycles.slice(); // one note per turn
+        // Slowest circle lowest; small circles quieter.
+        const bySpeed = cycles.map((c, i) => [c, i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        degree = cycles.map(() => 0);
+        bySpeed.forEach(([, i], rank) => (degree[i] = rank));
+        vel = epi.arms.map((a) => 0.45 + 0.55 * Math.sqrt(a.amp / epi!.arms[0].amp));
+        break;
+      }
       case 'string-art':
       case 'piano':
-        notesPerLoop = cycles.slice(); // one note per lap / bounce
+      case 'orrery':
+      case 'ripples':
+        notesPerLoop = cycles.slice(); // one note per lap / bounce / drop
         break;
       default:
         notesPerLoop = cycles.map((c) => 2 * c); // a note at each end of the swing
     }
-    return { p, scale, cycles, notesPerLoop, sides, hits: cycles.map(() => -1), flash: cycles.map(() => 0), t: 0, colorShift: rng.range(0, 0.2) };
+    return { p, scale, cycles, notesPerLoop, sides, degree, vel, epi, hits: cycles.map(() => -1), flash: cycles.map(() => 0), t: 0, colorShift: rng.range(0, 0.2) };
   },
 
   step(s, { dt, t, emit }) {
     const T = s.p.loopSeconds;
     const t1 = Math.min(T, t + dt);
+    const voice = s.p.voice === 'theme' ? {} : { voice: s.p.voice };
     for (let i = 0; i < s.notesPerLoop.length; i++) {
       // Notes fall at k * T / notesPerLoop. hits starts at -1 so every element sounds at t=0 (the
       // sync chord opens the video); the note at exactly t=T is the next loop's t=0, so it is skipped.
@@ -146,7 +210,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         s.hits[i]++;
         s.flash[i] = 1;
         // Slowest element = lowest note.
-        emit({ type: 'hit', i, k: s.hits[i], side: panFor(s, i), midi: scaleNote(s.scale, s.p.rootNote, i), vel: s.p.hitVolume });
+        emit({ type: 'hit', i, k: s.hits[i], side: panFor(s, i), midi: scaleNote(s.scale, s.p.rootNote, s.degree[i]), vel: s.p.hitVolume * s.vel[i], ...voice });
       }
       s.flash[i] *= dm.exp(-6 * dt);
     }
@@ -164,7 +228,8 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
 
   overlays(p, copy) {
     // The piano's keys sit low, so its end card goes up top.
-    const ctaY = p.style === 'piano' ? 0.33 : 0.74;
+    // The Lissajous table runs down past the usual spot, so its end card sits below it.
+    const ctaY = p.style === 'piano' ? 0.33 : p.style === 'lissajous' ? 0.88 : 0.74;
     return [
       { kind: 'hook', text: copy.hook, from: 0, to: 3, y: 0.13 },
       { kind: 'counter', key: 'syncIn', label: 'NEXT SYNC IN', y: 0.24, size: 84 },
@@ -190,12 +255,20 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         return drawPiano(ctx, s, t, color);
       case 'pendulum-3d':
         return drawPendulums3D(ctx, theme, s, t);
+      case 'orrery':
+        return drawOrrery(ctx, theme, s, t);
+      case 'lissajous':
+        return drawLissajous(ctx, s, t, rc.frame, color);
+      case 'fourier':
+        return drawEpicycles(ctx, { epi: s.epi!, p: s.p, flash: s.flash }, t, rc.frame, color, (u) => paletteAt(theme.palette, (u + s.colorShift) % 1));
+      case 'ripples':
+        return drawRipples(ctx, s, t, color, paletteAt(theme.palette, (0.55 + s.colorShift) % 1));
     }
   },
 
   audio(e, { theme }) {
     if (e.type !== 'hit') return [];
-    return [{ kind: 'note', midi: e.midi as number, vel: e.vel as number, voice: theme.voice, pan: (e.side as number) * 0.35 }];
+    return [{ kind: 'note', midi: e.midi as number, vel: e.vel as number, voice: (e.voice as VoiceId | undefined) ?? theme.voice, pan: (e.side as number) * 0.35 }];
   },
 
   score(events, { durationS, targetS }): DramaScore {
@@ -223,6 +296,19 @@ function panFor(s: State, i: number): number {
     }
     case 'string-art':
       return 0;
+    case 'orrery':
+      // The beam runs to the sun's right; outer planets cross it further out.
+      return 0.2 + 0.6 * (orbitRadius(i, n) / orbitRadius(0, n));
+    case 'lissajous': {
+      const cols = n / 2;
+      return i < cols ? (lissajousColumnX(i, cols) - CX) / CX : -0.6;
+    }
+    case 'fourier': {
+      const a = s.epi!.arms[i];
+      return 0.6 * (a.re / Math.max(1e-9, a.amp));
+    }
+    case 'ripples':
+      return (rippleSpot(i, n).x - CX) / 450;
   }
 }
 

@@ -12,7 +12,9 @@ export interface SimEvent {
   [key: string]: unknown;
 }
 
-export type VoiceId = 'marimba' | 'bell' | 'pluck' | 'glass' | 'softsine';
+/** Every synth voice (instrument) a note can use. */
+export const VOICES = ['marimba', 'bell', 'pluck', 'glass', 'softsine', 'kalimba', 'musicbox', 'handpan'] as const;
+export type VoiceId = (typeof VOICES)[number];
 export type SfxId = 'shatter' | 'pop' | 'boom' | 'tick' | 'whoosh' | 'chime' | 'sand' | 'bubble' | 'clack' | 'clang' | 'grind' | 'rip' | 'knock' | 'clink' | 'ding' | 'ambience';
 
 export type AudioEvent =
@@ -145,6 +147,11 @@ export interface LongFormSpec {
   minLoopS: number;
   maxLoopS: number;
   defaultLoopS: number;
+  /**
+   * Loop lengths are rounded to whole multiples of this (seconds): every bed's length must divide
+   * the loop, or it jumps at the loop's join. Default 1.
+   */
+  loopStepS?: number;
   /** A representative moment for the thumbnail (e.g. mid lightning flash). */
   thumbnailAt?: (state: any) => number;
   /** Recordings that play throughout (see AmbientBed). */

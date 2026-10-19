@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AudioEventInput, DramaScore, Template } from '@sim/engine';
+import type { AmbientBed, AudioEventInput, DramaScore, Template } from '@sim/engine';
 import { Rng } from '@sim/engine';
 import { scheduleTimes, wrap } from '../ambient/loop';
 import { drawCabin, preloadCabin } from './view3d';
@@ -16,7 +16,10 @@ import { loadSound } from '../ambient/assets';
 export const cabinStormSchema = z.object({
   storm: z.number().min(0).max(1).default(0.6).meta({ title: 'Storm intensity' }),
   lightningPerHour: z.number().min(0).max(120).default(30).meta({ title: 'Lightning strikes per hour' }),
+  thunder: z.number().min(0).max(1).default(0.7).meta({ title: 'Thunder volume' }),
   fire: z.number().min(0).max(1).default(0.7).meta({ title: 'Fire size' }),
+  precipitation: z.enum(['rain', 'snow']).default('rain').meta({ title: 'Rain or snow' }),
+  rainSound: z.enum(['window', 'steady']).default('window').meta({ title: 'Rain sound (rain on the window, or steady rain)' }),
 });
 
 export type CabinStormParams = z.infer<typeof cabinStormSchema>;
@@ -48,8 +51,28 @@ export interface CabinState {
 /** Minimum time between strikes, so flashes never come in bursts. */
 const MIN_STRIKE_GAP_S = 12;
 /** Recorded beds (see scripts/build-ambient-audio.ts): rain on the window, the fire, wind gusts. */
-const SOUNDS = { rain: 'audio/rain-window-600.opus', fire: 'audio/fire-hearth-600.opus', wind: 'audio/wind-howl-60.opus' } as const;
-const SOUND_LENGTH_S = { rain: 600, fire: 600, wind: 60 } as const;
+const SOUNDS = {
+  rainWindow: 'audio/rain-window-600.opus',
+  rainSteady: 'audio/rain-steady-600.opus',
+  fire: 'audio/fire-hearth-600.opus',
+  wind: 'audio/wind-howl-60.opus',
+} as const;
+const SOUND_LENGTH_S: Record<string, number> = {
+  [SOUNDS.rainWindow]: 600,
+  [SOUNDS.rainSteady]: 600,
+  [SOUNDS.fire]: 600,
+  [SOUNDS.wind]: 60,
+};
+
+/** The beds a setting plays: rain (unless it's snowing), the fire, and wind (stronger in snow). */
+function beds(p: CabinStormParams): AmbientBed[] {
+  const snow = p.precipitation === 'snow';
+  const out: AmbientBed[] = [];
+  if (!snow) out.push({ sound: p.rainSound === 'steady' ? SOUNDS.rainSteady : SOUNDS.rainWindow, gain: 0.55 + 0.5 * p.storm, swell: { depth: 0.25, cycles: [3, 7, 13] } });
+  out.push({ sound: SOUNDS.fire, gain: 0.45 + 0.6 * p.fire, pan: -0.1, swell: { depth: 0.15, cycles: [5, 11] } });
+  out.push({ sound: SOUNDS.wind, gain: (snow ? 0.35 : 0.15) + (snow ? 0.45 : 0.35) * p.storm, pan: 0.3, swell: { depth: 0.6, cycles: [2, 9, 17] } });
+  return out;
+}
 /** Thunder one-shots: close claps (a sharp crack, then rumble) and distant rolls. */
 const THUNDER = {
   close: [1, 2, 3, 4, 5, 6].map((i) => `audio/thunder-close-${i}.opus`),
@@ -92,7 +115,7 @@ function schedule(p: CabinStormParams, L: number, rng: Rng): Pick<CabinState, 's
       t: wrap(s.t + s.delay, L),
       type: 'thunder',
       strike: i,
-      vel: 0.45 + 0.55 * s.strength,
+      vel: (0.45 + 0.55 * s.strength) * (0.15 + 0.85 * p.thunder),
       clip: near ? pickClose() : pickFar(),
       rate: rng.range(0.92, 1.06),
       pan: (s.x - 0.5) * 1.2,
@@ -110,14 +133,12 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
   schema: cabinStormSchema,
   format: { width: 1920, height: 1080, fps: 30 },
   longForm: {
-    beds: (p: CabinStormParams) => [
-      { sound: SOUNDS.rain, gain: 0.55 + 0.5 * p.storm, swell: { depth: 0.25, cycles: [3, 7, 13] } },
-      { sound: SOUNDS.fire, gain: 0.35 + 0.5 * p.fire, pan: -0.1, swell: { depth: 0.15, cycles: [5, 11] } },
-      { sound: SOUNDS.wind, gain: 0.15 + 0.35 * p.storm, pan: 0.3, swell: { depth: 0.6, cycles: [2, 9, 17] } },
-    ],
+    beds,
     minLoopS: 20 * 60,
     maxLoopS: 60 * 60,
     defaultLoopS: 30 * 60,
+    // The rain and fire beds are 10-minute loops.
+    loopStepS: 600,
     thumbnailAt: (s: CabinState) => {
       const best = s.strikes.reduce<Strike | null>((a, b) => (!a || b.strength > a.strength ? b : a), null);
       return best ? best.t + 0.04 : s.loopS / 2;
@@ -129,11 +150,11 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
   glowScale: 0,
   defaultCopy: { hook: '', cta: '' },
 
-  preload: () =>
+  preload: (p) =>
     Promise.all([
       preloadCabin(),
-      ...(Object.keys(SOUNDS) as (keyof typeof SOUNDS)[]).map((k) => loadSound(SOUNDS[k], SOUND_LENGTH_S[k])),
-      ...[...THUNDER.close, ...THUNDER.far].map((clip) => loadSound(clip)),
+      ...beds(p).map((b) => loadSound(b.sound, SOUND_LENGTH_S[b.sound])),
+      ...(p.lightningPerHour > 0 ? [...THUNDER.close, ...THUNDER.far].map((clip) => loadSound(clip)) : []),
     ]).then(() => undefined),
 
   init({ params, rng, loopS }) {

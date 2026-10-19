@@ -111,7 +111,7 @@ planner and analytics entirely (long uploads on the channel are ignored by the Y
 
 | Template | What happens |
 |---|---|
-| `cabin-storm` | Inside a log cabin: a crackling fire, rain and lightning through big windows *(placeholder look for now)* |
+| `cabin-storm` | Inside a log cabin: a stone fireplace with a crackling fire between two big windows, a thunderstorm (or snow) outside with swaying pines, rain on the glass, and lightning that throws the window shapes across the floor. Settings: storm, lightning per hour, thunder volume, fire size, rain or snow, rain sound |
 
 ```bash
 npm run render -- --template cabin-storm --loop 30m --length 3h
@@ -123,6 +123,11 @@ where segments join), so memory stays flat and a render interrupted part-way res
 again with the same `--recipe` and `--out`. Output: `final.mp4`, `thumbnail.jpg` (1280×720),
 `contact.jpg`, plus `loop.mp4` and `loop.flac` (the master loop). QC checks the loop join (picture
 and sound), loudness, flashes per second (at most 3) and long black or frozen stretches.
+
+Trying out new long-form visuals: set `SIM_RENDER_SOFTWARE=1` to render on the CPU (SwiftShader)
+instead of the GPU. It is far slower, but nothing a page does can reach the GPU driver: a canvas
+`filter` (blur) applied to thousands of shapes once hung the GPU and crashed the Mac. Use stills
+(`--still 12,40`) to look at frames quickly.
 
 Rules for long-form templates (on top of the ones below): every frame must depend only on `t`
 (a segment can start anywhere), and everything must repeat exactly over the loop. Run noise on a

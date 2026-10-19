@@ -20,6 +20,12 @@ export const SEGMENT_S = 300;
 /** Each audio segment renders this much further, crossfaded into the next one where they join. */
 const AUDIO_OVERLAP_S = 0.05;
 const SAMPLE_RATE = 48000;
+/**
+ * Most the two sides of an audio join may differ before the crossfade (RMS of difference over RMS).
+ * Matching renders measure 0 to 0.03 (noise bursts landing a fraction of a sample apart); a bed out
+ * of step measures about 1.
+ */
+const MAX_JOIN_MISMATCH = 0.15;
 /** 1080p30 ambient: YouTube's recommended upload bitrate. */
 export const LONG_FORM_BITRATE = 8_000_000;
 
@@ -258,6 +264,14 @@ export async function renderLongForm(
     qc.problems.push(`audio jumps at the loop join (step at the ${audioSeam.percentile.toFixed(1)}th percentile of ordinary steps)`);
     qc.pass = false;
   }
+  // The stricter check: the audio just past the loop's end (rendered on, as the loop's start again)
+  // must match the loop's actual start. A single sample step can look ordinary while the content
+  // jumps (e.g. a bed whose length doesn't divide the loop).
+  const loopJoin = audioJoins[audioJoins.length - 1] ?? 0;
+  if (loopJoin > MAX_JOIN_MISMATCH) {
+    qc.problems.push(`audio at the loop join doesn't match its start (mismatch ${loopJoin.toFixed(2)}; does every bed's length divide the loop?)`);
+    qc.pass = false;
+  }
   // The join should be no bigger a change than one ordinary frame step there.
   const seamPass = seam.seamStep <= seam.referenceStep * 1.5 + 0.5 && seam.wrapDiff <= 3;
   if (!seamPass) {
@@ -291,4 +305,29 @@ export async function renderLongForm(
   };
   await writeFile(join(dir, 'result.json'), JSON.stringify({ ...out, score: info.score }, null, 2));
   return out;
+}
+
+/** Draw single frames of a long-form recipe to PNGs (still-<t>.png in outDir), without rendering the loop. */
+export async function renderLongFormStills(recipe: Recipe, times: number[], opts: { outDir: string; allowShortLoop?: boolean }) {
+  const template = getTemplate(recipe.templateId);
+  if (!template.longForm) throw new Error(`${template.id} is not a long-form template`);
+  const loopS = loopLengthOf(template, recipe.loopS, opts.allowShortLoop);
+  const harness = new RenderHarness();
+  await harness.start();
+  const files: string[] = [];
+  try {
+    const page = await harness.openPage(opts.outDir);
+    try {
+      for (const t of [...times].sort((a, b) => a - b)) {
+        const name = `still-${t.toFixed(2)}.png`;
+        await page.call('longFormStill', { recipe: { ...recipe, loopS }, loopS }, { name, t });
+        files.push(join(opts.outDir, name));
+      }
+    } finally {
+      await page.close();
+    }
+  } finally {
+    await harness.stop();
+  }
+  return files;
 }

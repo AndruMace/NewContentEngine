@@ -13,6 +13,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const ROOT = resolve(here, '../../..');
 const CACHE = join(ROOT, '.render-cache');
+const SOFTWARE = process.env.SIM_RENDER_SOFTWARE === '1';
+/** A page call that takes longer than this is treated as stuck: the page is closed (default 20 min). */
+const CALL_TIMEOUT_MS = Number(process.env.SIM_RENDER_CALL_TIMEOUT_MS ?? 20 * 60_000);
 const ASSETS = join(ROOT, 'assets/ambient');
 const ASSET_TYPES: Record<string, string> = {
   jpg: 'image/jpeg',
@@ -109,7 +112,11 @@ export class RenderHarness {
     this.browser = await chromium.launch({
       channel: 'chrome',
       headless: true,
-      args: ['--autoplay-policy=no-user-gesture-required', '--enable-gpu-rasterization', '--ignore-gpu-blocklist'],
+      // SIM_RENDER_SOFTWARE=1 renders on the CPU (SwiftShader): much slower, but nothing a page does
+      // can reach the GPU driver. Use it to try out new shaders and canvas work safely.
+      args: SOFTWARE
+        ? ['--autoplay-policy=no-user-gesture-required', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-rasterization']
+        : ['--autoplay-policy=no-user-gesture-required', '--enable-gpu-rasterization', '--ignore-gpu-blocklist'],
     });
   }
 
@@ -163,10 +170,19 @@ export class RenderHarness {
     await page.waitForFunction(() => typeof window.longFormPrepare === 'function');
     return {
       call: async <T>(fn: string, ...args: unknown[]): Promise<T> => {
+        let timer: NodeJS.Timeout | undefined;
         try {
-          return (await page.evaluate(([name, a]) => (window as any)[name as string](...(a as unknown[])), [fn, args] as const)) as T;
+          const stuck = new Promise<never>((_, fail) => {
+            timer = setTimeout(() => {
+              void page.close().catch(() => {});
+              fail(new Error(`${fn} took longer than ${Math.round(CALL_TIMEOUT_MS / 1000)}s; the page was closed`));
+            }, CALL_TIMEOUT_MS);
+          });
+          return (await Promise.race([page.evaluate(([name, a]) => (window as any)[name as string](...(a as unknown[])), [fn, args] as const), stuck])) as T;
         } catch (e) {
           throw new Error(`${(e as Error).message}${errors.length ? `\nPage errors:\n${errors.join('\n')}` : ''}`);
+        } finally {
+          clearTimeout(timer);
         }
       },
       close: async () => {
