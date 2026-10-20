@@ -233,7 +233,7 @@ export function timetable(o: TimetableOptions, L: number, rng: Rng): Timetable {
         if (t >= L) continue;
         clicks.push(t);
         // The front bogie is towards the right (we travel right); slightly louder and more even when slow.
-        cues.push({ t, type: 'click', clip: pickClick(), vel: rng.range(0.55, 0.85), pan: off > 0 ? 0.45 : -0.45, rate: rng.range(0.94, 1.06) });
+        cues.push({ t, type: 'click', clip: pickClick(), vel: rng.range(0.32, 0.5), pan: off > 0 ? 0.35 : -0.35, rate: rng.range(0.94, 1.02) });
       }
     }
     clicks.sort((a, b) => a - b);

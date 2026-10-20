@@ -23,7 +23,7 @@ export const nightTrainSchema = z.object({
   bridgesPerHour: z.number().min(0).max(12).default(3).meta({ title: 'Bridges per hour' }),
   tunnelsPerHour: z.number().min(0).max(10).default(2).meta({ title: 'Tunnels per hour' }),
   horn: z.number().min(0).max(1).default(0.5).meta({ title: 'Horn volume' }),
-  lamp: z.number().min(0).max(1).default(0.7).meta({ title: 'Lamp brightness' }),
+  lamp: z.number().min(0).max(1).default(0.5).meta({ title: 'Lamp brightness' }),
 });
 
 export type NightTrainParams = z.infer<typeof nightTrainSchema>;
@@ -44,7 +44,7 @@ const BED_LENGTH_S: Record<string, number> = { [BEDS.compartment]: 600, [BEDS.ra
 
 /** The compartment's rumble always; rain on the glass when it rains, wind past the carriage in snow. */
 function beds(p: NightTrainParams): AmbientBed[] {
-  const out: AmbientBed[] = [{ sound: BEDS.compartment, gain: 0.95, swell: { depth: 0.12, cycles: [2, 5, 11] } }];
+  const out: AmbientBed[] = [{ sound: BEDS.compartment, gain: 0.95, swell: { depth: 0.08, cycles: [2, 5, 11] } }];
   if (p.weather === 'rain') out.push({ sound: BEDS.rain, gain: 0.2 + 0.4 * p.precip, pan: -0.1, swell: { depth: 0.3, cycles: [3, 7, 13] } });
   if (p.weather === 'snow') out.push({ sound: BEDS.wind, gain: 0.1 + 0.25 * p.precip, pan: 0.2, swell: { depth: 0.5, cycles: [4, 9, 17] } });
   return out;
@@ -78,7 +78,7 @@ export const nightTrain: Template<NightTrainParams, NightTrainState> = {
     },
     describe: (p: NightTrainParams) =>
       [
-        `Inside a sleeper compartment on a night train: walnut panelling, a table lamp glowing under the window, pillows on the berth.`,
+        `Inside an old-fashioned sleeper compartment on a night train: walnut panelling and brass, velour curtains, a fringed lamp glowing low on the table by a big window.`,
         p.weather === 'rain'
           ? `Rain streaks across the glass as the dark countryside slides past${p.precip > 0.7 ? ', a heavy downpour' : ''}.`
           : p.weather === 'snow'

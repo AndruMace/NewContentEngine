@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '@sim/engine';
-import { passAt, pathAt, seaSchedule, type Depth } from './schedule';
+import { JELLY_W, SCHOOL_W, passAt, pathAt, seaSchedule, slotPass, slotX, type Depth } from './schedule';
 
 const L = 1800;
-const opts = (depth: Depth) => ({ depth, life: 0.6, whalesPerHour: 6, sonarPerHour: 12, creaks: 0.5 });
+const opts = (depth: Depth) => ({ depth, life: 0.6, whalesPerHour: 6, sonarPerHour: 12, creaks: 0.5, speed: 0.46 });
 
 describe('deep sea schedule', () => {
   it('moves every creature on a path that closes over the loop', () => {
@@ -17,6 +17,18 @@ describe('deep sea schedule', () => {
           for (let i = 0; i < 3; i++) expect(b[i]).toBeCloseTo(a[i], 9);
         }
         for (const n of c.path.n) expect(Number.isInteger(n)).toBe(true);
+      }
+    }
+  });
+
+  it('drifts a whole number of slot windows per loop, so the slots come round exactly', () => {
+    const s = seaSchedule(opts('twilight'), L, new Rng(2));
+    for (const W of [JELLY_W, SCHOOL_W, 20, 40]) expect(s.D % W).toBe(0);
+    expect(s.v * L).toBeCloseTo(s.D, 9);
+    for (const t of [0, 77.7, 1500]) {
+      for (const j of s.jellies) {
+        expect(slotX(j.slot, JELLY_W, s.v * (t + L))).toBeCloseTo(slotX(j.slot, JELLY_W, s.v * t), 6);
+        expect(slotPass(j.slot, JELLY_W, s.v * (t + L), s.D)).toBe(slotPass(j.slot, JELLY_W, s.v * t, s.D));
       }
     }
   });

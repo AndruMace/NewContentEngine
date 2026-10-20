@@ -2,6 +2,10 @@
  * Deep Sea Observatory's cue schedule and the creatures' paths (no rendering). Paths are closed
  * curves with a whole number of laps per loop (so position at t + L equals position at t); one-off
  * visitors (a whale far off, an anglerfish, bubbles from the vent) are scheduled passes inside the loop.
+ *
+ * The station drifts sideways: the world slides past at v, covering exactly D (a whole number of
+ * TRAVEL_STEP metres) per loop. Things outside are recycled through slots: each crosses a window W
+ * wide (W divides D) and comes round again off-screen as a new pass, varied by the pass's number.
  */
 import type { Rng } from '@sim/engine';
 import { scheduleTimes } from '../ambient/loop';
@@ -17,6 +21,32 @@ export const SOUNDS = {
 } as const;
 /** Bubble clip lengths (s): the stream rises for as long as it sounds. */
 const BUBBLE_S = [7, 6.5, 7, 4, 8, 6.2];
+
+/** The travel per loop is a whole number of these (every slot window divides it). */
+export const TRAVEL_STEP = 60;
+
+/** How far the station drifts per loop (m) and how fast (m/s), from the speed asked for. */
+export function travel(speed: number, L: number) {
+  const D = Math.max(TRAVEL_STEP, Math.round((speed * L) / TRAVEL_STEP) * TRAVEL_STEP);
+  return { D, v: D / L };
+}
+
+/** Where a slot is across its window (x, m) when the station has drifted s metres: right to left. */
+export function slotX(phase: number, W: number, s: number) {
+  return W / 2 - ((((phase * W + s) % W) + W) % W);
+}
+
+/** Which pass a slot is on (repeats over the loop: D / W passes). */
+export function slotPass(phase: number, W: number, s: number, D: number) {
+  return ((Math.floor((phase * W + s) / W) % (D / W)) + D / W) % (D / W);
+}
+
+/** A repeatable 0..1 from integers (visual only: per-pass variety). */
+export function hash2(a: number, b: number) {
+  let h = Math.imul(a | 0, 374761393) ^ Math.imul((b | 0) + 0x9e37, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
 
 /** A closed path: centre plus whole-number Lissajous terms (laps per loop), metres. */
 export interface Path {
@@ -49,7 +79,13 @@ export function passAt(p: Pass, t: number): [number, number, number] | null {
   return [0, 1, 2].map((i) => p.from[i] + (p.to[i] - p.from[i]) * e) as [number, number, number];
 }
 
+/** Slot windows (m) for jellyfish and fish schools. */
+export const JELLY_W = 30;
+export const SCHOOL_W = 60;
+
 export interface Jelly {
+  /** Where along its window it starts (0..1); its own drift on top. */
+  slot: number;
   path: Path;
   size: number;
   /** Bell pulses per loop (whole). */
@@ -58,6 +94,7 @@ export interface Jelly {
 }
 
 export interface School {
+  slot: number;
   path: Path;
   count: number;
   /** Fish size (m). */
@@ -68,6 +105,9 @@ export interface School {
 export type Cue = { t: number; clip: string; vel: number; pan: number; rate: number };
 
 export interface SeaSchedule {
+  /** Drift per loop (m) and speed (m/s). */
+  D: number;
+  v: number;
   jellies: Jelly[];
   schools: School[];
   whales: Pass[];
@@ -82,6 +122,8 @@ export interface ScheduleOptions {
   whalesPerHour: number;
   sonarPerHour: number;
   creaks: number;
+  /** Drift speed asked for (m/s). */
+  speed: number;
 }
 
 const EDGE = 20;
@@ -91,15 +133,18 @@ const laps = (periodS: number, L: number) => Math.max(1, Math.round(L / periodS)
 
 export function seaSchedule(o: ScheduleOptions, L: number, rng: Rng): SeaSchedule {
   const life = o.life;
+  const { D, v } = travel(o.speed, L);
   const jellies: Jelly[] = [];
-  const nJelly = o.depth === 'reef' ? Math.round(1 + 2 * life) : Math.round(2 + 5 * life);
+  // About a third of a jelly window is in view, so three slots for each one seen at a time.
+  const nJelly = 3 * (o.depth === 'reef' ? Math.round(1 + 2 * life) : Math.round(2 + 5 * life));
   for (let i = 0; i < nJelly; i++) {
-    const z = -3.5 - rng.range(0, 14);
+    const z = -3.5 - rng.range(0, 13);
     jellies.push({
-      // Drift slowly through the view on long loops (a few minutes each way).
+      slot: (i + rng.range(0, 0.6)) / nJelly,
+      // Their own slow drift on top of the station's (small across, so they never jump at the wrap).
       path: {
-        c: [rng.range(-2.5, 2.5) * (1 - z / 30), rng.range(-0.5, 3.5), z],
-        a: [rng.range(1.5, 4), rng.range(0.6, 1.6), rng.range(0.5, 2)],
+        c: [0, rng.range(-0.5, 3.5), z],
+        a: [rng.range(0.3, 1.2), rng.range(0.6, 1.6), rng.range(0.5, 2)],
         n: [laps(rng.range(240, 600), L), laps(rng.range(150, 400), L), laps(rng.range(300, 700), L)],
         ph: [rng.range(0, 6.28), rng.range(0, 6.28), rng.range(0, 6.28)],
       },
@@ -114,9 +159,10 @@ export function seaSchedule(o: ScheduleOptions, L: number, rng: Rng): SeaSchedul
     for (let i = 0; i < nSchools; i++) {
       const z = -7 - rng.range(0, 12);
       schools.push({
+        slot: (i + rng.range(0, 0.7)) / nSchools,
         path: {
-          c: [rng.range(-1, 1), rng.range(-1.5, 2.5), z],
-          a: [rng.range(6, 12), rng.range(0.8, 2), rng.range(2, 4)],
+          c: [0, rng.range(-1.5, 2.5), z],
+          a: [rng.range(3, 6), rng.range(0.8, 2), rng.range(2, 4)],
           n: [laps(rng.range(90, 200), L), laps(rng.range(60, 140), L), laps(rng.range(120, 260), L)],
           ph: [rng.range(0, 6.28), rng.range(0, 6.28), rng.range(0, 6.28)],
         },
@@ -179,5 +225,5 @@ export function seaSchedule(o: ScheduleOptions, L: number, rng: Rng): SeaSchedul
     for (const t of scheduleTimes(rng, L, o.sonarPerHour / 3600, 30)) if (t < L - 6) cues.push({ t, clip: pickSonar(), vel: 0.55, pan: rng.range(-0.3, 0.3), rate: 1 });
   }
   cues.sort((a, b) => a.t - b.t);
-  return { jellies, schools, whales, anglers, bubbles, cues };
+  return { D, v, jellies, schools, whales, anglers, bubbles, cues };
 }

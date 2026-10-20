@@ -213,8 +213,8 @@ vec4 platformAt(float x, float dz) {
   // Paving slabs, the yellow line by the edge, pools of light under the lamps (every 20 m).
   vec2 slab = vec2(fract(a / 1.2), fract(dz / 1.2));
   float joint = step(0.96, max(slab.x, slab.y));
-  vec3 col = vec3(0.05, 0.048, 0.045) * (0.85 + 0.15 * hash12(vec2(floor(a / 1.2), floor(dz / 1.2)))) * (1.0 - 0.4 * joint);
-  if (uWeather > 1.5) col = vec3(0.10, 0.10, 0.11);
+  vec3 col = vec3(0.022, 0.021, 0.02) * (0.85 + 0.15 * hash12(vec2(floor(a / 1.2), floor(dz / 1.2)))) * (1.0 - 0.4 * joint);
+  if (uWeather > 1.5) col = vec3(0.045, 0.045, 0.05);
   float lampX = (floor(local / 20.0) + 0.5) * 20.0;
   float pool = exp(-pow(length(vec2(local - lampX, (dz - 4.8) * 1.3)) / 4.0, 2.0));
   col *= 0.35 + 1.6 * pool;
@@ -502,7 +502,7 @@ export function buildLandscape(): Landscape {
 
   // Rain or snow: just outside, a few metres off, and farther (columns that divide the ring).
   const sheets = [
-    { d: 0.7, w: 4, h: 4, cell: 0.08, tint: [0.03, 0.024, 0.018], light: 1.0 },
+    { d: 0.7, w: 5, h: 4, cell: 0.08, tint: [0.012, 0.01, 0.008], light: 1.0 },
     { d: 4, w: 12, h: 9, cell: 0.2, tint: [0.016, 0.016, 0.019], light: 1.0 },
     { d: 12, w: 30, h: 16, cell: 0.4, tint: [0.012, 0.013, 0.016], light: 1.0 },
   ];

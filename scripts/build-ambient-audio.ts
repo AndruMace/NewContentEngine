@@ -55,6 +55,8 @@ interface Bed {
   filter?: string;
   /** Right channel cut from here instead (widens a mono recording; both halves loop). */
   rightFromS?: number;
+  /** Transient ceiling above the loudness (dB; default CREST_DB): lower is smoother. */
+  crestDb?: number;
 }
 
 interface Source {
@@ -80,8 +82,9 @@ const SOURCES: Source[] = [
   { id: 242735, author: 'hifijohn', title: 'thunder', url: 'https://freesound.org/people/hifijohn/sounds/242735/', use: 'Thunder (mixed)', build: { clips: [{ from: 1.5, to: 14, name: 'thunder-far', lufs: -23, crestDb: 20 }, { from: 20, to: 30, name: 'thunder-close', lufs: -18, crestDb: 20 }, { from: 39.5, to: 56, name: 'thunder-close', lufs: -18, crestDb: 20 }] } },
 
   // ---- Night Train ----
-  // The compartment: a sleeper on an overnight train, rattling softly (its brightest rattles eased).
-  { id: 788565, author: 'HT4891', title: 'Night Train', url: 'https://freesound.org/people/HT4891/sounds/788565/', use: 'Night Train compartment bed, tunnel and bridge sounds', build: { bed: { name: 'train-compartment', lengthS: 600, fromS: 228, lufs: -23, filter: 'highshelf=f=3500:g=-5' } } },
+  // The compartment: a sleeper on an overnight train, its rattles smoothed (a soft top, transients
+  // held close to the rumble) so it lulls rather than clatters.
+  { id: 788565, author: 'HT4891', title: 'Night Train', url: 'https://freesound.org/people/HT4891/sounds/788565/', use: 'Night Train compartment bed, tunnel and bridge sounds', build: { bed: { name: 'train-compartment', lengthS: 600, fromS: 228, lufs: -23, filter: 'highshelf=f=2200:g=-9,lowpass=f=5500,lowpass=f=5500', crestDb: 9 } } },
   // Tunnels and bridges, from the same recording (a part the bed doesn't use): boomier and louder in
   // a tunnel (30, 45 and 60 s, the tunnel lengths), hollow and ringing on a bridge.
   {
@@ -96,11 +99,11 @@ const SOURCES: Source[] = [
   // Wheel clicks: the strongest single transients of two train interiors (from an onset scan).
   {
     id: 76078, author: 'ceejay', title: 'Passenger Train on the run', url: 'https://freesound.org/people/ceejay/sounds/76078/', use: 'Night Train wheel clicks',
-    build: { clips: [1.6, 32.67, 78.21, 11.1, 33.925, 53.57].map((t) => ({ from: t - 0.015, to: t + 0.35, name: 'rail-click', peakDb: -3, fadeInS: 0.004, fadeOutS: 0.15 })) },
+    build: { clips: [1.6, 32.67, 78.21, 11.1, 33.925, 53.57].map((t) => ({ from: t - 0.015, to: t + 0.35, name: 'rail-click', peakDb: -3, filter: 'lowpass=f=2400,lowpass=f=2400', fadeInS: 0.01, fadeOutS: 0.15 })) },
   },
   {
     id: 616533, author: 'TRP', title: '120618 Train, interior, moving clacks rumbles, NYC.mp3', url: 'https://freesound.org/people/TRP/sounds/616533/', use: 'Night Train wheel clicks',
-    build: { clips: [237.9, 420.245, 182.95, 410.17, 201.605, 270.57].map((t) => ({ from: t - 0.015, to: t + 0.35, name: 'rail-click', peakDb: -3, fadeInS: 0.004, fadeOutS: 0.15 })) },
+    build: { clips: [237.9, 420.245, 182.95, 410.17, 201.605, 270.57].map((t) => ({ from: t - 0.015, to: t + 0.35, name: 'rail-click', peakDb: -3, filter: 'lowpass=f=2400,lowpass=f=2400', fadeInS: 0.01, fadeOutS: 0.15 })) },
   },
   // Level-crossing bells, made to pass the window (louder, then falling in pitch and fading).
   { id: 457125, author: 'mycompasstv', title: 'Railway Crossing Warning Bell / Signal', url: 'https://freesound.org/people/mycompasstv/sounds/457125/', use: 'Night Train level crossing (passing)', build: { clips: [{ from: 1, to: 17, name: 'crossing-bell', lufs: -27, pass: { atS: 7, widthS: 2.2, semis: 1.2 }, fadeInS: 0.5, fadeOutS: 2 }] } },
@@ -269,7 +272,7 @@ function main() {
     const file = join(SRC, files.find((f) => f.startsWith(`${s.id}__`))!);
     const x = decode(file);
     if ('bed' in s.build) {
-      const { name, lengthS, fromS, lufs, filter, rightFromS } = s.build.bed;
+      const { name, lengthS, fromS, lufs, filter, rightFromS, crestDb } = s.build.bed;
       const rel = `audio/${name}-${lengthS}.opus`;
       // Level the stretch the bed is cut from (plus its crossfade tail), then make the loop: the loop
       // is the last step, so nothing afterwards can shift it.
@@ -281,7 +284,7 @@ function main() {
         for (let i = 1; i < region.length; i += 2) region[i] = right[i];
       }
       if (filter) region = filtered(region, filter);
-      toOpus(loopBed(level(region, { lufs }), 0, lengthS), join(ROOT, 'assets/ambient', rel), 112);
+      toOpus(loopBed(level(region, { lufs, crestDb }), 0, lengthS), join(ROOT, 'assets/ambient', rel), 112);
       const how = [filter && `filtered (${filter})`, rightFromS !== undefined && `right channel from ${rightFromS} s`].filter(Boolean).join(', ');
       entries.push({ id: name, kind: 'sound', use: s.use, files: [rel], durationS: lengthS, derived: `${lengthS} s seamless loop from ${fromS} s${how ? `, ${how}` : ''}, normalised to ${lufs} LUFS`, ...meta(s) });
       console.log(`bed ${rel}`);

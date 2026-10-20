@@ -127,12 +127,14 @@ ${WATER}
 attribute vec4 aSnow;   // speed (cycles/loop), phase, size, drift
 uniform vec3 uBox0;
 uniform vec3 uBox1;
+uniform float uS;       // the station's drift (m): the snow slides past
 varying float vLight;
 varying vec3 vWorld;
 void main() {
   vec3 size = uBox1 - uBox0;
   vec3 p = position;
   p.y = uBox0.y + mod(p.y - uBox0.y - aSnow.x * size.y * uPhase - aSnow.y * size.y, size.y);
+  p.x = uBox0.x + mod(p.x - uBox0.x - uS, size.x);
   p.x += 0.25 * sin(6.28318 * (floor(aSnow.w * 4.0) + 1.0) * uPhase + aSnow.y * 20.0);
   vec4 w = modelMatrix * vec4(p, 1.0);
   vWorld = w.xyz;
@@ -173,12 +175,13 @@ attribute vec3 aBubble;   // emit fraction, size, wobble phase
 uniform float uT;         // seconds since the stream started (-1: none)
 uniform float uEmitS;     // how long it emits
 uniform vec3 uFrom;
+uniform float uV;         // the station's drift speed: bubbles trail behind as they rise
 varying float vAlpha;
 varying vec3 vWorld;
 void main() {
   float age = uT - aBubble.x * uEmitS;
   vAlpha = uT < 0.0 || age < 0.0 || age > 8.0 ? 0.0 : smoothstep(0.0, 0.3, age) * smoothstep(8.0, 6.5, age);
-  vec3 p = uFrom + vec3(0.12 * sin(age * 5.0 + aBubble.z * 6.28) + (aBubble.z - 0.5) * 0.3, age * (0.7 + aBubble.y * 2.0), -0.1 * aBubble.z);
+  vec3 p = uFrom + vec3(0.12 * sin(age * 5.0 + aBubble.z * 6.28) + (aBubble.z - 0.5) * 0.3 - uV * age, age * (0.7 + aBubble.y * 2.0), -0.1 * aBubble.z);
   vec4 w = vec4(p, 1.0);
   vWorld = p;
   vec4 mv = viewMatrix * w;
@@ -203,7 +206,7 @@ void main() {
 
 export interface Water {
   group: THREE.Group;
-  update(o: { t: number; L: number; bubbleT: number; bubbleEmitS: number; bubbleFrom: [number, number, number] }): void;
+  update(o: { t: number; L: number; s: number; v: number; bubbleT: number; bubbleEmitS: number; bubbleFrom: [number, number, number] }): void;
 }
 
 export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number; flood: boolean; seed: number }): Water {
@@ -228,13 +231,14 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
   }
 
   // Marine snow in front of the porthole: denser close up, falling slowly.
-  const n = Math.round(1500 + 5000 * opts.snow);
+  const n = Math.round(2000 + 7000 * opts.snow);
   const pos = new Float32Array(n * 3);
   const attr = new Float32Array(n * 4);
   let s = opts.seed >>> 0 || 1;
   const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
-  const box0 = new THREE.Vector3(-7, SEABED_Y, WALL - 16);
-  const box1 = new THREE.Vector3(7, 7, WALL - 0.4);
+  // 20 m across: the drift per loop is a whole number of these, so the snow comes round exactly.
+  const box0 = new THREE.Vector3(-10, SEABED_Y, WALL - 16);
+  const box1 = new THREE.Vector3(10, 7, WALL - 0.4);
   for (let i = 0; i < n; i++) {
     const zz = rnd();
     pos[i * 3] = box0.x + (box1.x - box0.x) * rnd();
@@ -250,7 +254,7 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const snowAttr = new THREE.BufferAttribute(attr, 4);
   geo.setAttribute('aSnow', snowAttr);
-  const snowU = { ...U, uBox0: { value: box0 }, uBox1: { value: box1 } };
+  const snowU = { ...U, uBox0: { value: box0 }, uBox1: { value: box1 }, uS: { value: 0 } };
   const snow = new THREE.Points(geo, new THREE.ShaderMaterial({ vertexShader: SNOW_VERT, fragmentShader: SNOW_FRAG, uniforms: snowU, ...add }));
   snow.frustumCulled = false;
   snow.renderOrder = 6;
@@ -283,7 +287,7 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
   const bgeo = new THREE.BufferGeometry();
   bgeo.setAttribute('position', new THREE.BufferAttribute(bpos, 3));
   bgeo.setAttribute('aBubble', new THREE.BufferAttribute(battr, 3));
-  const bubbleU = { ...U, uT: { value: -1 }, uEmitS: { value: 6 }, uFrom: { value: new THREE.Vector3() } };
+  const bubbleU = { ...U, uT: { value: -1 }, uEmitS: { value: 6 }, uFrom: { value: new THREE.Vector3() }, uV: { value: 0 } };
   const bubbles = new THREE.Points(bgeo, new THREE.ShaderMaterial({ vertexShader: BUBBLE_VERT, fragmentShader: BUBBLE_FRAG, uniforms: bubbleU, ...add }));
   bubbles.frustumCulled = false;
   bubbles.renderOrder = 7;
@@ -291,7 +295,9 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
 
   return {
     group,
-    update({ t, L, bubbleT, bubbleEmitS, bubbleFrom }) {
+    update({ t, L, s, v, bubbleT, bubbleEmitS, bubbleFrom }) {
+      snowU.uS.value = s;
+      bubbleU.uV.value = v;
       if (snowFor !== L) {
         // Whole box heights per loop at 2–8 cm/s.
         const h = box1.y - box0.y;

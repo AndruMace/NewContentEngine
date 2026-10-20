@@ -21,6 +21,7 @@ export const deepSeaSchema = z.object({
   snow: z.number().min(0).max(1).default(0.6).meta({ title: 'Marine snow' }),
   sonarPerHour: z.number().min(0).max(60).default(10).meta({ title: 'Sonar pings per hour' }),
   creaks: z.number().min(0).max(1).default(0.5).meta({ title: 'Hull creaks' }),
+  drift: z.number().min(0).max(1).default(0.4).meta({ title: 'Drift speed (the station glides sideways)' }),
 });
 
 export type DeepSeaParams = z.infer<typeof deepSeaSchema>;
@@ -80,13 +81,13 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
     },
     describe: (p: DeepSeaParams) =>
       [
-        `Looking out of a round, riveted porthole from a deep-sea research station into ${NAME[p.depth]}.`,
+        `Looking out of a big round, riveted porthole from a deep-sea vessel gliding slowly sideways through ${NAME[p.depth]}.`,
         p.depth === 'twilight'
           ? `Dim blue water, marine snow drifting down, jellyfish pulsing past${p.whalesPerHour > 0 ? ', and now and then a whale gliding by far off in the gloom, singing' : ''}.`
           : p.depth === 'abyss'
             ? `Near-black water: the station's floodlight on the seabed, glowing jellyfish, an anglerfish's lure, tiny flashes of bioluminescence.`
             : `Sunlight rippling over sand and coral, shafts of light from the surface, shoals of fish turning together.`,
-        `Inside: painted steel, brass gauges, a warm lamp, condensation on the glass.`,
+        `Inside it is almost dark: painted steel, green-lit dials and meters, a glowing sonar screen, condensation on the glass.`,
         `Sound: deep underwater ambience and the station's low hum${p.creaks > 0 ? ', the hull creaking now and then' : ''}, bubbles from a vent${p.depth === 'reef' ? ', the crackle of reef shrimp' : ''}${p.depth !== 'abyss' && p.whalesPerHour > 0 ? ', humpback whale song' : ''}${p.sonarPerHour > 0 ? ', a soft sonar ping' : ''}.`,
       ].join(' '),
     fallbackCopy: (p: DeepSeaParams, len: string) => {
@@ -110,7 +111,11 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
   init({ params, rng, loopS }) {
     const L = loopS || 30 * 60;
     const look = rng.int(1, 1_000_000);
-    const sched = seaSchedule({ depth: params.depth, life: params.life, whalesPerHour: params.whalesPerHour, sonarPerHour: params.sonarPerHour, creaks: params.creaks }, L, rng);
+    const sched = seaSchedule(
+      { depth: params.depth, life: params.life, whalesPerHour: params.whalesPerHour, sonarPerHour: params.sonarPerHour, creaks: params.creaks, speed: 0.1 + 0.9 * params.drift },
+      L,
+      rng,
+    );
     return { p: params, loopS: L, look, sched, next: 0 };
   },
 

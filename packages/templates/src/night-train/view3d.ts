@@ -65,7 +65,7 @@ const view = sceneCache((s: NightTrainState) => {
   scene.add(land.reflection);
 
   // The lamp: the room's main light, warm, with a static shadow (nothing in the room moves).
-  const lamp = new THREE.PointLight(0xffb878, 1.7, 0, 2);
+  const lamp = new THREE.PointLight(0xffa860, 1.0, 0, 2);
   lamp.position.copy(room.lampAt);
   lamp.castShadow = true;
   lamp.shadow.mapSize.set(1024, 1024);
@@ -75,9 +75,16 @@ const view = sceneCache((s: NightTrainState) => {
   lamp.shadow.radius = 4;
   scene.add(lamp);
   // Warm light off the walls and ceiling (no shadow), and a dim reading light over the berth.
-  const fill = new THREE.PointLight(0xc89070, 0.9, 0, 2);
+  const fill = new THREE.PointLight(0xc89070, 0.6, 0, 2);
   fill.position.set(0.3, CEILING - 0.25, 0.9);
   scene.add(fill);
+  // The wall sconces either side of the window: a soft glow each, no shadows.
+  const sconceLights = room.sconces.map((p) => {
+    const l = new THREE.PointLight(0xffb070, 0.28, 0, 2);
+    l.position.copy(p);
+    scene.add(l);
+    return l;
+  });
   scene.add(new THREE.HemisphereLight(0x23283a, 0x1a120c, 0.18));
   // Moonlight through the window: cool, faint, throwing the frame's shadow on the table and berth.
   const moon = new THREE.DirectionalLight(0xa8b8e0, 0.35);
@@ -101,7 +108,7 @@ const view = sceneCache((s: NightTrainState) => {
   const red = new THREE.PointLight(0xff2010, 0, 0, 2);
   scene.add(red);
 
-  return { scene, camera, room, land, glass, lamp, fill, moon, passing, red };
+  return { scene, camera, room, land, glass, lamp, fill, sconceLights, moon, passing, red };
 });
 
 /**
@@ -178,9 +185,11 @@ export function drawTrain(rc: RenderCtx, s: NightTrainState) {
   // The lamp dips very slightly on the bigger jolts (a loose contact in an old carriage).
   const j = jolt(clicks, t, L);
   const lampLevel = lampOn * (0.985 + 0.015 * Math.max(-1, Math.min(1, j)));
-  v.lamp.intensity = 1.7 * lampLevel;
-  v.fill.intensity = 0.8 * lampLevel;
-  v.room.shade.emissiveIntensity = 0.55 * lampLevel;
+  v.lamp.intensity = 1.0 * lampLevel;
+  v.fill.intensity = 0.6 * lampLevel;
+  v.room.shade.emissiveIntensity = 0.32 * lampLevel;
+  v.room.sconceGlass.emissiveIntensity = 0.2 * lampLevel;
+  for (const l of v.sconceLights) l.intensity = 0.28 * lampLevel;
   const moonLight = (weather === 1 ? 0.35 : weather === 2 ? 0.25 : 0.06) * (1 - tunnel);
   v.moon.intensity = moonLight;
 

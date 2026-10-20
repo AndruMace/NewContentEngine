@@ -51,7 +51,8 @@ const view = sceneCache((s: DeepSeaState) => {
   scene.add(station.group);
   const water = buildWater(depth, U, { snow: s.p.snow, flood: s.p.floodlight, seed: s.look });
   scene.add(water.group);
-  scene.add(buildSeabed(depth, U, s.look));
+  const seabed = buildSeabed(depth, U, s.look, s.sched.D);
+  scene.add(seabed.group);
   const life = buildLife(depth, U, s.sched, s.look);
   scene.add(life.group);
 
@@ -67,7 +68,8 @@ const view = sceneCache((s: DeepSeaState) => {
 
   // The station's lights: the wall lamp (warm, with a static shadow), a dim fill, a cool glow from
   // the water through the porthole.
-  const lamp = new THREE.PointLight(0xffb070, 1.6, 0, 2);
+  // Very dim inside: a small warm lamp turned right down, and the instruments' green glow.
+  const lamp = new THREE.PointLight(0xffb070, 0.12, 0, 2);
   lamp.position.copy(station.lampAt);
   lamp.castShadow = true;
   lamp.shadow.mapSize.set(1024, 1024);
@@ -76,16 +78,19 @@ const view = sceneCache((s: DeepSeaState) => {
   lamp.shadow.bias = -0.002;
   lamp.shadow.radius = 4;
   scene.add(lamp);
-  const fill = new THREE.PointLight(0x9a8070, 0.6, 0, 2);
-  fill.position.set(0.8, 2.2, 1.2);
-  scene.add(fill);
+  const glows = station.glowAt.map((p) => {
+    const g = new THREE.PointLight(0x50ff98, 0.22, 0, 2);
+    g.position.copy(p);
+    scene.add(g);
+    return g;
+  });
   const z = ZONES[depth];
-  const seaGlow = new THREE.PointLight(new THREE.Color(...z.top.map((c) => Math.min(1, c * 6))), depth === 'reef' ? 0.9 : depth === 'twilight' ? 0.4 : 0.1, 0, 2);
+  const seaGlow = new THREE.PointLight(new THREE.Color(...z.top.map((c) => Math.min(1, c * 6))), depth === 'reef' ? 0.3 : depth === 'twilight' ? 0.2 : 0.05, 0, 2);
   seaGlow.position.set(PORT.x, PORT.y, WALL - 1.6);
   scene.add(seaGlow);
-  scene.add(new THREE.HemisphereLight(0x1c2630, 0x0c0a08, 0.25));
+  scene.add(new THREE.HemisphereLight(0x1c2630, 0x0c0a08, 0.04));
 
-  return { scene, camera, U, station, water, life, glass, lamp };
+  return { scene, camera, U, station, water, seabed, life, glass, lamp, glows };
 });
 
 export function drawSea(rc: RenderCtx, s: DeepSeaState) {
@@ -97,17 +102,23 @@ export function drawSea(rc: RenderCtx, s: DeepSeaState) {
   v.U.uPhase.value = t / L;
   v.U.uLoop.value = L;
 
-  v.life.update(t, L);
+  // The station drifts sideways at v: the world slides left by s (exactly D per loop).
+  const drifted = s.sched.v * t;
+  v.seabed.update(drifted);
+  v.life.update(t, L, drifted);
   // Bubbles: the stream running now, if any.
   const b = s.sched.bubbles.find((p) => passAt(p, t));
-  v.water.update({ t, L, bubbleT: b ? t - b.t0 : -1, bubbleEmitS: b ? b.t1 - b.t0 - 8 : 1, bubbleFrom: b ? b.from : [0, 0, 0] });
+  v.water.update({ t, L, s: drifted, v: s.sched.v, bubbleT: b ? t - b.t0 : -1, bubbleEmitS: b ? b.t1 - b.t0 - 8 : 1, bubbleFrom: b ? b.from : [0, 0, 0] });
   v.glass.update({ t, L, rain: 0.35, flash: 0, light: 0.6, snow: false });
 
-  // Gauges: the depth needle holds steady, the pressure one wanders a little (whole cycles per loop).
-  const base = { twilight: 0.1, abyss: 1.1, reef: -1.0 }[s.p.depth];
-  v.station.needles[0].rotation.z = base + 0.02 * loopSin(t, L, 1 / 41);
-  v.station.needles[1].rotation.z = base * 0.6 + 0.08 * loopSin(t, L, 1 / 23, 1) + 0.03 * loopSin(t, L, 1 / 7, 2);
-  v.lamp.intensity = 1.6 * (0.97 + 0.03 * loopSin(t, L, 1 / 13));
+  // Needles wander a little, lamps blink slowly, the sonar sweeps (all whole cycles per loop).
+  const deep = { twilight: 0.1, abyss: 1.1, reef: -1.0 }[s.p.depth];
+  v.station.needles.forEach((n, i) => {
+    n.pivot.rotation.z = -(n.base + (i === 0 ? deep : 0)) + n.amp * loopSin(t, L, n.hz, i * 1.3) + n.amp * 0.3 * loopSin(t, L, n.hz * 5.3, i);
+  });
+  for (const bl of v.station.blinkers) bl.mat.emissiveIntensity = bl.hz ? bl.on * (0.25 + 0.75 * Math.max(0, loopSin(t, L, bl.hz))) : bl.on;
+  v.station.scope.uSweep.value = (2 * Math.PI * Math.round(L / 6) * (t / L)) % (2 * Math.PI);
+  v.lamp.intensity = 0.12 * (0.97 + 0.03 * loopSin(t, L, 1 / 13));
 
   // The station is anchored; the camera breathes only very slightly.
   const [px, py, pz] = CAMERA.pos;

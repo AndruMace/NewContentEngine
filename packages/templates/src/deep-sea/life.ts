@@ -6,7 +6,7 @@
  */
 import { THREE } from '../three-layer';
 import { WATER, type WaterUniforms } from './water';
-import { passAt, pathAt, type Depth, type SeaSchedule } from './schedule';
+import { JELLY_W, SCHOOL_W, hash2, passAt, pathAt, slotPass, slotX, type Depth, type SeaSchedule } from './schedule';
 
 // ---- jellyfish ----------------------------------------------------------------------------------------
 const JELLY_VERT = /* glsl */ `
@@ -234,11 +234,14 @@ void main() {
 const SPARK_VERT = /* glsl */ `
 attribute vec3 aSpark;   // blink cycles per loop, phase, size
 uniform float uPhase;
+uniform float uS;        // how far the station has drifted (the sparkles slide past, 20 m window)
 varying float vOn;
 void main() {
   float s = sin(6.28318 * aSpark.x * uPhase + aSpark.y * 6.28318);
   vOn = pow(max(0.0, s), 10.0);
-  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vec3 p = position;
+  p.x = -10.0 + mod(p.x + 10.0 - uS, 20.0);
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_PointSize = aSpark.z * 900.0 / -mv.z;
   gl_Position = projectionMatrix * mv;
 }
@@ -254,7 +257,8 @@ void main() {
 
 export interface Life {
   group: THREE.Group;
-  update(t: number, L: number): void;
+  /** t, the loop length, and how far the station has drifted (m). */
+  update(t: number, L: number, s: number): void;
 }
 
 export function buildLife(depth: Depth, U: WaterUniforms, sched: SeaSchedule, seed: number): Life {
@@ -317,7 +321,7 @@ export function buildLife(depth: Depth, U: WaterUniforms, sched: SeaSchedule, se
   group.add(angler);
 
   // Sparkles in the abyss: tiny lights blinking now and then.
-  let sparkU: { uPhase: { value: number } } | null = null;
+  let sparkU: { uPhase: { value: number }; uS: { value: number } } | null = null;
   if (depth === 'abyss') {
     const n = 260;
     const pos = new Float32Array(n * 3);
@@ -325,8 +329,8 @@ export function buildLife(depth: Depth, U: WaterUniforms, sched: SeaSchedule, se
     let s = seed >>> 0 || 7;
     const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
     for (let i = 0; i < n; i++) {
-      const d = 3 + rnd() * 18;
-      pos[i * 3] = (rnd() - 0.5) * (2 + d);
+      const d = 3 + rnd() * 15;
+      pos[i * 3] = (rnd() - 0.5) * 20;
       pos[i * 3 + 1] = -3 + rnd() * 7;
       pos[i * 3 + 2] = -1.2 - d;
       at[i * 3] = 0; // cycles set when L is known
@@ -337,7 +341,7 @@ export function buildLife(depth: Depth, U: WaterUniforms, sched: SeaSchedule, se
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     const attr = new THREE.BufferAttribute(at, 3);
     g.setAttribute('aSpark', attr);
-    sparkU = { uPhase: { value: 0 } };
+    sparkU = { uPhase: { value: 0 }, uS: { value: 0 } };
     const pts = new THREE.Points(g, new THREE.ShaderMaterial({ vertexShader: SPARK_VERT, fragmentShader: SPARK_FRAG, uniforms: sparkU, ...add }));
     pts.frustumCulled = false;
     group.add(pts);
@@ -354,11 +358,19 @@ export function buildLife(depth: Depth, U: WaterUniforms, sched: SeaSchedule, se
 
   return {
     group,
-    update(t, L) {
+    update(t, L, s) {
       const ph = t / L;
-      for (const { j, g, bu, tu } of jellies) {
+      const D = sched.D;
+      for (const [i, { j, g, bu, tu }] of jellies.entries()) {
         const [x, y, z] = pathAt(j.path, t, L);
-        g.position.set(x, y, z);
+        // Its slot slides it across; each pass is a different jelly (depth, height, size, colour).
+        const k = slotPass(j.slot, JELLY_W, s, D);
+        const h = (salt: number) => hash2(i * 131 + salt, k);
+        g.position.set(slotX(j.slot, JELLY_W, s) + x, y + (h(1) - 0.5) * 2, Math.min(-3.5, Math.max(-17, z + (h(2) - 0.5) * 6)));
+        g.scale.setScalar(j.size * (0.7 + 0.6 * h(3)));
+        const hue = (j.hue + h(4) * 0.5) % 1;
+        const col = new THREE.Color().setHSL(depth === 'abyss' ? 0.5 + 0.25 * hue : depth === 'reef' ? 0.9 + 0.1 * hue : 0.55 + 0.1 * hue, 0.6, 0.7);
+        (bu.uColor.value as THREE.Vector3).set(col.r, col.g, col.b);
         // A sharp contraction, a slow relaxation.
         const c = 0.5 + 0.5 * Math.sin(2 * Math.PI * j.pulses * ph);
         bu.uPulse.value = Math.pow(c, 3);
@@ -372,6 +384,7 @@ export function buildLife(depth: Depth, U: WaterUniforms, sched: SeaSchedule, se
         fu.uSwim.value = 2 * Math.PI * Math.round(L * 2.5) * ph;
         const at = (tt: number, f: (typeof fish)[number]) => {
           const c = pathAt(sc.path, tt, L);
+          c[0] += slotX(sc.slot, SCHOOL_W, sched.v * tt);
           const w = (2 * Math.PI * tt) / L;
           const k = (i: number) => c[i] + f.off[i] * (1 + 0.25 * Math.sin(f.wander[i] * w + f.ph[i]));
           return new THREE.Vector3(k(0), k(1), k(2));
@@ -416,6 +429,7 @@ export function buildLife(depth: Depth, U: WaterUniforms, sched: SeaSchedule, se
           sp.userData.forL = L;
         }
         sparkU.uPhase.value = ph;
+        sparkU.uS.value = s;
       }
     },
   };
