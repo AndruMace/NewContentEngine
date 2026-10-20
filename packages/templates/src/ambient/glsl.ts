@@ -48,3 +48,32 @@ void main(){
   gl_Position = projectionMatrix * viewMatrix * w;
 }
 `;
+
+/**
+ * `loopNoise1(s, D, scale, seed)` and `loopFbm1(s, D, scale, seed, octaves)`: noise along a line that
+ * repeats every D (metres, say), `scale` noise units per metre. The line is wrapped onto a circle in
+ * noise space, so a skyline or tree line drawn from it closes on itself (the Night Train's ring of
+ * track). Needs NOISE4 (and FBM4 for loopFbm1).
+ */
+export const LOOP_NOISE1 = /* glsl */ `
+vec4 loopPoint1(float s, float D, float scale, float seed){
+  float a = 6.28318530718 * s / D;
+  float R = scale * D / 6.28318530718;
+  return vec4(R * cos(a), R * sin(a), seed, 0.0);
+}
+float loopNoise1(float s, float D, float scale, float seed){ return snoise(loopPoint1(s, D, scale, seed)); }
+float loopFbm1(float s, float D, float scale, float seed, int octaves){ return fbm4(loopPoint1(s, D, scale, seed), octaves); }
+`;
+
+/**
+ * `causticsLoop(vec2 p, vec2 tc)`: the bright web of sunlight focused by surface waves, in 0..~1,
+ * animated by tc (a point from timeCircle(), so it repeats every loop). p in pattern units (one
+ * cell ≈ 1). Needs NOISE4.
+ */
+export const CAUSTICS = /* glsl */ `
+float causticsLoop(vec2 p, vec2 tc){
+  float a = 1.0 - abs(snoise(vec4(p, tc)));
+  float b = 1.0 - abs(snoise(vec4(p * 1.7 + vec2(3.1, -1.7), tc * 1.3 + vec2(5.0, 2.0))));
+  return pow(a, 6.0) * 0.55 + pow(b, 8.0) * 0.45 + pow(a * b, 3.0) * 0.4;
+}
+`;

@@ -91,8 +91,42 @@ export function model(id: string): THREE.Group {
 }
 
 /**
+ * Smooth a looping channel's last few milliseconds into its first sample. Lossy coding adds a little
+ * noise that can't match across a loop's two ends (it is independent at each), which shows as a tiny
+ * step at the wrap in very smooth, low sounds (deep water). Easing the end towards where the start
+ * continues from removes it. Noise-like sounds are left alone (their step is already ordinary).
+ */
+export function healSeam(ch: Float32Array, span = 256, fit = 32) {
+  const n = ch.length;
+  if (n < span * 4) return;
+  // Straight lines through the last and first `fit` samples (they average out the fine noise): where
+  // the end is heading one sample past it, against where the start begins. Their difference is the
+  // smooth part of the step at the wrap; noise-like sounds leave it near zero.
+  const line = (from: number, at: number) => {
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (let i = 0; i < fit; i++) {
+      const y = ch[from + i];
+      sx += i;
+      sy += y;
+      sxx += i * i;
+      sxy += i * y;
+    }
+    const slope = (fit * sxy - sx * sy) / (fit * sxx - sx * sx);
+    return (sy - slope * sx) / fit + slope * at;
+  };
+  const err = line(n - fit, fit) - line(0, 0);
+  // Only when it helps: in noisy sounds the lines themselves wobble, and the step is fine as it is.
+  if (Math.abs(ch[0] - (ch[n - 1] - err)) >= Math.abs(ch[0] - ch[n - 1])) return;
+  for (let i = 0; i < span; i++) {
+    const w = 0.5 - 0.5 * Math.cos((Math.PI * (i + 1)) / span); // 0 → 1 at the last sample
+    ch[n - span + i] -= err * w;
+  }
+}
+
+/**
  * A recording, decoded once (AudioBuffers can be shared between audio contexts). `durationS` trims
  * or pads to an exact length: a bed must be exactly as long as its loop, whatever the decoder adds.
+ * Beds (with a length) also get their loop seam healed (healSeam).
  */
 export function loadSound(path: string, durationS?: number) {
   return once(path, async () => {
@@ -106,6 +140,7 @@ export function loadSound(path: string, durationS?: number) {
         for (let c = 0; c < buf.numberOfChannels; c++) exact.copyToChannel(buf.getChannelData(c).subarray(0, n), c);
         buf = exact;
       }
+      for (let c = 0; c < buf.numberOfChannels; c++) healSeam(buf.getChannelData(c));
     }
     sounds.set(path, buf);
   });

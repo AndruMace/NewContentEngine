@@ -158,6 +158,19 @@ export interface LongFormSpec {
   beds?: (params: any) => AmbientBed[];
   /** Reverb on the synthesized sounds (recordings already carry their room). Default 0. */
   reverb?: number;
+  /** What the video shows and sounds like, in plain words, for Claude's YouTube copy. */
+  describe?: (params: any) => string;
+  /** YouTube copy without Claude. `length` reads like "3 Hours". */
+  fallbackCopy?: (params: any, length: string) => LongFormCopyText;
+}
+
+/** YouTube copy for a long-form video. */
+export interface LongFormCopyText {
+  title: string;
+  description: string;
+  tags: string[];
+  /** Two to five words to set on the thumbnail. */
+  thumbnailText: string;
 }
 
 export interface Template<P = any, S = any> {

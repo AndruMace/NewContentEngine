@@ -13,8 +13,8 @@ import { drift, loopSin, wrap } from '../ambient/loop';
 import { buildRoom } from './room';
 import { buildFire } from './fire';
 import { buildOutside } from './outside';
-import { buildGlass } from './glass';
-import { BACK, CAMERA, FIRE } from './layout';
+import { buildRainGlass } from '../ambient/glass';
+import { BACK, CAMERA, FIRE, WINDOWS } from './layout';
 import type { CabinState } from './index';
 
 export const preloadCabin = () =>
@@ -79,7 +79,14 @@ const view = sceneCache((s: CabinState) => {
   scene.add(fire.group);
   const outside = buildOutside();
   scene.add(outside.group);
-  const glass = buildGlass();
+  // The fire is between the windows: each pane's drops are lit from the fire's side, a little from
+  // below. Just outside the mullions, so drops sit on the glass behind the frame.
+  const glass = buildRainGlass({
+    panes: WINDOWS.map((w) => {
+      const side = (w.x0 + w.x1) / 2 < 0 ? -1 : 1;
+      return { center: [(w.x0 + w.x1) / 2, (w.y0 + w.y1) / 2, BACK - 0.06], width: w.x1 - w.x0, height: w.y1 - w.y0, lightDir: [-side, -0.35], reflectSide: side };
+    }),
+  });
   scene.add(glass.group);
 
   // Lightning: a cold light from behind the back wall, coming in through the windows (the logs
@@ -146,7 +153,7 @@ export function drawCabin(rc: RenderCtx, s: CabinState) {
   }
   v.flashLight.intensity = flash.amount * 2.6;
   v.outside.update({ t, L, flash: flash.amount, strike: flash.strike, strikeX: strike?.x ?? 0.5, boltVisible: !!strike && strike.strength > 0.55, storm: s.p.storm, snow });
-  v.glass.update({ t, L, rain: s.p.storm, flash: flash.amount, fire: (0.5 + 0.5 * s.p.fire) * flick, snow });
+  v.glass.update({ t, L, rain: s.p.storm, flash: flash.amount, light: (0.5 + 0.5 * s.p.fire) * flick, snow });
 
   const [px, py, pz] = CAMERA.pos;
   v.camera.position.set(px + drift(t, L, 0.02, 1), py + drift(t, L, 0.01, 2), pz);

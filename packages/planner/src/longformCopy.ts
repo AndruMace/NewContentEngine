@@ -5,19 +5,14 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import type { Recipe } from '@sim/engine';
+import { parseParams, type LongFormCopyText, type Recipe } from '@sim/engine';
 import { getTemplate } from '@sim/templates';
 import { PLANNER_MODEL, PlannerRefusal } from './claude';
 
-export interface LongFormCopy {
-  title: string;
-  description: string;
-  tags: string[];
-  /** Two to five words to set on the thumbnail. */
-  thumbnailText: string;
-}
+export type LongFormCopy = LongFormCopyText;
 
-const Output = z.object({
+/** What valid copy looks like (YouTube limits). */
+export const LongFormCopySchema = z.object({
   title: z.string().min(10).max(100),
   description: z.string().min(80).max(4800),
   tags: z
@@ -59,56 +54,23 @@ const hours = (s: number) => {
   return Number.isInteger(h) ? `${h} Hour${h === 1 ? '' : 's'}` : `${Math.round(s / 60)} Minutes`;
 };
 
-/** A plain description of what the video shows, from its settings. */
+/** A plain description of what the video shows, from its settings (the template's own words). */
 export function describeScene(recipe: Recipe): string {
-  const p = recipe.params as Record<string, unknown>;
-  if (recipe.templateId === 'cabin-storm') {
-    const snow = p.precipitation === 'snow';
-    const storm = Number(p.storm ?? 0.6);
-    const lightning = Number(p.lightningPerHour ?? 30);
-    return [
-      `Inside a log cabin at night: a stone fireplace with a crackling fire (${Number(p.fire ?? 0.7) > 0.6 ? 'a big fire' : 'a gentle fire'}), between two big windows.`,
-      snow ? `Outside it is snowing${storm > 0.6 ? ' hard, wind gusting' : ''}.` : `Outside, ${storm > 0.7 ? 'a heavy' : storm > 0.4 ? 'a steady' : 'a light'} rainstorm, rain running down the glass.`,
-      lightning > 0 ? `Lightning about ${Math.round(lightning)} times an hour, with thunder.` : 'No thunder.',
-      'Sound: real recordings of the fire, rain on the windows, wind and thunder.',
-    ].join(' ');
-  }
-  if (recipe.templateId === 'orbital-viewport') {
-    const planet = String(p.planet ?? 'earthlike');
-    const names: Record<string, string> = { earthlike: 'an Earth-like planet', ocean: 'an ocean world', desert: 'a desert planet', ice: 'an ice world', gas: 'a gas giant' };
-    return [
-      `Looking out of a spaceship's viewport at ${names[planet] ?? 'a planet'} turning slowly below${p.rings ? ', with rings' : ''}, clouds drifting.`,
-      Number(p.moons ?? 0) ? `${p.moons} moon${p.moons === 1 ? '' : 's'} in the sky.` : '',
-      Number(p.shootingStarsPerHour ?? 20) > 0 ? 'Now and then a shooting star.' : '',
-      `${String(p.cabinLight ?? 'cool')} cabin lighting, quiet consoles.`,
-      "Sound: the ship's low hum and room tone, with the odd soft console blip.",
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
-  return getTemplate(recipe.templateId).description;
+  const template = getTemplate(recipe.templateId);
+  return template.longForm?.describe?.(parseParams(template, recipe.params ?? {})) ?? template.description;
 }
 
 /** Copy without Claude (no API key, or Claude declined). */
 export function fallbackLongFormCopy(recipe: Recipe & { totalS: number }): LongFormCopy {
+  const template = getTemplate(recipe.templateId);
   const len = hours(recipe.totalS);
-  const p = recipe.params as Record<string, unknown>;
-  if (recipe.templateId === 'cabin-storm') {
-    const snow = p.precipitation === 'snow';
-    return {
-      title: snow ? `Cozy Cabin in a Snowstorm | Crackling Fire & Wind Sounds for Sleep | ${len}` : `Cozy Cabin Thunderstorm | Crackling Fire & Rain Sounds for Sleep | ${len}`,
-      description: `${describeScene(recipe)}\n\nPut it on to fall asleep, study, read or work. ${len} of one continuous, calm scene.\n\n#${snow ? 'snowstorm' : 'rainsounds'} #fireplace #sleepsounds`,
-      tags: snow
-        ? ['snowstorm sounds', 'cozy cabin', 'fireplace sounds', 'crackling fire', 'wind sounds', 'sleep sounds', 'study ambience', 'winter ambience']
-        : ['rain sounds', 'thunderstorm sounds', 'cozy cabin', 'fireplace sounds', 'crackling fire', 'rain for sleeping', 'sleep sounds', 'study ambience'],
-      thumbnailText: snow ? 'SNOWY CABIN' : 'STORMY NIGHT',
-    };
-  }
+  const own = template.longForm?.fallbackCopy?.(parseParams(template, recipe.params ?? {}), len);
+  if (own) return own;
   return {
-    title: `Spaceship Ambience | Orbiting a Planet | Deep Space Sounds for Sleep & Focus | ${len}`,
-    description: `${describeScene(recipe)}\n\nPut it on to fall asleep, study or focus. ${len} of one continuous, calm scene.\n\n#spaceambience #sleepsounds #studymusic`,
-    tags: ['spaceship ambience', 'space ambience', 'sleep sounds', 'study ambience', 'white noise', 'planet view', 'sci-fi ambience', 'focus sounds'],
-    thumbnailText: 'ORBIT',
+    title: `${template.name} | Ambience for Sleep & Focus | ${len}`,
+    description: `${describeScene(recipe)}\n\nPut it on to fall asleep, study or focus. ${len} of one continuous, calm scene.\n\n#ambience #sleepsounds #studyambience`,
+    tags: ['ambience', 'sleep sounds', 'study ambience', 'relaxing sounds', 'focus sounds'],
+    thumbnailText: template.name.toUpperCase(),
   };
 }
 
@@ -140,7 +102,7 @@ export async function longFormCopyFromClaude(client: Anthropic, recipe: Recipe &
     }
     const raw = response.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
     try {
-      return Output.parse(JSON.parse(raw));
+      return LongFormCopySchema.parse(JSON.parse(raw));
     } catch (e) {
       lastError = e instanceof z.ZodError ? e.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') : (e as Error).message;
     }

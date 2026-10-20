@@ -187,6 +187,219 @@
       "license": "CC0-1.0"
     },
     {
+      "id": "velour_velvet",
+      "kind": "texture",
+      "use": "Night Train seat upholstery",
+      "files": [
+        "textures/velour_velvet/velour_velvet_arm_1k.jpg",
+        "textures/velour_velvet/velour_velvet_diff_1k.jpg",
+        "textures/velour_velvet/velour_velvet_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/velour_velvet",
+      "site": "Poly Haven",
+      "authors": [
+        "colormass",
+        "Rico Cilliers"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "black_walnut_veneer_01",
+      "kind": "texture",
+      "use": "Night Train wall panels",
+      "files": [
+        "textures/black_walnut_veneer_01/black_walnut_veneer_01_arm_2k.jpg",
+        "textures/black_walnut_veneer_01/black_walnut_veneer_01_diff_2k.jpg",
+        "textures/black_walnut_veneer_01/black_walnut_veneer_01_nor_gl_2k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/black_walnut_veneer_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Jenelle van Heerden"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "dirty_carpet",
+      "kind": "texture",
+      "use": "Night Train floor",
+      "files": [
+        "textures/dirty_carpet/dirty_carpet_arm_1k.jpg",
+        "textures/dirty_carpet/dirty_carpet_diff_1k.jpg",
+        "textures/dirty_carpet/dirty_carpet_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/dirty_carpet",
+      "site": "Poly Haven",
+      "authors": [
+        "Rohit Seervi"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "coast_sand_01",
+      "kind": "texture",
+      "use": "Deep Sea seabed sand",
+      "files": [
+        "textures/coast_sand_01/coast_sand_01_arm_2k.jpg",
+        "textures/coast_sand_01/coast_sand_01_diff_2k.jpg",
+        "textures/coast_sand_01/coast_sand_01_nor_gl_2k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/coast_sand_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "dark_rock",
+      "kind": "texture",
+      "use": "Deep Sea rocks",
+      "files": [
+        "textures/dark_rock/dark_rock_arm_1k.jpg",
+        "textures/dark_rock/dark_rock_diff_1k.jpg",
+        "textures/dark_rock/dark_rock_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/dark_rock",
+      "site": "Poly Haven",
+      "authors": [
+        "Amal Kumar"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "coral_gravel",
+      "kind": "texture",
+      "use": "Deep Sea reef floor",
+      "files": [
+        "textures/coral_gravel/coral_gravel_arm_2k.jpg",
+        "textures/coral_gravel/coral_gravel_diff_2k.jpg",
+        "textures/coral_gravel/coral_gravel_nor_gl_2k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/coral_gravel",
+      "site": "Poly Haven",
+      "authors": [
+        "Rob Tuytel"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rusty_painted_metal",
+      "kind": "texture",
+      "use": "Deep Sea porthole and station walls",
+      "files": [
+        "textures/rusty_painted_metal/rusty_painted_metal_arm_1k.jpg",
+        "textures/rusty_painted_metal/rusty_painted_metal_diff_1k.jpg",
+        "textures/rusty_painted_metal/rusty_painted_metal_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/rusty_painted_metal",
+      "site": "Poly Haven",
+      "authors": [
+        "Amal Kumar"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "vintage_suitcase",
+      "kind": "model",
+      "use": "Night Train luggage on the rack",
+      "files": [
+        "models/vintage_suitcase/textures/vintage_suitcase_01_arm_1k.jpg",
+        "models/vintage_suitcase/textures/vintage_suitcase_01_diff_1k.jpg",
+        "models/vintage_suitcase/textures/vintage_suitcase_01_nor_gl_1k.jpg",
+        "models/vintage_suitcase/textures/vintage_suitcase_02_arm_1k.jpg",
+        "models/vintage_suitcase/textures/vintage_suitcase_02_diff_1k.jpg",
+        "models/vintage_suitcase/textures/vintage_suitcase_02_nor_gl_1k.jpg",
+        "models/vintage_suitcase/vintage_suitcase.bin",
+        "models/vintage_suitcase/vintage_suitcase_1k.gltf"
+      ],
+      "source": "https://polyhaven.com/a/vintage_suitcase",
+      "site": "Poly Haven",
+      "authors": [
+        "Maximilian Schuster"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "throw_pillows_01",
+      "kind": "model",
+      "use": "Night Train pillows on the bunk",
+      "files": [
+        "models/throw_pillows_01/textures/throw_pillows_01_diff_1k.jpg",
+        "models/throw_pillows_01/textures/throw_pillows_01_nor_gl_1k.jpg",
+        "models/throw_pillows_01/textures/throw_pillows_01_rough_1k.jpg",
+        "models/throw_pillows_01/throw_pillows_01.bin",
+        "models/throw_pillows_01/throw_pillows_01_1k.gltf"
+      ],
+      "source": "https://polyhaven.com/a/throw_pillows_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Serhii Khromov"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "lambis_shell",
+      "kind": "model",
+      "use": "Deep Sea reef shell",
+      "files": [
+        "models/lambis_shell/lambis_shell.bin",
+        "models/lambis_shell/lambis_shell_1k.gltf",
+        "models/lambis_shell/textures/lambis_shell_arm_1k.jpg",
+        "models/lambis_shell/textures/lambis_shell_diff_1k.jpg",
+        "models/lambis_shell/textures/lambis_shell_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/lambis_shell",
+      "site": "Poly Haven",
+      "authors": [
+        "Kuutti Siitonen"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "industrial_wall_lamp",
+      "kind": "model",
+      "use": "Deep Sea station lamp",
+      "files": [
+        "models/industrial_wall_lamp/industrial_wall_lamp.bin",
+        "models/industrial_wall_lamp/industrial_wall_lamp_1k.gltf",
+        "models/industrial_wall_lamp/textures/industrial_wall_lamp_arm_1k.jpg",
+        "models/industrial_wall_lamp/textures/industrial_wall_lamp_diff_1k.jpg",
+        "models/industrial_wall_lamp/textures/industrial_wall_lamp_emissive_1k.jpg",
+        "models/industrial_wall_lamp/textures/industrial_wall_lamp_glass_arm_1k.jpg",
+        "models/industrial_wall_lamp/textures/industrial_wall_lamp_glass_diff_1k.jpg",
+        "models/industrial_wall_lamp/textures/industrial_wall_lamp_glass_nor_gl_1k.jpg",
+        "models/industrial_wall_lamp/textures/industrial_wall_lamp_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/industrial_wall_lamp",
+      "site": "Poly Haven",
+      "authors": [
+        "Kuutti Siitonen"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "modular_industrial_pipes_01",
+      "kind": "model",
+      "use": "Deep Sea station pipes",
+      "files": [
+        "models/modular_industrial_pipes_01/modular_industrial_pipes_01.bin",
+        "models/modular_industrial_pipes_01/modular_industrial_pipes_01_1k.gltf",
+        "models/modular_industrial_pipes_01/textures/modular_industrial_pipes_01_group01_arm_1k.jpg",
+        "models/modular_industrial_pipes_01/textures/modular_industrial_pipes_01_group01_diff_1k.jpg",
+        "models/modular_industrial_pipes_01/textures/modular_industrial_pipes_01_group01_nor_gl_1k.jpg",
+        "models/modular_industrial_pipes_01/textures/modular_industrial_pipes_01_group02_arm_1k.jpg",
+        "models/modular_industrial_pipes_01/textures/modular_industrial_pipes_01_group02_diff_1k.jpg",
+        "models/modular_industrial_pipes_01/textures/modular_industrial_pipes_01_group02_nor_gl_1k.jpg"
+      ],
+      "source": "https://polyhaven.com/a/modular_industrial_pipes_01",
+      "site": "Poly Haven",
+      "authors": [
+        "Jorge Camacho"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
       "id": "rain-window",
       "kind": "sound",
       "use": "Cabin rain bed",
@@ -455,6 +668,822 @@
       "title": "thunder",
       "authors": [
         "hifijohn"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-compartment",
+      "kind": "sound",
+      "use": "Night Train compartment bed, tunnel and bridge sounds",
+      "files": [
+        "audio/train-compartment-600.opus"
+      ],
+      "durationS": 600,
+      "derived": "600 s seamless loop from 228 s, filtered (highshelf=f=3500:g=-5), normalised to -23 LUFS",
+      "source": "https://freesound.org/people/HT4891/sounds/788565/",
+      "site": "Freesound",
+      "title": "Night Train",
+      "authors": [
+        "HT4891"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-tunnel-1",
+      "kind": "sound",
+      "use": "Night Train tunnels and bridges (processed)",
+      "files": [
+        "audio/train-tunnel-1.opus"
+      ],
+      "durationS": 30,
+      "derived": "clip 10–40 s of the original, filtered (bass=g=7:f=140,aecho=0.8:0.7:45|80:0.35|0.25), faded",
+      "source": "https://freesound.org/people/HT4891/sounds/788565/",
+      "site": "Freesound",
+      "title": "Night Train",
+      "authors": [
+        "HT4891"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-tunnel-2",
+      "kind": "sound",
+      "use": "Night Train tunnels and bridges (processed)",
+      "files": [
+        "audio/train-tunnel-2.opus"
+      ],
+      "durationS": 45,
+      "derived": "clip 50–95 s of the original, filtered (bass=g=7:f=140,aecho=0.8:0.7:45|80:0.35|0.25), faded",
+      "source": "https://freesound.org/people/HT4891/sounds/788565/",
+      "site": "Freesound",
+      "title": "Night Train",
+      "authors": [
+        "HT4891"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-tunnel-3",
+      "kind": "sound",
+      "use": "Night Train tunnels and bridges (processed)",
+      "files": [
+        "audio/train-tunnel-3.opus"
+      ],
+      "durationS": 60,
+      "derived": "clip 100–160 s of the original, filtered (bass=g=7:f=140,aecho=0.8:0.7:45|80:0.35|0.25), faded",
+      "source": "https://freesound.org/people/HT4891/sounds/788565/",
+      "site": "Freesound",
+      "title": "Night Train",
+      "authors": [
+        "HT4891"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-bridge-1",
+      "kind": "sound",
+      "use": "Night Train tunnels and bridges (processed)",
+      "files": [
+        "audio/train-bridge-1.opus"
+      ],
+      "durationS": 12,
+      "derived": "clip 160–172 s of the original, filtered (highpass=f=160,equalizer=f=850:t=q:w=1.2:g=6,aecho=0.6:0.6:9|17|23:0.5|0.4|0.3), faded",
+      "source": "https://freesound.org/people/HT4891/sounds/788565/",
+      "site": "Freesound",
+      "title": "Night Train",
+      "authors": [
+        "HT4891"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-bridge-2",
+      "kind": "sound",
+      "use": "Night Train tunnels and bridges (processed)",
+      "files": [
+        "audio/train-bridge-2.opus"
+      ],
+      "durationS": 12,
+      "derived": "clip 180–192 s of the original, filtered (highpass=f=160,equalizer=f=850:t=q:w=1.2:g=6,aecho=0.6:0.6:9|17|23:0.5|0.4|0.3), faded",
+      "source": "https://freesound.org/people/HT4891/sounds/788565/",
+      "site": "Freesound",
+      "title": "Night Train",
+      "authors": [
+        "HT4891"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-1",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-1.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 1.5850000000000002–1.9500000000000002 s of the original, faded",
+      "source": "https://freesound.org/people/ceejay/sounds/76078/",
+      "site": "Freesound",
+      "title": "Passenger Train on the run",
+      "authors": [
+        "ceejay"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-2",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-2.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 32.655–33.02 s of the original, faded",
+      "source": "https://freesound.org/people/ceejay/sounds/76078/",
+      "site": "Freesound",
+      "title": "Passenger Train on the run",
+      "authors": [
+        "ceejay"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-3",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-3.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 78.195–78.55999999999999 s of the original, faded",
+      "source": "https://freesound.org/people/ceejay/sounds/76078/",
+      "site": "Freesound",
+      "title": "Passenger Train on the run",
+      "authors": [
+        "ceejay"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-4",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-4.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 11.084999999999999–11.45 s of the original, faded",
+      "source": "https://freesound.org/people/ceejay/sounds/76078/",
+      "site": "Freesound",
+      "title": "Passenger Train on the run",
+      "authors": [
+        "ceejay"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-5",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-5.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 33.91–34.275 s of the original, faded",
+      "source": "https://freesound.org/people/ceejay/sounds/76078/",
+      "site": "Freesound",
+      "title": "Passenger Train on the run",
+      "authors": [
+        "ceejay"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-6",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-6.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 53.555–53.92 s of the original, faded",
+      "source": "https://freesound.org/people/ceejay/sounds/76078/",
+      "site": "Freesound",
+      "title": "Passenger Train on the run",
+      "authors": [
+        "ceejay"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-7",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-7.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 237.88500000000002–238.25 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/616533/",
+      "site": "Freesound",
+      "title": "120618 Train, interior, moving clacks rumbles, NYC.mp3",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-8",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-8.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 420.23–420.595 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/616533/",
+      "site": "Freesound",
+      "title": "120618 Train, interior, moving clacks rumbles, NYC.mp3",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-9",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-9.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 182.935–183.29999999999998 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/616533/",
+      "site": "Freesound",
+      "title": "120618 Train, interior, moving clacks rumbles, NYC.mp3",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-10",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-10.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 410.15500000000003–410.52000000000004 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/616533/",
+      "site": "Freesound",
+      "title": "120618 Train, interior, moving clacks rumbles, NYC.mp3",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-11",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-11.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 201.59–201.95499999999998 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/616533/",
+      "site": "Freesound",
+      "title": "120618 Train, interior, moving clacks rumbles, NYC.mp3",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "rail-click-12",
+      "kind": "sound",
+      "use": "Night Train wheel clicks",
+      "files": [
+        "audio/rail-click-12.opus"
+      ],
+      "durationS": 0.365,
+      "derived": "clip 270.555–270.92 s of the original, faded",
+      "source": "https://freesound.org/people/TRP/sounds/616533/",
+      "site": "Freesound",
+      "title": "120618 Train, interior, moving clacks rumbles, NYC.mp3",
+      "authors": [
+        "TRP"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "crossing-bell-1",
+      "kind": "sound",
+      "use": "Night Train level crossing (passing)",
+      "files": [
+        "audio/crossing-bell-1.opus"
+      ],
+      "durationS": 16,
+      "derived": "clip 1–17 s of the original, made to pass by, faded",
+      "source": "https://freesound.org/people/mycompasstv/sounds/457125/",
+      "site": "Freesound",
+      "title": "Railway Crossing Warning Bell / Signal",
+      "authors": [
+        "mycompasstv"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "crossing-bell-2",
+      "kind": "sound",
+      "use": "Night Train level crossing (passing)",
+      "files": [
+        "audio/crossing-bell-2.opus"
+      ],
+      "durationS": 16,
+      "derived": "clip 0.5–16.5 s of the original, made to pass by, faded",
+      "source": "https://freesound.org/people/mpaol2023/sounds/370824/",
+      "site": "Freesound",
+      "title": "Railway/Level Crossing Sond Effect",
+      "authors": [
+        "mpaol2023"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-horn-1",
+      "kind": "sound",
+      "use": "Night Train distant horn",
+      "files": [
+        "audio/train-horn-1.opus"
+      ],
+      "durationS": 21.2,
+      "derived": "clip 129.3–150.5 s of the original, filtered (lowpass=f=1400,lowpass=f=1400), faded",
+      "source": "https://freesound.org/people/felix.blume/sounds/667705/",
+      "site": "Freesound",
+      "title": "Train passing at 200 meters with loud horn, rail vibration, crickets and road hum, recorded at night in Pampa, Texas",
+      "authors": [
+        "felix.blume"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-horn-2",
+      "kind": "sound",
+      "use": "Night Train distant horn",
+      "files": [
+        "audio/train-horn-2.opus"
+      ],
+      "durationS": 12.5,
+      "derived": "clip 3.5–16 s of the original, filtered (lowpass=f=1400,lowpass=f=1400), faded",
+      "source": "https://freesound.org/people/PhilllChabbb/sounds/254270/",
+      "site": "Freesound",
+      "title": "Midnight train horn, with a dose of crickets.",
+      "authors": [
+        "PhilllChabbb"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "train-horn-3",
+      "kind": "sound",
+      "use": "Night Train distant horn",
+      "files": [
+        "audio/train-horn-3.opus"
+      ],
+      "durationS": 10.5,
+      "derived": "clip 19.5–30 s of the original, filtered (lowpass=f=1400,lowpass=f=1400), faded",
+      "source": "https://freesound.org/people/PhilllChabbb/sounds/254270/",
+      "site": "Freesound",
+      "title": "Midnight train horn, with a dose of crickets.",
+      "authors": [
+        "PhilllChabbb"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "deep-water",
+      "kind": "sound",
+      "use": "Deep Sea water bed",
+      "files": [
+        "audio/deep-water-300.opus"
+      ],
+      "durationS": 300,
+      "derived": "300 s seamless loop from 3 s, normalised to -24 LUFS",
+      "source": "https://freesound.org/people/Kinoton/sounds/393819/",
+      "site": "Freesound",
+      "title": "Underwater Ambience",
+      "authors": [
+        "Kinoton"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "station-hum",
+      "kind": "sound",
+      "use": "Deep Sea station hum (5.1 mixed to stereo)",
+      "files": [
+        "audio/station-hum-200.opus"
+      ],
+      "durationS": 200,
+      "derived": "200 s seamless loop from 15 s, normalised to -26 LUFS",
+      "source": "https://freesound.org/people/blaukreuz/sounds/465472/",
+      "site": "Freesound",
+      "title": "Submarine internal",
+      "authors": [
+        "blaukreuz"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "reef-shrimp",
+      "kind": "sound",
+      "use": "Deep Sea reef bed (snapping shrimp)",
+      "files": [
+        "audio/reef-shrimp-600.opus"
+      ],
+      "durationS": 600,
+      "derived": "600 s seamless loop from 15 s, right channel from 205 s, normalised to -25 LUFS",
+      "source": "https://freesound.org/people/KaleidacousticsAudio/sounds/630436/",
+      "site": "Freesound",
+      "title": "Underwater crackling sounds_Hydrophone.wav",
+      "authors": [
+        "KaleidacousticsAudio"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-1",
+      "kind": "sound",
+      "use": "Deep Sea hull groan",
+      "files": [
+        "audio/hull-creak-1.opus"
+      ],
+      "durationS": 7,
+      "derived": "clip 2.5–9.5 s of the original, faded",
+      "source": "https://freesound.org/people/Lewooz/sounds/514306/",
+      "site": "Freesound",
+      "title": "Sub Sul FONDO.mp3",
+      "authors": [
+        "Lewooz"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-2",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-2.opus"
+      ],
+      "durationS": 4.5,
+      "derived": "clip 1.5–6 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-3",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-3.opus"
+      ],
+      "durationS": 3,
+      "derived": "clip 8.5–11.5 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-4",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-4.opus"
+      ],
+      "durationS": 2.5,
+      "derived": "clip 12.5–15 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-5",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-5.opus"
+      ],
+      "durationS": 2.5,
+      "derived": "clip 26.5–29 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-6",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-6.opus"
+      ],
+      "durationS": 3,
+      "derived": "clip 41.5–44.5 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-7",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-7.opus"
+      ],
+      "durationS": 3,
+      "derived": "clip 49.5–52.5 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-8",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-8.opus"
+      ],
+      "durationS": 3,
+      "derived": "clip 63.5–66.5 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "hull-creak-9",
+      "kind": "sound",
+      "use": "Deep Sea hull creaks",
+      "files": [
+        "audio/hull-creak-9.opus"
+      ],
+      "durationS": 3,
+      "derived": "clip 76.5–79.5 s of the original, filtered (lowpass=f=5000), faded",
+      "source": "https://freesound.org/people/f_ilippo/sounds/59160/",
+      "site": "Freesound",
+      "title": "grincements_helvetia.aif",
+      "authors": [
+        "f_ilippo"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "bubbles-1",
+      "kind": "sound",
+      "use": "Deep Sea bubble bursts",
+      "files": [
+        "audio/bubbles-1.opus"
+      ],
+      "durationS": 7,
+      "derived": "clip 55.5–62.5 s of the original, faded",
+      "source": "https://freesound.org/people/Halion/sounds/17341/",
+      "site": "Freesound",
+      "title": "Water.wav",
+      "authors": [
+        "Halion"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "bubbles-2",
+      "kind": "sound",
+      "use": "Deep Sea bubble bursts",
+      "files": [
+        "audio/bubbles-2.opus"
+      ],
+      "durationS": 6.5,
+      "derived": "clip 65–71.5 s of the original, faded",
+      "source": "https://freesound.org/people/Halion/sounds/17341/",
+      "site": "Freesound",
+      "title": "Water.wav",
+      "authors": [
+        "Halion"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "bubbles-3",
+      "kind": "sound",
+      "use": "Deep Sea bubble bursts",
+      "files": [
+        "audio/bubbles-3.opus"
+      ],
+      "durationS": 7,
+      "derived": "clip 86.5–93.5 s of the original, faded",
+      "source": "https://freesound.org/people/Halion/sounds/17341/",
+      "site": "Freesound",
+      "title": "Water.wav",
+      "authors": [
+        "Halion"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "bubbles-4",
+      "kind": "sound",
+      "use": "Deep Sea bubble bursts",
+      "files": [
+        "audio/bubbles-4.opus"
+      ],
+      "durationS": 4,
+      "derived": "clip 124.8–128.8 s of the original, faded",
+      "source": "https://freesound.org/people/Halion/sounds/17341/",
+      "site": "Freesound",
+      "title": "Water.wav",
+      "authors": [
+        "Halion"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "bubbles-5",
+      "kind": "sound",
+      "use": "Deep Sea bubble bursts",
+      "files": [
+        "audio/bubbles-5.opus"
+      ],
+      "durationS": 8,
+      "derived": "clip 130–138 s of the original, faded",
+      "source": "https://freesound.org/people/Halion/sounds/17341/",
+      "site": "Freesound",
+      "title": "Water.wav",
+      "authors": [
+        "Halion"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "bubbles-6",
+      "kind": "sound",
+      "use": "Deep Sea bubble bursts",
+      "files": [
+        "audio/bubbles-6.opus"
+      ],
+      "durationS": 6.2,
+      "derived": "clip 139.8–146 s of the original, faded",
+      "source": "https://freesound.org/people/Halion/sounds/17341/",
+      "site": "Freesound",
+      "title": "Water.wav",
+      "authors": [
+        "Halion"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "whale-1",
+      "kind": "sound",
+      "use": "Deep Sea whale song (humpback phrases)",
+      "files": [
+        "audio/whale-1.opus"
+      ],
+      "durationS": 11,
+      "derived": "clip 1–12 s of the original, faded",
+      "source": "https://freesound.org/people/KEVOY/sounds/82325/",
+      "site": "Freesound",
+      "title": "Diving with whales.wav",
+      "authors": [
+        "KEVOY"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "whale-2",
+      "kind": "sound",
+      "use": "Deep Sea whale song (humpback phrases)",
+      "files": [
+        "audio/whale-2.opus"
+      ],
+      "durationS": 12,
+      "derived": "clip 12–24 s of the original, faded",
+      "source": "https://freesound.org/people/KEVOY/sounds/82325/",
+      "site": "Freesound",
+      "title": "Diving with whales.wav",
+      "authors": [
+        "KEVOY"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "whale-3",
+      "kind": "sound",
+      "use": "Deep Sea whale song (humpback phrases)",
+      "files": [
+        "audio/whale-3.opus"
+      ],
+      "durationS": 11.8,
+      "derived": "clip 24–35.8 s of the original, faded",
+      "source": "https://freesound.org/people/KEVOY/sounds/82325/",
+      "site": "Freesound",
+      "title": "Diving with whales.wav",
+      "authors": [
+        "KEVOY"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "whale-4",
+      "kind": "sound",
+      "use": "Deep Sea whale song (humpback phrases)",
+      "files": [
+        "audio/whale-4.opus"
+      ],
+      "durationS": 11,
+      "derived": "clip 36–47 s of the original, faded",
+      "source": "https://freesound.org/people/KEVOY/sounds/82325/",
+      "site": "Freesound",
+      "title": "Diving with whales.wav",
+      "authors": [
+        "KEVOY"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "whale-5",
+      "kind": "sound",
+      "use": "Deep Sea whale song (humpback phrases)",
+      "files": [
+        "audio/whale-5.opus"
+      ],
+      "durationS": 10.5,
+      "derived": "clip 47–57.5 s of the original, faded",
+      "source": "https://freesound.org/people/KEVOY/sounds/82325/",
+      "site": "Freesound",
+      "title": "Diving with whales.wav",
+      "authors": [
+        "KEVOY"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "sonar-1",
+      "kind": "sound",
+      "use": "Deep Sea sonar ping",
+      "files": [
+        "audio/sonar-1.opus"
+      ],
+      "durationS": 1.45,
+      "derived": "clip 0–1.45 s of the original, faded",
+      "source": "https://freesound.org/people/Peter_Gross/sounds/12677/",
+      "site": "Freesound",
+      "title": "Sonar_pings.ogg",
+      "authors": [
+        "Peter_Gross"
+      ],
+      "license": "CC0-1.0"
+    },
+    {
+      "id": "sonar-2",
+      "kind": "sound",
+      "use": "Deep Sea sonar ping",
+      "files": [
+        "audio/sonar-2.opus"
+      ],
+      "durationS": 2.21,
+      "derived": "clip 1.45–3.66 s of the original, faded",
+      "source": "https://freesound.org/people/Peter_Gross/sounds/12677/",
+      "site": "Freesound",
+      "title": "Sonar_pings.ogg",
+      "authors": [
+        "Peter_Gross"
       ],
       "license": "CC0-1.0"
     }

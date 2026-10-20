@@ -99,6 +99,24 @@ export const orbitalViewport: Template<OrbitalViewportParams, OrbitState> = {
     // The room-tone bed is 2 minutes; whole 10-minute steps keep the choice the same as Cabin Storm.
     loopStepS: 600,
     reverb: 0.25,
+    describe: (p: OrbitalViewportParams) => {
+      const names: Record<string, string> = { earthlike: 'an Earth-like planet', ocean: 'an ocean world', desert: 'a desert planet', ice: 'an ice world', gas: 'a gas giant' };
+      return [
+        `Looking out of a spaceship's viewport at ${names[p.planet] ?? 'a planet'} turning slowly below${p.rings ? ', with rings' : ''}, clouds drifting.`,
+        p.moons ? `${p.moons} moon${p.moons === 1 ? '' : 's'} in the sky.` : '',
+        p.shootingStarsPerHour > 0 ? 'Now and then a shooting star.' : '',
+        `${p.cabinLight} cabin lighting, quiet consoles.`,
+        "Sound: the ship's low hum and room tone, with the odd soft console blip.",
+      ]
+        .filter(Boolean)
+        .join(' ');
+    },
+    fallbackCopy: (p: OrbitalViewportParams, len: string) => ({
+      title: `Spaceship Ambience | Orbiting a Planet | Deep Space Sounds for Sleep & Focus | ${len}`,
+      description: `${orbitalViewport.longForm!.describe!(p)}\n\nPut it on to fall asleep, study or focus. ${len} of one continuous, calm scene.\n\n#spaceambience #sleepsounds #studymusic`,
+      tags: ['spaceship ambience', 'space ambience', 'sleep sounds', 'study ambience', 'white noise', 'planet view', 'sci-fi ambience', 'focus sounds'],
+      thumbnailText: 'ORBIT',
+    }),
     thumbnailAt: (s: OrbitState) => {
       const best = s.meteors.reduce<Meteor | null>((a, b) => (!a || b.bright > a.bright ? b : a), null);
       return best ? best.t + best.dur * 0.45 : s.loopS / 3;

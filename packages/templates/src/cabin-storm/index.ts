@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { AmbientBed, AudioEventInput, DramaScore, Template } from '@sim/engine';
 import { Rng } from '@sim/engine';
 import { scheduleTimes, wrap } from '../ambient/loop';
+import { clipPicker } from '../ambient/pool';
 import { drawCabin, preloadCabin } from './view3d';
 import { loadSound } from '../ambient/assets';
 
@@ -81,24 +82,6 @@ const THUNDER = {
 /** Thunder within this many seconds of its flash (≈ 2 km) is a close clap. */
 const CLOSE_DELAY_S = 6;
 
-/** Each pool played in a shuffled order, reshuffled when used up (never the same clip twice in a row). */
-function clipPicker(rng: Rng, pool: string[]) {
-  let order: string[] = [];
-  let last = '';
-  return () => {
-    if (!order.length) {
-      order = [...pool];
-      for (let i = order.length - 1; i > 0; i--) {
-        const j = rng.int(0, i);
-        [order[i], order[j]] = [order[j], order[i]];
-      }
-      if (order[order.length - 1] === last && order.length > 1) [order[0], order[order.length - 1]] = [order[order.length - 1], order[0]];
-    }
-    last = order.pop()!;
-    return last;
-  };
-}
-
 function schedule(p: CabinStormParams, L: number, rng: Rng): Pick<CabinState, 'strikes' | 'cues'> {
   const strikes: Strike[] = scheduleTimes(rng, L, p.lightningPerHour / 3600, MIN_STRIKE_GAP_S).map((t) => {
     const distanceKm = rng.range(0.6, 7);
@@ -139,6 +122,26 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
     defaultLoopS: 30 * 60,
     // The rain and fire beds are 10-minute loops.
     loopStepS: 600,
+    describe: (p: CabinStormParams) =>
+      [
+        `Inside a log cabin at night: a stone fireplace with a crackling fire (${p.fire > 0.6 ? 'a big fire' : 'a gentle fire'}), between two big windows.`,
+        p.precipitation === 'snow'
+          ? `Outside it is snowing${p.storm > 0.6 ? ' hard, wind gusting' : ''}.`
+          : `Outside, ${p.storm > 0.7 ? 'a heavy' : p.storm > 0.4 ? 'a steady' : 'a light'} rainstorm, rain running down the glass.`,
+        p.lightningPerHour > 0 ? `Lightning about ${Math.round(p.lightningPerHour)} times an hour, with thunder.` : 'No thunder.',
+        'Sound: real recordings of the fire, rain on the windows, wind and thunder.',
+      ].join(' '),
+    fallbackCopy: (p: CabinStormParams, len: string) => {
+      const snow = p.precipitation === 'snow';
+      return {
+        title: snow ? `Cozy Cabin in a Snowstorm | Crackling Fire & Wind Sounds for Sleep | ${len}` : `Cozy Cabin Thunderstorm | Crackling Fire & Rain Sounds for Sleep | ${len}`,
+        description: `${cabinStorm.longForm!.describe!(p)}\n\nPut it on to fall asleep, study, read or work. ${len} of one continuous, calm scene.\n\n#${snow ? 'snowstorm' : 'rainsounds'} #fireplace #sleepsounds`,
+        tags: snow
+          ? ['snowstorm sounds', 'cozy cabin', 'fireplace sounds', 'crackling fire', 'wind sounds', 'sleep sounds', 'study ambience', 'winter ambience']
+          : ['rain sounds', 'thunderstorm sounds', 'cozy cabin', 'fireplace sounds', 'crackling fire', 'rain for sleeping', 'sleep sounds', 'study ambience'],
+        thumbnailText: snow ? 'SNOWY CABIN' : 'STORMY NIGHT',
+      };
+    },
     thumbnailAt: (s: CabinState) => {
       const best = s.strikes.reduce<Strike | null>((a, b) => (!a || b.strength > a.strength ? b : a), null);
       return best ? best.t + 0.04 : s.loopS / 2;
