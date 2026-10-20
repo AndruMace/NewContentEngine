@@ -1,11 +1,12 @@
 /**
- * The water outside the porthole: its colour by depth and view direction, distance fog, sunlight from
- * above (and the reef's caustics), the station's floodlight, shafts of light, marine snow, the
- * floodlight's beam and bubbles from the vent. WATER is the shared GLSL every outside shader uses.
+ * The water outside the dome: its colour by depth and view direction, distance fog, sunlight from
+ * above (and the reef's caustics), the submarine's twin headlights, shafts of light, marine snow
+ * streaming towards us, the headlights' beams and bubbles venting from the hull. WATER is the shared
+ * GLSL every outside shader uses.
  */
 import { THREE } from '../three-layer';
 import { CAUSTICS, HASH, NOISE4 } from '../ambient/glsl';
-import { FLOOD, SEABED_Y, WALL } from './layout';
+import { LAMPS, NOSE_Z, SEABED_Y } from './layout';
 import type { Depth } from './schedule';
 
 /** Per depth: water colour looking up and down, fog density, sunlight, shafts, caustics. */
@@ -26,8 +27,9 @@ uniform float uSun;
 uniform vec3 uSunCol;
 uniform float uCaust;
 uniform float uFloodOn;
-uniform vec3 uFloodPos;
-uniform vec3 uFloodDir;
+uniform vec3 uFloodPos;   // the left headlight
+uniform vec3 uFloodPos2;  // the right one
+uniform vec3 uFloodDir;   // where both point
 uniform vec3 uEye;
 uniform vec2 uTC;
 uniform float uPhase;
@@ -38,13 +40,14 @@ vec3 fogged(vec3 col, vec3 p) {
   float dist = length(d);
   return mix(col, waterColor(d / dist), 1.0 - exp(-dist * uDensity));
 }
-// How much of the floodlight reaches p (a soft cone, falling off with distance).
-float flood(vec3 p) {
-  vec3 d = p - uFloodPos;
+// How much of the headlights reaches p (two soft cones, falling off with distance).
+float lampCone(vec3 p, vec3 at) {
+  vec3 d = p - at;
   float dist = length(d);
   float c = dot(d / dist, uFloodDir);
-  return uFloodOn * smoothstep(0.80, 0.96, c) / (1.0 + 0.035 * dist * dist);
+  return smoothstep(0.84, 0.97, c) / (1.0 + 0.03 * dist * dist);
 }
+float flood(vec3 p) { return uFloodOn * 0.6 * (lampCone(p, uFloodPos) + lampCone(p, uFloodPos2)); }
 // Light on a surface at p facing n: sunlight from above (with caustics), the floodlight.
 vec3 lightAt(vec3 p, vec3 n) {
   float up = max(0.0, n.y * 0.75 + 0.25);
@@ -52,7 +55,7 @@ vec3 lightAt(vec3 p, vec3 n) {
   float sun = uSun * up * exp(-max(0.0, 2.0 - p.y) * 0.04);
   float caus = uCaust > 0.0 ? 0.4 + 1.6 * causticsLoop(p.xz * 0.55 + vec2(p.y * 0.2), uTC) : 1.0;
   vec3 l = uSunCol * sun * caus;
-  vec3 toF = normalize(uFloodPos - p);
+  vec3 toF = normalize(0.5 * (uFloodPos + uFloodPos2) - p);
   l += vec3(1.0, 0.94, 0.82) * flood(p) * max(0.0, dot(n, toF) * 0.8 + 0.2) * 2.4;
   return l;
 }
@@ -60,7 +63,8 @@ vec3 lightAt(vec3 p, vec3 n) {
 
 export function waterUniforms(depth: Depth, eye: THREE.Vector3) {
   const z = ZONES[depth];
-  const fp = new THREE.Vector3(...FLOOD.pos);
+  const fp = new THREE.Vector3(...LAMPS.pos[0]);
+  const fp2 = new THREE.Vector3(...LAMPS.pos[1]);
   return {
     uTop: { value: new THREE.Vector3(...z.top) },
     uBottom: { value: new THREE.Vector3(...z.bottom) },
@@ -70,7 +74,8 @@ export function waterUniforms(depth: Depth, eye: THREE.Vector3) {
     uCaust: { value: z.caustics },
     uFloodOn: { value: 0 },
     uFloodPos: { value: fp },
-    uFloodDir: { value: new THREE.Vector3(...FLOOD.aim).sub(fp).normalize() },
+    uFloodPos2: { value: fp2 },
+    uFloodDir: { value: new THREE.Vector3(...LAMPS.aim).sub(fp.clone().add(fp2).multiplyScalar(0.5)).normalize() },
     uEye: { value: eye.clone() },
     uTC: { value: new THREE.Vector2() },
     uPhase: { value: 0 },
@@ -127,14 +132,14 @@ ${WATER}
 attribute vec4 aSnow;   // speed (cycles/loop), phase, size, drift
 uniform vec3 uBox0;
 uniform vec3 uBox1;
-uniform float uS;       // the station's drift (m): the snow slides past
+uniform float uS;       // how far we have travelled (m): the snow streams towards us
 varying float vLight;
 varying vec3 vWorld;
 void main() {
   vec3 size = uBox1 - uBox0;
   vec3 p = position;
   p.y = uBox0.y + mod(p.y - uBox0.y - aSnow.x * size.y * uPhase - aSnow.y * size.y, size.y);
-  p.x = uBox0.x + mod(p.x - uBox0.x - uS, size.x);
+  p.z = uBox0.z + mod(p.z - uBox0.z + uS, size.z);
   p.x += 0.25 * sin(6.28318 * (floor(aSnow.w * 4.0) + 1.0) * uPhase + aSnow.y * 20.0);
   vec4 w = modelMatrix * vec4(p, 1.0);
   vWorld = w.xyz;
@@ -162,8 +167,10 @@ const BEAM_FRAG = /* glsl */ `
 ${WATER}
 varying vec3 vWorld;
 void main() {
-  float f = flood(vWorld);
-  vec3 col = vec3(0.6, 0.62, 0.6) * f * 0.12;
+  // Light scattered by the water in the beams: none right at the lamps (they're under the dome's
+  // rim), building up a metre or two out, then fading with distance.
+  float near = smoothstep(0.8, 3.5, length(vWorld - 0.5 * (uFloodPos + uFloodPos2)));
+  vec3 col = vec3(0.6, 0.62, 0.6) * flood(vWorld) * 0.07 * near;
   gl_FragColor = vec4(col * exp(-length(vWorld - uEye) * uDensity * 0.5), 1.0);
 }
 `;
@@ -175,13 +182,13 @@ attribute vec3 aBubble;   // emit fraction, size, wobble phase
 uniform float uT;         // seconds since the stream started (-1: none)
 uniform float uEmitS;     // how long it emits
 uniform vec3 uFrom;
-uniform float uV;         // the station's drift speed: bubbles trail behind as they rise
+uniform float uV;         // our speed: bubbles stream back past the dome as they rise
 varying float vAlpha;
 varying vec3 vWorld;
 void main() {
   float age = uT - aBubble.x * uEmitS;
   vAlpha = uT < 0.0 || age < 0.0 || age > 8.0 ? 0.0 : smoothstep(0.0, 0.3, age) * smoothstep(8.0, 6.5, age);
-  vec3 p = uFrom + vec3(0.12 * sin(age * 5.0 + aBubble.z * 6.28) + (aBubble.z - 0.5) * 0.3 - uV * age, age * (0.7 + aBubble.y * 2.0), -0.1 * aBubble.z);
+  vec3 p = uFrom + vec3(0.12 * sin(age * 5.0 + aBubble.z * 6.28) + (aBubble.z - 0.5) * 0.3, age * (0.7 + aBubble.y * 2.0), -0.1 * aBubble.z + uV * age);
   vec4 w = vec4(p, 1.0);
   vWorld = p;
   vec4 mv = viewMatrix * w;
@@ -206,7 +213,7 @@ void main() {
 
 export interface Water {
   group: THREE.Group;
-  /** snow: 0..1 how much marine snow shows; flood: whether the floodlight's beam shows. */
+  /** snow: 0..1 how much marine snow shows; flood: whether the headlights' beams show. */
   update(o: { t: number; L: number; s: number; v: number; bubbleT: number; bubbleEmitS: number; bubbleFrom: [number, number, number]; snow: number; flood: boolean }): void;
 }
 
@@ -224,7 +231,7 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { seed: number 
     for (let i = 0; i < 6; i++) {
       const u = { ...U, uStrength: { value: z.rays * (0.5 + 0.5 * ((i * 37) % 10) / 10) }, uSeed: { value: i * 3.1 + opts.seed * 0.001 } };
       const m = new THREE.Mesh(new THREE.PlaneGeometry(14, 30), new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: RAYS_FRAG, uniforms: u, ...add, side: THREE.DoubleSide }));
-      m.position.set(-10 + i * 4, 8, WALL - 8 - i * 4);
+      m.position.set(-10 + i * 4, 8, NOSE_Z - 7 - i * 4);
       m.rotation.set(0, 0.3 * (i % 2 ? 1 : -1), 0.25);
       m.renderOrder = 4;
       group.add(m);
@@ -239,9 +246,10 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { seed: number 
   const attr = new Float32Array(n * 4);
   let s = opts.seed >>> 0 || 1;
   const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
-  // 20 m across: the drift per loop is a whole number of these, so the snow comes round exactly.
-  const box0 = new THREE.Vector3(-10, SEABED_Y, WALL - 16);
-  const box1 = new THREE.Vector3(10, 7, WALL - 0.4);
+  // 20 m deep, just beyond the dome: the travel per loop is a whole number of these, so the snow
+  // comes round exactly.
+  const box0 = new THREE.Vector3(-9, SEABED_Y, NOSE_Z - 20.15);
+  const box1 = new THREE.Vector3(9, 7, NOSE_Z - 0.15);
   for (let i = 0; i < n; i++) {
     const zz = rnd();
     pos[i * 3] = box0.x + (box1.x - box0.x) * rnd();
@@ -264,20 +272,23 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { seed: number 
   group.add(snow);
   let snowFor = -1;
 
-  // The floodlight's beam: a long cone from the lamp to the seabed (shown when the floodlight is on).
-  let beam: THREE.Mesh | null = null;
+  // The headlights' beams: long cones through the water ahead (shown when the lights are on).
+  const beams: THREE.Mesh[] = [];
   if (z.flood > 0) {
-    const from = new THREE.Vector3(...FLOOD.pos);
-    const to = new THREE.Vector3(...FLOOD.aim);
-    const len = from.distanceTo(to) * 1.4;
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(len * 0.38, len, 32, 1, true), new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: BEAM_FRAG, uniforms: U, ...add, side: THREE.DoubleSide }));
-    // Point the cone's apex at the lamp, opening towards the seabed.
-    const dir = to.clone().sub(from).normalize();
-    cone.position.copy(from).addScaledVector(dir, len / 2);
-    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
-    cone.renderOrder = 5;
-    group.add(cone);
-    beam = cone;
+    const to = new THREE.Vector3(...LAMPS.aim);
+    for (const at of LAMPS.pos) {
+      const from = new THREE.Vector3(...at);
+      const len = from.distanceTo(to) * 1.5;
+      // Wider than the light itself: the shader's soft cone sets the beam's edge, not the mesh.
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(len * 0.75, len, 48, 1, true), new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: BEAM_FRAG, uniforms: U, ...add, side: THREE.DoubleSide }));
+      // The cone's apex at the lamp, opening ahead.
+      const dir = to.clone().sub(from).normalize();
+      cone.position.copy(from).addScaledVector(dir, len / 2);
+      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
+      cone.renderOrder = 5;
+      group.add(cone);
+      beams.push(cone);
+    }
   }
 
   // Bubbles: 90 per stream.
@@ -302,7 +313,7 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { seed: number 
     group,
     update({ t, L, s, v, bubbleT, bubbleEmitS, bubbleFrom, snow: snowAmount, flood }) {
       geo.setDrawRange(0, shown(snowAmount));
-      if (beam) beam.visible = flood;
+      for (const b of beams) b.visible = flood;
       snowU.uS.value = s;
       bubbleU.uV.value = v;
       if (snowFor !== L) {

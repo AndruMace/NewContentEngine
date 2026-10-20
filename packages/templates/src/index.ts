@@ -24,10 +24,12 @@ import { cabinStorm } from './cabin-storm';
 import { orbitalViewport } from './orbital-viewport';
 import { nightTrain } from './night-train';
 import { deepSea } from './deep-sea';
+import { whoWouldWin } from './who-would-win';
+export { DUELS as WHO_WOULD_WIN_DUELS, HORDES as WHO_WOULD_WIN_HORDES, creatureById, matchupId } from './who-would-win/roster';
 
-export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, cabinStorm, orbitalViewport, nightTrain, deepSea, FOURIER_GUESS };
+export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, whoWouldWin, cabinStorm, orbitalViewport, nightTrain, deepSea, FOURIER_GUESS };
 
-export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d];
+export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, whoWouldWin];
 
 /**
  * Long-form ambient templates (hours-long background videos). Kept out of TEMPLATES on purpose: that

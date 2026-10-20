@@ -1,14 +1,17 @@
 /**
- * Deep Sea Observatory, in metres. The camera stands in the station looking at a big round porthole
- * in the hull (z = WALL), instrument panels either side; outside, the seabed lies below
- * (y = SEABED_Y) and runs off into the dark. The station drifts sideways (towards +x).
+ * Deep Sea Submarine, in metres. The camera is the pilot's eye in a small submersible's cockpit,
+ * looking forward (towards -z) out of a big acrylic dome; the console curves across below it, panels
+ * run up either side, switches overhead. The submarine cruises forward a few metres above the
+ * seabed, its twin headlights under the dome lighting the water ahead.
  */
-export const WALL = -1.2;
-export const PORT = { x: 0, y: 1.4, r: 0.86, depth: 0.34 };
-export const CAMERA = { pos: [0.08, 1.4, 0.85] as const, target: [0.0, 1.37, WALL] as const, fov: 50 };
-/** The instrument panels left and right of the porthole (x ranges on the hull). */
-export const PANELS = { left: [-1.6, -1.12], right: [1.12, 1.6] } as const;
-/** The seabed, below and ahead (it slopes gently away). */
-export const SEABED_Y = -4.2;
-/** The floodlight on the hull below the porthole, pointing down and out over the seabed. */
-export const FLOOD = { pos: [0.0, 0.4, WALL - 0.4] as const, aim: [0.0, SEABED_Y, WALL - 11] as const };
+/** The dome: a hemisphere on the hull's front ring (centre on the ring's plane, bulging to -z). */
+export const DOME = { c: [0, 1.2, -0.5] as const, r: 0.98 };
+/** The dome's furthest point: nothing outside comes closer than this. */
+export const NOSE_Z = DOME.c[2] - DOME.r;
+export const CAMERA = { pos: [0, 1.22, 0.72] as const, target: [0, 1.08, -3] as const, fov: 64 };
+/** The seabed, below the submarine. */
+export const SEABED_Y = -5;
+/** Twin headlights under the dome, aimed ahead and down. */
+export const LAMPS = { pos: [[-0.85, 0.32, -1.25] as const, [0.85, 0.32, -1.25] as const], aim: [0, -0.6, -16] as const };
+/** The console: across the bottom of the dome, close to the pilot. */
+export const CONSOLE = { y: 0.86, z0: -0.46, z1: 0.3, halfW: 1.0 };

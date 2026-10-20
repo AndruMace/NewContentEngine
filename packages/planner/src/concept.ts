@@ -1,6 +1,6 @@
 import { paramsJsonSchema, type Rng, type Template } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
-import { FOURIER_GUESS, getTemplate } from '@sim/templates';
+import { FOURIER_GUESS, WHO_WOULD_WIN_DUELS, WHO_WOULD_WIN_HORDES, creatureById, getTemplate, matchupId } from '@sim/templates';
 import { HOOK_STYLES, type Arm } from './arms';
 import { uploadText, type Platform } from './platforms';
 
@@ -334,6 +334,41 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  'who-would-win': [
+    {
+      param: 'mode',
+      values: ['duel', 'horde'],
+      guide: {
+        duel: 'Mode: duel (fixed for this video). One on one, from a VS card to a knockout and an instant replay. "Who wins?" and "pick a side" angles work. Never predict or hint at the winner: the fight decides it (favourites usually but not always win). In the CTA, {winner} is the winner\'s name.',
+        horde:
+          'Mode: horde (fixed for this video). One big fighter against a stream of a smaller kind let in one after another; the question is how many it takes. Invite number guesses ("Guess the number 👇"). Never give or hint at the answer. In the CTA, {count} is how many it took.',
+      },
+    },
+    {
+      param: 'matchup',
+      values: WHO_WOULD_WIN_DUELS.map(([a, b]) => matchupId(a, b)),
+      when: { param: 'mode', values: ['duel'] },
+      guide: Object.fromEntries(
+        WHO_WOULD_WIN_DUELS.map(([a, b]) => {
+          const [A, B] = [creatureById(a).label, creatureById(b).label];
+          return [matchupId(a, b), `Matchup: ${A} vs ${B} (fixed for this video). Name both in the title and captions, e.g. "${A} vs ${B}: who wins?". Never predict the winner.`];
+        }),
+      ),
+      hook: Object.fromEntries(WHO_WOULD_WIN_DUELS.map(([a, b]) => [matchupId(a, b), `${creatureById(a).label} vs ${creatureById(b).label}: who wins?`])),
+    },
+    {
+      param: 'matchup',
+      values: WHO_WOULD_WIN_HORDES.map(([a, b]) => matchupId(a, b)),
+      when: { param: 'mode', values: ['horde'] },
+      guide: Object.fromEntries(
+        WHO_WOULD_WIN_HORDES.map(([a, b]) => {
+          const [A, B] = [creatureById(a).label, creatureById(b).plural];
+          return [matchupId(a, b), `Matchup: one ${A} against ${B} (fixed for this video). Ask how many ${B.toLowerCase()} it takes to beat a ${A.toLowerCase()} in the title and captions. Never give or hint at the number.`];
+        }),
+      ),
+      hook: Object.fromEntries(WHO_WOULD_WIN_HORDES.map(([a, b]) => [matchupId(a, b), `How many ${creatureById(b).plural} to beat a ${creatureById(a).label}?`])),
+    },
+  ],
   'bounce-keys': [
     {
       param: 'style',
@@ -474,6 +509,7 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'trick-shot': ['🎯', '😱', '🤯'],
   'marble-machine': ['🎵', '⚙️', '👀'],
   'rube-goldberg': ['🔗', '😮\u200d💨', '⚙️'],
+  'who-would-win': ['⚔️', '🤔', '🔥'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
 

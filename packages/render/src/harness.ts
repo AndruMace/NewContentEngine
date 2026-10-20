@@ -21,6 +21,7 @@ const ASSET_TYPES: Record<string, string> = {
   jpg: 'image/jpeg',
   png: 'image/png',
   gltf: 'model/gltf+json',
+  glb: 'model/gltf-binary',
   bin: 'application/octet-stream',
   opus: 'audio/ogg',
   ogg: 'audio/ogg',

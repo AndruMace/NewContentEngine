@@ -42,7 +42,7 @@ describe('ambient asset manifest', () => {
   it('is all CC0, each with its source and authors', () => {
     for (const a of manifest.assets) {
       expect(a.license, a.id).toBe('CC0-1.0');
-      expect(a.source, a.id).toMatch(/^https:\/\/(polyhaven\.com|freesound\.org)\//);
+      expect(a.source, a.id).toMatch(/^https:\/\/(polyhaven\.com|freesound\.org|poly\.pizza)\//);
       expect(a.authors.length, a.id).toBeGreaterThan(0);
     }
   });

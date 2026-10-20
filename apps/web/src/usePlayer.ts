@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Recipe, Runner } from '@sim/engine';
+import { parseParams, type Recipe, type Runner } from '@sim/engine';
 import { createBus, scheduleEvent, type SynthBus } from '@sim/audio';
+import { getTemplate, setAssetBase } from '@sim/templates';
 import { makeRunner } from './recipe';
+
+// Templates that draw third-party models (assets/ambient) load them from the server.
+setAssetBase('/ambient-assets/');
 
 type Status = 'ready' | 'playing' | 'paused' | 'done';
 
@@ -39,10 +43,20 @@ export function usePlayer(canvasRef: React.RefObject<HTMLCanvasElement | null>, 
 
   useEffect(() => {
     stop();
-    runnerRef.current = makeRunner(recipe);
-    setStatus('ready');
-    setTime(0);
-    draw();
+    // No runner until the template's files (models) are loaded: play() waits for one.
+    runnerRef.current = null;
+    let cancelled = false;
+    const template = getTemplate(recipe.templateId);
+    void Promise.resolve(template.preload?.(parseParams(template, recipe.params))).then(() => {
+      if (cancelled) return;
+      runnerRef.current = makeRunner(recipe);
+      setStatus('ready');
+      setTime(0);
+      draw();
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recipeKey]);
 

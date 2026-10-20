@@ -5,23 +5,26 @@ import { drawSea, preloadSea } from './view3d';
 import { SOUNDS, seaSchedule, type SeaSchedule } from './schedule';
 
 /**
- * Long-form ambient: looking out of a deep-sea station's porthole. Three depths: the twilight zone
- * (dim blue water, marine snow, jellyfish, a fish school, now and then a whale far off, singing), the
- * abyss (near black: the station's floodlight on the seabed, bioluminescence, an anglerfish), or a
- * sunlit reef (light rippling over coral and sand, shoals of fish).
+ * Long-form ambient: the pilot's seat of a small submarine cruising forward through the ocean, a big
+ * acrylic dome in front, the console's green instruments glowing in the dark. Three depths: the
+ * twilight zone (lanternfish, comb jellies, squid, a siphonophore, now and then a manta, a blue shark,
+ * a whale far off, singing), the abyss (anglerfish, a gulper eel, a vampire squid, glowing comb
+ * jellies and siphonophores, bioluminescent sparkles, all lit by the headlights), or a sunlit reef
+ * (shoals of reef fish, sea turtles, rays, a reef shark, light rippling over coral and sand). A few
+ * jellyfish everywhere, swimming properly.
  *
- * init() lays out the loop: creatures on closed paths with whole laps per loop, scheduled visitors,
- * and the sounds (hull creaks, bubbles from the vent, whale song, sonar). Each frame is drawn from t.
+ * init() lays out the loop (schedule.ts): how far the submarine travels, which animals live there and
+ * how often they pass, the visitors and the sounds. Each frame is drawn from t.
  */
 export const deepSeaSchema = z.object({
   depth: z.enum(['twilight', 'abyss', 'reef']).default('twilight').meta({ title: 'Depth (twilight zone, abyss or sunlit reef)' }),
   life: z.number().min(0).max(1).default(0.6).meta({ title: 'Marine life' }),
   whalesPerHour: z.number().min(0).max(12).default(3).meta({ title: 'Whales per hour (not in the abyss)' }),
-  floodlight: z.boolean().default(true).meta({ title: "Station floodlight (the abyss's only light)" }),
+  floodlight: z.boolean().default(true).meta({ title: "Headlights (the abyss's only light)" }),
   snow: z.number().min(0).max(1).default(0.6).meta({ title: 'Marine snow' }),
   sonarPerHour: z.number().min(0).max(60).default(10).meta({ title: 'Sonar pings per hour' }),
   creaks: z.number().min(0).max(1).default(0.5).meta({ title: 'Hull creaks' }),
-  drift: z.number().min(0).max(1).default(0.4).meta({ title: 'Drift speed (the station glides sideways)' }),
+  drift: z.number().min(0).max(1).default(0.4).meta({ title: 'Cruising speed' }),
 });
 
 export type DeepSeaParams = z.infer<typeof deepSeaSchema>;
@@ -60,14 +63,14 @@ const NAME = { twilight: 'the twilight zone', abyss: 'the abyss', reef: 'a sunli
 
 export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
   id: 'deep-sea',
-  name: 'Deep Sea Observatory',
+  name: 'Deep Sea Submarine',
   family: 'kinetic',
-  description: 'Long-form ambient: a deep-sea station porthole, jellyfish drifting in the dark, a whale singing far off.',
+  description: 'Long-form ambient: a submarine cockpit cruising through the deep, a big glass dome, sea life passing in the dark.',
   schema: deepSeaSchema,
   format: { width: 1920, height: 1080, fps: 30 },
   longForm: {
     beds,
-    // Read per frame; depth, life, drift and the sounds are in the scene and its schedule.
+    // Read per frame; depth, life, speed and the sounds are in the scene and its schedule.
     liveParams: ['floodlight', 'snow'],
     minLoopS: 20 * 60,
     maxLoopS: 60 * 60,
@@ -77,25 +80,23 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
     reverb: 0.35,
     thumbnailAt: (s: DeepSeaState) => {
       const w = s.sched.whales[0];
-      if (w) return (w.t0 + w.t1) / 2;
-      const a = s.sched.anglers[0];
-      return a ? (a.t0 + a.t1) / 2 : s.loopS / 4;
+      return w ? (w.t0 + w.t1) / 2 : s.loopS / 4;
     },
     describe: (p: DeepSeaParams) =>
       [
-        `Looking out of a big round, riveted porthole from a deep-sea vessel gliding slowly sideways through ${NAME[p.depth]}.`,
+        `From the pilot's seat of a small submarine cruising slowly forward through ${NAME[p.depth]}, looking out through a big glass dome.`,
         p.depth === 'twilight'
-          ? `Dim blue water, marine snow drifting down, jellyfish pulsing past${p.whalesPerHour > 0 ? ', and now and then a whale gliding by far off in the gloom, singing' : ''}.`
+          ? `Dim blue water and marine snow streaming past; shoals of lanternfish, shimmering comb jellies, squid jetting by, a long glowing siphonophore, the odd manta ray or blue shark${p.whalesPerHour > 0 ? ', and now and then a whale far off in the gloom, singing' : ''}.`
           : p.depth === 'abyss'
-            ? `Near-black water: the station's floodlight on the seabed, glowing jellyfish, an anglerfish's lure, tiny flashes of bioluminescence.`
-            : `Sunlight rippling over sand and coral, shafts of light from the surface, shoals of fish turning together.`,
-        `Inside it is almost dark: painted steel, green-lit dials and meters, a glowing sonar screen, condensation on the glass.`,
-        `Sound: deep underwater ambience and the station's low hum${p.creaks > 0 ? ', the hull creaking now and then' : ''}, bubbles from a vent${p.depth !== 'abyss' && p.whalesPerHour > 0 ? ', humpback whale song' : ''}${p.sonarPerHour > 0 ? ', a soft sonar ping' : ''}.`,
+            ? `Near-black water lit only by the submarine's headlights: anglerfish, a gulper eel, a vampire squid, glowing comb jellies and siphonophores, tiny flashes of bioluminescence.`
+            : `Sunlight rippling over sand and coral, shafts of light from the surface, shoals of reef fish, sea turtles, rays gliding past, a reef shark.`,
+        `A few jellyfish pulse by. Inside it is almost dark: green-lit dials and meters, a glowing sonar screen.`,
+        `Sound: deep underwater ambience and the submarine's low hum${p.creaks > 0 ? ', the hull creaking now and then' : ''}, bubbles venting${p.depth !== 'abyss' && p.whalesPerHour > 0 ? ', humpback whale song' : ''}${p.sonarPerHour > 0 ? ', a soft sonar ping' : ''}.`,
       ].join(' '),
     fallbackCopy: (p: DeepSeaParams, len: string) => {
       const scene = p.depth === 'reef' ? 'Coral Reef' : p.depth === 'abyss' ? 'Deep Abyss' : 'Deep Ocean';
       return {
-        title: `${scene} Ambience | Underwater Station Porthole, ${p.depth === 'abyss' ? 'Deep Sea' : 'Whale'} Sounds for Sleep | ${len}`,
+        title: `${scene} Submarine Ambience | Underwater Cockpit, ${p.depth === 'abyss' ? 'Deep Sea' : 'Whale'} Sounds for Sleep | ${len}`,
         description: `${deepSea.longForm!.describe!(p)}\n\nPut it on to fall asleep, study, read or focus. ${len} of one continuous, calm scene.\n\n#underwatersounds #oceanambience #sleepsounds`,
         tags: ['underwater ambience', 'deep sea sounds', 'ocean sounds', p.depth === 'reef' ? 'coral reef' : 'whale sounds', 'submarine ambience', 'sleep sounds', 'study ambience', 'relaxing sounds'],
         thumbnailText: p.depth === 'abyss' ? 'THE ABYSS' : p.depth === 'reef' ? 'CORAL REEF' : 'DEEP OCEAN',
@@ -114,7 +115,8 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
     const L = loopS || 30 * 60;
     const look = rng.int(1, 1_000_000);
     const sched = seaSchedule(
-      { depth: params.depth, life: params.life, whalesPerHour: params.whalesPerHour, sonarPerHour: params.sonarPerHour, creaks: params.creaks, speed: 0.1 + 0.9 * params.drift },
+      // Cruising speed 0.3–1.5 m/s (about half a knot to three knots).
+      { depth: params.depth, life: params.life, whalesPerHour: params.whalesPerHour, sonarPerHour: params.sonarPerHour, creaks: params.creaks, speed: 0.3 + 1.2 * params.drift },
       L,
       rng,
     );

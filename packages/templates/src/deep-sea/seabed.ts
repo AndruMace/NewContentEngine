@@ -1,18 +1,19 @@
 /**
  * The seabed: sand dunes (or coral gravel on the reef) running off into the dark, rocks half sunk in
  * it, and on the reef coral and shells. Everything is lit by the WATER kit (sunlight from above,
- * caustics, the floodlight) and fades into the water with distance.
+ * caustics, the headlights) and fades into the water with distance.
  *
- * The station drifts sideways, so the seabed slides past: its dunes are computed on the GPU at ring
- * position x + s (waves with a whole number of cycles over the drift D, so it repeats), and rocks,
- * coral and shells are recycled through slots (schedule.ts), each pass a different shape and size.
+ * The submarine cruises forward, so the seabed flows towards us: its dunes are computed on the GPU at
+ * ring position s - z along the travel (waves with a whole number of cycles over the travel D, so it
+ * repeats), and rocks, coral and shells are recycled through slots (schedule.ts), each pass a
+ * different shape, size and place.
  */
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { THREE } from '../three-layer';
 import { model, textureSet } from '../ambient/assets';
-import { SEABED_Y, WALL } from './layout';
+import { SEABED_Y } from './layout';
 import { WATER, type WaterUniforms } from './water';
-import { hash2, slotPass, slotX, type Depth } from './schedule';
+import { hash2, slotPass, slotZ, type Depth } from './schedule';
 
 const VERT = /* glsl */ `
 attribute vec3 color;
@@ -97,16 +98,15 @@ function vnoise(x: number, y: number, z: number, seed: number) {
   return out;
 }
 
-/** Wavenumbers along x for the dunes: whole cycles over the drift D (≈ 0.45 and 0.17 rad/m). */
+/** Wavenumbers along the travel for the dunes: whole cycles over D (≈ 0.45 and 0.17 rad/m). */
 export const duneK = (D: number): [number, number] => [0.45, 0.17].map((k) => (2 * Math.PI * Math.max(1, Math.round((k * D) / (2 * Math.PI)))) / D) as [number, number];
 
-/** Height of the seabed at ring position x (along the drift) and z: gentle dunes falling away. */
-export function seabedY(x: number, z: number, k: [number, number]) {
-  const d = WALL - z;
-  return SEABED_Y + 0.35 * Math.sin(x * k[0] + z * 0.2) + 0.25 * Math.sin(x * k[1] - z * 0.33 + 1.3) - 0.035 * Math.max(0, d - 6);
+/** Height of the seabed at ring position p (along the travel) and across it at x: gentle dunes. */
+export function seabedY(p: number, x: number, k: [number, number]) {
+  return SEABED_Y + 0.35 * Math.sin(p * k[0] + x * 0.2) + 0.25 * Math.sin(p * k[1] - x * 0.33 + 1.3);
 }
 
-/** The same dunes on the GPU (the seabed mesh slides under the station). */
+/** The same dunes on the GPU (the seabed mesh stays under the submarine; the dunes flow through it). */
 const SEABED_VERT = /* glsl */ `
 uniform float uS;
 uniform vec2 uK;
@@ -117,15 +117,15 @@ varying vec2 vUv;
 varying vec3 vColor;
 void main() {
   vec3 p = position;
-  float xr = p.x + uS;
-  float d = ${WALL.toFixed(3)} - p.z;
-  float a1 = xr * uK.x + p.z * 0.2;
-  float a2 = xr * uK.y - p.z * 0.33 + 1.3;
-  p.y = ${SEABED_Y.toFixed(3)} + 0.35 * sin(a1) + 0.25 * sin(a2) - 0.035 * max(0.0, d - 6.0);
-  float dx = 0.35 * uK.x * cos(a1) + 0.25 * uK.y * cos(a2);
-  float dz = 0.35 * 0.2 * cos(a1) - 0.25 * 0.33 * cos(a2) + (d > 6.0 ? 0.035 : 0.0);
-  vNormal = normalize(vec3(-dx, 1.0, -dz));
-  vUv = vec2(xr, -p.z);
+  float pr = uS - p.z;
+  float a1 = pr * uK.x + p.x * 0.2;
+  float a2 = pr * uK.y - p.x * 0.33 + 1.3;
+  p.y = ${SEABED_Y.toFixed(3)} + 0.35 * sin(a1) + 0.25 * sin(a2);
+  float dp = 0.35 * uK.x * cos(a1) + 0.25 * uK.y * cos(a2);
+  float dx = 0.35 * 0.2 * cos(a1) - 0.25 * 0.33 * cos(a2);
+  // dy/dz = -dy/dp (the ring position runs against z).
+  vNormal = normalize(vec3(-dx, 1.0, dp));
+  vUv = vec2(p.x, pr);
   vColor = vec3(1.0);
   vLocal = p;
   vec4 w = modelMatrix * vec4(p, 1.0);
@@ -189,8 +189,8 @@ interface Item {
   slot: number;
   W: number;
   pass: number;
-  setup(k: number): { d: number; scale: number; ry: number; lift: number };
-  d: number;
+  setup(k: number): { x: number; scale: number; ry: number; lift: number };
+  x: number;
   lift: number;
 }
 
@@ -211,7 +211,7 @@ export function buildSeabed(depth: Depth, U: WaterUniforms, seed: number, D: num
   // (0.35, 0.4 repeats per metre) repeat a whole number of times over D (a multiple of 60 m).
   const g = new THREE.PlaneGeometry(220, 220, 220, 220);
   g.rotateX(-Math.PI / 2);
-  g.translate(0, 0, WALL - 108);
+  g.translate(0, 0, -100);
   const bedTint = depth === 'abyss' ? [0.55, 0.55, 0.6] : reef ? [1.0, 0.95, 0.85] : [0.75, 0.8, 0.85];
   sand.map.wrapS = sand.map.wrapT = THREE.RepeatWrapping;
   const bedU = { uS: { value: 0 }, uK: { value: new THREE.Vector2(k[0], k[1]) } };
@@ -222,7 +222,7 @@ export function buildSeabed(depth: Depth, U: WaterUniforms, seed: number, D: num
   const items: Item[] = [];
   const add = (obj: THREE.Object3D, slot: number, W: number, setup: Item['setup']) => {
     group.add(obj);
-    items.push({ obj, slot, W, pass: -1, setup, d: 10, lift: 0 });
+    items.push({ obj, slot, W, pass: -1, setup, x: 10, lift: 0 });
   };
 
   // Rocks: 30 slots on a 60 m window, eight shapes; each pass a new shape, size, depth and turn.
@@ -235,9 +235,8 @@ export function buildSeabed(depth: Depth, U: WaterUniforms, seed: number, D: num
     add(mesh, (i + r() * 0.8) / 30, 60, (kk) => {
       const h = (salt: number) => hash2(seed + i * 977 + salt, kk);
       mesh.geometry = rockGeos[Math.floor(h(1) * rockGeos.length)];
-      const d = 7 + Math.pow(h(2), 0.7) * 40;
-      const size = 0.5 + h(3) * 2.2 * (0.5 + d / 50);
-      return { d, scale: size, ry: h(4) * Math.PI * 2, lift: size * 0.1 };
+      const size = 0.5 + h(3) * 2.4;
+      return { x: (h(2) - 0.5) * 2 * (2 + 26 * h(5)), scale: size, ry: h(4) * Math.PI * 2, lift: size * 0.1 };
     });
   }
 
@@ -251,7 +250,7 @@ export function buildSeabed(depth: Depth, U: WaterUniforms, seed: number, D: num
       add(mesh, (i + r() * 0.8) / 60, 40, (kk) => {
         const h = (salt: number) => hash2(seed + i * 613 + salt, kk + 7);
         mesh.geometry = coralGeos[Math.floor(h(1) * coralGeos.length)];
-        return { d: 5 + Math.pow(h(2), 0.8) * 28, scale: 1.5 + h(3) * 3, ry: h(4) * 6.28, lift: -0.05 };
+        return { x: (h(2) - 0.5) * 2 * (1 + 15 * h(5)), scale: 1.5 + h(3) * 3, ry: h(4) * 6.28, lift: -0.05 };
       });
     }
     // A few shells on the sand.
@@ -266,7 +265,7 @@ export function buildSeabed(depth: Depth, U: WaterUniforms, seed: number, D: num
       const sh = shell.clone(true);
       add(sh, i / 3 + r() * 0.2, 60, (kk) => {
         const h = (salt: number) => hash2(seed + i * 31 + salt, kk + 3);
-        return { d: 6 + h(1) * 8, scale: 1.8 + h(2), ry: h(3) * 6.28, lift: 0.02 };
+        return { x: (h(1) - 0.5) * 12, scale: 1.8 + h(2), ry: h(3) * 6.28, lift: 0.02 };
       });
     }
   }
@@ -276,20 +275,19 @@ export function buildSeabed(depth: Depth, U: WaterUniforms, seed: number, D: num
     update(s) {
       bedU.uS.value = s;
       for (const it of items) {
-        const x = slotX(it.slot, it.W, s);
+        const z = slotZ(it.slot, it.W, s);
         const kk = slotPass(it.slot, it.W, s, D);
         if (kk !== it.pass) {
           const o = it.setup(kk);
           it.obj.scale.setScalar(o.scale);
           it.obj.rotation.y = o.ry;
-          it.d = o.d;
+          it.x = o.x;
           it.lift = o.lift;
           it.pass = kk;
         }
-        // Only what could be in view (the porthole sees about ±0.45 of the distance to either side).
-        const z = WALL - it.d;
-        it.obj.visible = Math.abs(x) < 4 + it.d * 0.6;
-        if (it.obj.visible) it.obj.position.set(x, seabedY(x + s, z, k) + it.lift, z);
+        // Only what could be in view: ahead of us, and within the view's width at that distance.
+        it.obj.visible = z < 4 && Math.abs(it.x) < 6 - z * 0.8;
+        if (it.obj.visible) it.obj.position.set(it.x, seabedY(s - z, it.x, k) + it.lift, z);
       }
     },
   };

@@ -1,9 +1,11 @@
 /**
- * Third-party files for the long-form templates (assets/ambient, all CC0, listed in manifest.json):
- * textures, glTF models and recordings, loaded once before rendering (Template.preload) and then
- * looked up synchronously while drawing. Browser only: headless runs never touch them.
+ * Third-party files for the long-form templates and Who Would Win's creatures (assets/ambient, all
+ * CC0, listed in manifest.json): textures, glTF models and recordings, loaded once before rendering
+ * (Template.preload) and then looked up synchronously while drawing. Browser only: headless runs
+ * never touch them.
  */
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { THREE } from '../three-layer';
 
 let base = 'assets/';
@@ -88,6 +90,35 @@ export function model(id: string): THREE.Group {
   const m = models.get(id);
   if (!m) throw new Error(`Model not loaded: ${id}`);
   return m.clone(true);
+}
+
+const creatures = new Map<string, { scene: THREE.Group; clips: THREE.AnimationClip[] }>();
+
+/** A rigged, animated model: models/creatures/<name>.glb (see scripts/build-creatures.ts). */
+export function loadCreature(name: string) {
+  const path = `models/creatures/${name}.glb`;
+  return once(path, async () => {
+    const gltf = await new GLTFLoader().loadAsync(base + path);
+    gltf.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        // Animated limbs swing outside the bind pose's bounds.
+        m.frustumCulled = false;
+      }
+    });
+    creatures.set(name, { scene: gltf.scene, clips: gltf.animations });
+  });
+}
+
+/**
+ * A fresh copy of a loaded creature with its own skeleton (a plain clone would share the original's
+ * bones), and its clips by name. Geometry and materials are shared. Throws if not preloaded.
+ */
+export function creature(name: string): { root: THREE.Object3D; clips: Map<string, THREE.AnimationClip> } {
+  const c = creatures.get(name);
+  if (!c) throw new Error(`Creature not loaded: ${name}`);
+  return { root: cloneSkinned(c.scene), clips: new Map(c.clips.map((clip) => [clip.name, clip])) };
 }
 
 /**
