@@ -24,6 +24,7 @@ export const nightTrainSchema = z.object({
   tunnelsPerHour: z.number().min(0).max(10).default(2).meta({ title: 'Tunnels per hour' }),
   horn: z.number().min(0).max(1).default(0.5).meta({ title: 'Horn volume' }),
   lamp: z.number().min(0).max(1).default(0.5).meta({ title: 'Lamp brightness' }),
+  facing: z.enum(['backward', 'forward']).default('backward').meta({ title: 'Seat (facing backward or forward)' }),
 });
 
 export type NightTrainParams = z.infer<typeof nightTrainSchema>;
@@ -66,6 +67,8 @@ export const nightTrain: Template<NightTrainParams, NightTrainState> = {
   format: { width: 1920, height: 1080, fps: 30 },
   longForm: {
     beds,
+    // Read per frame (and by the beds); speed, track and the features are in the timetable.
+    liveParams: ['weather', 'precip', 'townLights', 'lamp'],
     minLoopS: 20 * 60,
     maxLoopS: 60 * 60,
     defaultLoopS: 30 * 60,
@@ -118,6 +121,7 @@ export const nightTrain: Template<NightTrainParams, NightTrainState> = {
         tunnelsPerHour: params.tunnelsPerHour,
         bridgesPerHour: params.bridgesPerHour,
         horn: params.horn,
+        dir: params.facing === 'forward' ? -1 : 1,
       },
       L,
       rng,

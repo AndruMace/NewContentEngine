@@ -30,6 +30,8 @@ uniform vec2 uFlow;        // unit direction running drops travel, on the pane
 uniform vec2 uRunRange;    // extent of the pane along the flow (min, max of -dot(m, uFlow))
 uniform float uRunSpeed;
 uniform float uDropScale; // drop size (1: seen from across a room; smaller close up)
+uniform float uCreep;     // drop cells per loop the sitting beads creep along the flow (0: still)
+uniform float uRunDensity; // how many running drops (1: a window in the rain)
 
 // A drop's shading: its rim darkens, its far edge catches light (it's a tiny lens).
 void drop(vec2 d, float r, vec2 lightDir, inout float cover, inout float glint, inout float rim) {
@@ -50,8 +52,15 @@ void main() {
 
   if (uSnow < 0.5) {
     // Sitting drops: a 5 cm grid (larger than life: from across the room real drops vanish), only
-    // some cells wet at any time, in a range of sizes.
+    // some cells wet at any time, in a range of sizes. On a moving window the wind pushes them along
+    // the flow: the grid is laid in the flow's frame and slides a whole number of cells per loop.
     vec2 cell = m / 0.05;
+    vec2 beadLight = fireDir;
+    if (uCreep > 0.0) {
+      vec2 rf = vec2(dot(m, vec2(-uFlow.y, uFlow.x)), -dot(m, uFlow));
+      cell = (rf + vec2(0.0, uCreep * 0.05 * uPhase)) / 0.05;
+      beadLight = normalize(vec2(dot(fireDir, vec2(-uFlow.y, uFlow.x)), -dot(fireDir, uFlow)));
+    }
     vec2 id = floor(cell);
     for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
       vec2 c = id + vec2(float(i), float(j));
@@ -64,7 +73,9 @@ void main() {
       if (h2 > 0.05 + 0.2 * uRain || alive <= 0.0) continue;
       vec2 ctr = c + 0.5 + (vec2(hash12(c + 3.1), hash12(c + 5.7)) - 0.5) * 0.7;
       float r = (0.16 + 0.3 * pow(hash12(c + 9.2), 2.0)) * alive;
-      drop(cell - ctr, r, fireDir, cover, glint, rim);
+      // Wind-blown beads stretch a little along the flow.
+      if (uCreep > 0.0) drop((cell - ctr) * vec2(1.0, 0.72), r, beadLight, cover, glint, rim);
+      else drop(cell - ctr, r, fireDir, cover, glint, rim);
     }
     // Running drops: one per 5 cm column, sliding along the flow a whole number of times per loop.
     // Worked out in a frame turned so the flow runs towards -y (for falling drops it is the pane's).
@@ -72,7 +83,7 @@ void main() {
     float colW = 0.05;
     float cx = floor(r.x / colW);
     float hc = hash12(vec2(cx, 41.0));
-    if (hc < 0.05 + 0.2 * uRain) {
+    if (hc < (0.05 + 0.2 * uRain) * uRunDensity) {
       float speed = (0.04 + 0.08 * hash12(vec2(cx, 7.0))) * uRunSpeed; // pane lengths per second
       float cyc = max(1.0, floor(speed * uLoop + 0.5));
       float y = 1.0 - fract(hash12(vec2(cx, 3.0)) + cyc * uPhase);   // 1 = start, running
@@ -135,6 +146,10 @@ export interface RainGlassOptions {
   runSpeed?: number;
   /** Drop size (1: right for a window across a room; smaller for one close by). */
   dropScale?: number;
+  /** A moving window: sitting beads creep along the flow at this speed (m/s; default 0, still). */
+  creep?: number;
+  /** More (or fewer) running drops (default 1). */
+  runDensity?: number;
 }
 
 export interface Glass {
@@ -176,6 +191,8 @@ export function buildRainGlass(opts: RainGlassOptions): Glass {
         uRunRange: { value: new THREE.Vector2(Math.min(...along), Math.max(...along)) },
         uRunSpeed: { value: opts.runSpeed ?? 1 },
         uDropScale: { value: ds },
+        uCreep: { value: 0 },
+        uRunDensity: { value: opts.runDensity ?? 1 },
       },
       transparent: true,
       depthWrite: false,
@@ -197,6 +214,8 @@ export function buildRainGlass(opts: RainGlassOptions): Glass {
         u.uFlash.value = flash;
         u.uLight.value = light;
         u.uSnow.value = snow ? 1 : 0;
+        // Whole 5 cm cells (in drop-size units) per loop, so the beads come round exactly.
+        u.uCreep.value = opts.creep ? Math.max(1, Math.round((opts.creep * L) / (0.05 * ds))) : 0;
       }
     },
   };

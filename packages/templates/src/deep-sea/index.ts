@@ -38,18 +38,18 @@ export interface DeepSeaState {
 const BEDS = {
   water: 'audio/deep-water-300.opus',
   hum: 'audio/station-hum-200.opus',
-  reef: 'audio/reef-shrimp-600.opus',
 } as const;
-const BED_LENGTH_S: Record<string, number> = { [BEDS.water]: 300, [BEDS.hum]: 200, [BEDS.reef]: 600 };
+const BED_LENGTH_S: Record<string, number> = { [BEDS.water]: 300, [BEDS.hum]: 200 };
 
-/** The water's low rumble and the station's hum; on the reef, the crackle of snapping shrimp. */
-function beds(p: DeepSeaParams): AmbientBed[] {
-  const out: AmbientBed[] = [
-    { sound: BEDS.water, gain: p.depth === 'reef' ? 0.5 : 0.9, swell: { depth: 0.2, cycles: [2, 6, 11] } },
+/**
+ * The water's low rumble and the station's hum, at every depth. (A reef's snapping-shrimp crackle
+ * was tried and dropped: real, but far too busy to relax to.)
+ */
+function beds(_p: DeepSeaParams): AmbientBed[] {
+  return [
+    { sound: BEDS.water, gain: 0.9, swell: { depth: 0.2, cycles: [2, 6, 11] } },
     { sound: BEDS.hum, gain: 0.45, pan: 0.15, swell: { depth: 0.08, cycles: [3, 9] } },
   ];
-  if (p.depth === 'reef') out.push({ sound: BEDS.reef, gain: 0.7, swell: { depth: 0.25, cycles: [3, 7, 13] } });
-  return out;
 }
 
 function oneShots(p: DeepSeaParams): string[] {
@@ -67,10 +67,12 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
   format: { width: 1920, height: 1080, fps: 30 },
   longForm: {
     beds,
+    // Read per frame; depth, life, drift and the sounds are in the scene and its schedule.
+    liveParams: ['floodlight', 'snow'],
     minLoopS: 20 * 60,
     maxLoopS: 60 * 60,
     defaultLoopS: 30 * 60,
-    // The water bed is 5 minutes, the hum 200 s, the reef 10: whole 10-minute steps suit them all.
+    // The water bed is 5 minutes and the hum 200 s: whole 10-minute steps suit both.
     loopStepS: 600,
     reverb: 0.35,
     thumbnailAt: (s: DeepSeaState) => {
@@ -88,7 +90,7 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
             ? `Near-black water: the station's floodlight on the seabed, glowing jellyfish, an anglerfish's lure, tiny flashes of bioluminescence.`
             : `Sunlight rippling over sand and coral, shafts of light from the surface, shoals of fish turning together.`,
         `Inside it is almost dark: painted steel, green-lit dials and meters, a glowing sonar screen, condensation on the glass.`,
-        `Sound: deep underwater ambience and the station's low hum${p.creaks > 0 ? ', the hull creaking now and then' : ''}, bubbles from a vent${p.depth === 'reef' ? ', the crackle of reef shrimp' : ''}${p.depth !== 'abyss' && p.whalesPerHour > 0 ? ', humpback whale song' : ''}${p.sonarPerHour > 0 ? ', a soft sonar ping' : ''}.`,
+        `Sound: deep underwater ambience and the station's low hum${p.creaks > 0 ? ', the hull creaking now and then' : ''}, bubbles from a vent${p.depth !== 'abyss' && p.whalesPerHour > 0 ? ', humpback whale song' : ''}${p.sonarPerHour > 0 ? ', a soft sonar ping' : ''}.`,
       ].join(' '),
     fallbackCopy: (p: DeepSeaParams, len: string) => {
       const scene = p.depth === 'reef' ? 'Coral Reef' : p.depth === 'abyss' ? 'Deep Abyss' : 'Deep Ocean';

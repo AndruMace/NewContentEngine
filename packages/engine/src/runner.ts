@@ -224,6 +224,12 @@ function engagementCues(specs: OverlaySpec[], nudge: string, nudgeY?: number): O
   return cues;
 }
 
+/** Seeds worth trying in a seed search for these params (raw params are parsed first). */
+export function searchBudgetOf(template: Template, params: Record<string, unknown> | undefined, fallback = 400): number {
+  const b = template.searchBudget;
+  return typeof b === 'function' ? b(parseParams(template, params ?? {})) : (b ?? fallback);
+}
+
 /** JSON Schema of a template's params, for UI controls and LLM tool schemas. */
 export function paramsJsonSchema(template: Template): Record<string, any> {
   return z.toJSONSchema(template.schema, { io: 'input' }) as Record<string, any>;

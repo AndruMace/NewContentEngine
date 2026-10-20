@@ -45,11 +45,10 @@ const view = sceneCache((s: DeepSeaState) => {
   const eye = new THREE.Vector3(...CAMERA.pos);
   const depth = s.p.depth;
   const U = waterUniforms(depth, eye);
-  U.uFloodOn.value = s.p.floodlight ? ZONES[depth].flood : 0;
 
   const station = buildStation();
   scene.add(station.group);
-  const water = buildWater(depth, U, { snow: s.p.snow, flood: s.p.floodlight, seed: s.look });
+  const water = buildWater(depth, U, { seed: s.look });
   scene.add(water.group);
   const seabed = buildSeabed(depth, U, s.look, s.sched.D);
   scene.add(seabed.group);
@@ -108,7 +107,9 @@ export function drawSea(rc: RenderCtx, s: DeepSeaState) {
   v.life.update(t, L, drifted);
   // Bubbles: the stream running now, if any.
   const b = s.sched.bubbles.find((p) => passAt(p, t));
-  v.water.update({ t, L, s: drifted, v: s.sched.v, bubbleT: b ? t - b.t0 : -1, bubbleEmitS: b ? b.t1 - b.t0 - 8 : 1, bubbleFrom: b ? b.from : [0, 0, 0] });
+  // The floodlight and the snow are read every frame (the preview changes them live).
+  v.U.uFloodOn.value = s.p.floodlight ? ZONES[s.p.depth].flood : 0;
+  v.water.update({ t, L, s: drifted, v: s.sched.v, bubbleT: b ? t - b.t0 : -1, bubbleEmitS: b ? b.t1 - b.t0 - 8 : 1, bubbleFrom: b ? b.from : [0, 0, 0], snow: s.p.snow, flood: s.p.floodlight });
   v.glass.update({ t, L, rain: 0.35, flash: 0, light: 0.6, snow: false });
 
   // Needles wander a little, lamps blink slowly, the sonar sweeps (all whole cycles per loop).

@@ -87,7 +87,7 @@ async function viaServer(): Promise<boolean> {
 
 async function inProcess() {
   if (a.dry) process.env.SIM_PLANNER = 'mock';
-  const { DEFAULT_BATCH_SETTINGS, getKv } = await import('./db');
+  const { savedBatchSettings } = await import('./db');
   const { RenderScheduler } = await import('./scheduler');
   const { SearchPool } = await import('./searchPool');
   const { BatchRunner } = await import('./batch');
@@ -96,7 +96,7 @@ async function inProcess() {
   const pool = new SearchPool();
   const runner = new BatchRunner(scheduler, pool);
   scheduler.start();
-  const batch = runner.start({ ...DEFAULT_BATCH_SETTINGS, ...getKv('batchSettings', {}), ...settings } as never);
+  const batch = runner.start({ ...savedBatchSettings(), ...settings } as never);
   console.log(`Started batch ${batch.id} in-process${a.dry ? ' (dry run: mock planner)' : ''}.`);
   runner.on('changed', (id: string) => id === batch.id && report(batchSnapshot(id, runner.eta(id)) as Snapshot));
   await new Promise<void>((resolve) => runner.on('finished', (id: string) => id === batch.id && resolve()));

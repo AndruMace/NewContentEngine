@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { Rng, type Recipe } from '@sim/engine';
+import { Rng, searchBudgetOf, type Recipe } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 import { claudeAvailable, coerceParams, planConcepts, type Concept } from '@sim/planner';
@@ -190,7 +190,7 @@ export class BatchRunner extends EventEmitter {
   /** Seed search for a concept, then queue its render. Falls back to default params if nothing finishes. */
   async searchAndQueue(batchId: string, c: ConceptRow, opts: { start?: number; kind?: RenderRow['kind'] } = {}): Promise<RenderRow> {
     const template = getTemplate(c.concept.templateId);
-    const budget = template.searchBudget ?? 400;
+    const budget = searchBudgetOf(template, c.concept.params);
     const start = opts.start ?? (hashSeed(c.id) % 100_000);
     let concept = c.concept;
     let results = await this.pool.search(recipeFor(concept, 0), { count: budget, targetS: concept.targetS, start });

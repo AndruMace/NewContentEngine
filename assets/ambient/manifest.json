@@ -1097,23 +1097,6 @@
       "license": "CC0-1.0"
     },
     {
-      "id": "reef-shrimp",
-      "kind": "sound",
-      "use": "Deep Sea reef bed (snapping shrimp)",
-      "files": [
-        "audio/reef-shrimp-600.opus"
-      ],
-      "durationS": 600,
-      "derived": "600 s seamless loop from 15 s, right channel from 205 s, normalised to -25 LUFS",
-      "source": "https://freesound.org/people/KaleidacousticsAudio/sounds/630436/",
-      "site": "Freesound",
-      "title": "Underwater crackling sounds_Hydrophone.wav",
-      "authors": [
-        "KaleidacousticsAudio"
-      ],
-      "license": "CC0-1.0"
-    },
-    {
       "id": "hull-creak-1",
       "kind": "sound",
       "use": "Deep Sea hull groan",

@@ -37,9 +37,11 @@ uniform float uTown;     // 0..1 how many lights
 uniform float uWin;      // 0..1 our window's light falling outside
 uniform vec4 uFeat[${MAX_FEATURES}]; // kind, start, end (m, relative to the window: x on the planes), seed
 uniform vec2 uTC;        // time circle (clouds)
+uniform float uDir;      // which way the train runs across the window: +1 to the right, -1 left
 
 // Along-track position (m) of plane x, and a hash per cell of size c that repeats over the ring.
-float along(float x) { return x + uS; }
+// Everything is laid out along the track, so turning the direction of travel mirrors it all.
+float along(float x) { return uDir * x + uS; }
 float cellId(float a, float c) { return mod(floor(a / c), uD / c); }
 float cellHash(float a, float c, float salt) { return hash12(vec2(cellId(a, c), salt)); }
 // Inside a feature of this kind at x? Returns 0..1 (soft by e metres at its ends); local = x - start.
@@ -453,6 +455,8 @@ export interface Landscape {
     features: { kind: number; rel0: number; rel1: number; seed: number }[];
     tc: [number, number];
     reflect: number;
+    /** +1: the train runs to the right across the window (scenery slides left); -1: the other way. */
+    dir: number;
     /** 0..1 how far into a tunnel (no rain or snow in there). */
     tunnel: number;
   }): void;
@@ -472,6 +476,7 @@ export function buildLandscape(): Landscape {
     uWin: { value: 1 },
     uFeat: { value: Array.from({ length: MAX_FEATURES }, () => new THREE.Vector4()) },
     uTC: { value: new THREE.Vector2() },
+    uDir: { value: 1 },
   };
   const mat = (frag: string, extra: Record<string, THREE.IUniform> = {}, opts: THREE.ShaderMaterialParameters = {}) =>
     new THREE.ShaderMaterial({ vertexShader: BASIC_VERT, fragmentShader: frag, uniforms: { ...common, ...extra }, ...opts });
@@ -535,6 +540,7 @@ export function buildLandscape(): Landscape {
       common.uTown.value = o.town;
       common.uWin.value = o.win;
       common.uTC.value.set(o.tc[0], o.tc[1]);
+      common.uDir.value = o.dir;
       common.uFeat.value.forEach((v, i) => {
         const f = o.features[i];
         if (f) v.set(f.kind, f.rel0, f.rel1, f.seed);

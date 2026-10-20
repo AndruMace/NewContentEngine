@@ -54,7 +54,7 @@ describe.skipIf(!hasFfmpeg)('ambient beds loop seamlessly', () => {
   // Beds are the looping recordings (one-shots are clips: thunder, clicks, creaks…).
   const beds = manifest.assets.filter((a) => a.kind === 'sound' && /seamless loop/.test(a.derived ?? ''));
 
-  it('finds every bed', () => expect(beds.length).toBeGreaterThanOrEqual(9));
+  it('finds every bed', () => expect(beds.length).toBeGreaterThanOrEqual(8));
 
   it.each(beds.map((b) => [b.id, b.files[0]] as const))('%s joins end to start like any other step', (_id, file) => {
     // Every bed repeats many times in a long video (a 2-minute one wraps 30 times an hour), so its

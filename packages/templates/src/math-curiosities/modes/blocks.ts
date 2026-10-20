@@ -1,17 +1,9 @@
-import { z } from 'zod';
-import { FONT_FAMILY, lighten, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type Template } from '@sim/engine';
-import { gaussFit } from '../scoring';
-import { scaleNote } from '../music';
-import { advance, makeBlocks, type Blocks } from './blocks';
-
-export const collidingBlocksSchema = z.object({
-  digits: z.number().int().min(3).max(6).default(5).meta({ title: 'Digits of π (final round)' }),
-  staged: z.boolean().default(true).meta({ title: 'Play every round (1 kg, 100 kg, …)' }),
-  diagram: z.boolean().default(true).meta({ title: 'Velocity circle diagram' }),
-  burstSeconds: z.number().min(0.6).max(3).default(1.6).meta({ title: 'Collision burst length (s)' }),
-});
-
-export type CollidingBlocksParams = z.infer<typeof collidingBlocksSchema>;
+import { FONT_FAMILY, lighten, paletteAt, rgbToCss, type Ctx2D, type DramaScore } from '@sim/engine';
+import { gaussFit } from '../../scoring';
+import { scaleNote } from '../../music';
+import type { MathParams } from '../params';
+import type { ModeImpl } from '../shared';
+import { advance, makeBlocks, type Blocks } from './blocks-physics';
 
 interface Round {
   ratio: number;
@@ -28,7 +20,7 @@ interface Round {
 type Phase = 'intro' | 'run' | 'hold' | 'reveal';
 
 interface State {
-  p: CollidingBlocksParams;
+  p: MathParams;
   rounds: Round[];
   r: number;
   phase: Phase;
@@ -67,22 +59,14 @@ const FAST_FORWARD = 3;
 const massLabel = (exp: number) => `${(10 ** exp).toLocaleString('en-US')} kg`;
 const fmtCount = (n: number) => String(n);
 
-export const collidingBlocks: Template<CollidingBlocksParams, State> = {
-  id: 'colliding-blocks',
-  name: 'Colliding Blocks π',
-  family: 'bounce',
-  description:
-    'A heavy block slides into a small one in front of a wall. Count the collisions: 3, 31, 314, 3141… each round 100× heavier, the counts spell out the digits of π. A velocity-circle diagram shows why. CTAs may use {count} (the final round\'s collision count).',
-  schema: collidingBlocksSchema,
-  substeps: 4,
+export const BLOCKS_HOOK = 'How many times will the blocks collide?';
+export const BLOCKS_CTA = '{count} collisions… those are the digits of π 🤯';
+
+/** The original Colliding Blocks: count the collisions, they spell out π. */
+export const blocksMode: ModeImpl<State> = {
+  copy: () => ({ hook: BLOCKS_HOOK, cta: BLOCKS_CTA }),
   searchBudget: 4,
   glowScale: 0.4,
-  ownMusic: true,
-  defaultCopy: {
-    hook: 'How many times will the blocks collide?',
-    cta: '{count} collisions… those are the digits of π 🤯',
-  },
-  nudges: ["Guess the collision count 👇", "How many clacks? Comment 👇", "Lock in a number 👇", "Guess the last round's count 👇", "Comment your guess 👇", "Spot the pattern yet? 👇"],
 
   init({ params: p, rng, visual }) {
     const exps = p.staged ? Array.from({ length: p.digits }, (_, k) => 2 * k) : [2 * (p.digits - 1)];
@@ -217,13 +201,6 @@ export const collidingBlocks: Template<CollidingBlocksParams, State> = {
   hud(s) {
     const final = s.results.length === s.rounds.length;
     return { count: final ? s.results[s.results.length - 1] : s.b.count, outro: s.phase === 'reveal' && s.t >= s.phaseAt + 1.8 };
-  },
-
-  overlays(_p, copy) {
-    return [
-      { kind: 'hook', text: copy.hook, from: 0, to: 2.6, y: 0.12 },
-      { kind: 'cta', text: copy.cta, when: 'outro', y: 0.12 },
-    ];
   },
 
   render({ ctx, theme }, s) {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { THEMES, paramsJsonSchema, parseParams, type Recipe } from '@sim/engine';
+import { THEMES, paramsJsonSchema, parseParams, searchBudgetOf, type Recipe } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { TEMPLATES, findTemplate, getTemplate } from '@sim/templates';
 import { ParamControls } from './ParamControls';
@@ -25,7 +25,7 @@ function loadSaved(): Recipe {
     // A saved recipe for a removed template falls back to the default; removed options fall back to
     // their defaults so the form only shows values that still exist.
     const template = saved && findTemplate(saved.templateId);
-    if (template) return { ...saved, params: parseParams(template, saved.params ?? {}) as Record<string, unknown> };
+    if (template) return { ...saved, templateId: template.id, params: parseParams(template, saved.params ?? {}) as Record<string, unknown> };
   } catch {
     /* ignore */
   }
@@ -54,7 +54,7 @@ export function Playground() {
   const schema = useMemo(() => paramsJsonSchema(template) as { properties: Record<string, any> }, [template]);
   const changedParams = Object.entries(recipe.params).filter(([k, v]) => k in schema.properties && v !== schema.properties[k].default).length;
   const player = usePlayer(canvasRef, recipe, muted, volume);
-  const searchBudget = template.searchBudget ?? 400;
+  const searchBudget = searchBudgetOf(template, recipe.params);
   const update = (patch: Partial<Recipe>) => setRecipe((r) => ({ ...r, ...patch }));
 
   useEffect(() => {

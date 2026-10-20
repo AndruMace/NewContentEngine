@@ -158,6 +158,12 @@ export interface LongFormSpec {
   beds?: (params: any) => AmbientBed[];
   /** Reverb on the synthesized sounds (recordings already carry their room). Default 0. */
   reverb?: number;
+  /**
+   * Settings the scene only reads while drawing each frame (and for its beds' levels), never when
+   * building the scene or laying out its timetable. The live preview applies changes to these in
+   * place, without rebuilding anything. The rest rebuild the preview (after a short pause).
+   */
+  liveParams?: string[];
   /** What the video shows and sounds like, in plain words, for Claude's YouTube copy. */
   describe?: (params: any) => string;
   /** YouTube copy without Claude. `length` reads like "3 Hours". */
@@ -185,8 +191,8 @@ export interface Template<P = any, S = any> {
   format?: VideoFormat;
   /** Set for long-form ambient templates (see LongFormSpec). */
   longForm?: LongFormSpec;
-  /** Seeds worth simulating in a seed search (heavy sims use fewer). Default 400. */
-  searchBudget?: number;
+  /** Seeds worth simulating in a seed search (heavy sims use fewer). Default 400. A function when it depends on the settings. */
+  searchBudget?: number | ((params: P) => number);
   /** Template ignores the melody setting (e.g. uses its own scale). */
   ownMusic?: boolean;
   /** The melody shapes the run itself (not just its sound), so changing it changes the video. */

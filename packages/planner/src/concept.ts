@@ -155,6 +155,29 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
   ],
+  'math-curiosities': [
+    {
+      // Blocks first: the learner's baseline for comparing the modes.
+      param: 'mode',
+      values: ['blocks', 'collatz', 'times-table', 'phyllotaxis', 'chaos-game', 'monty-hall', 'birthday'],
+      guide: {
+        blocks:
+          'Mode: colliding blocks (fixed for this video). A heavy block slides into a small one in front of a wall; round after round the big block is 100× heavier and the collision counts (3, 31, 314, 3141…) spell out the digits of π. "Guess the count" and "wait for the pattern" angles work. The CTA may use {count} (the final count). Never reveal that the counts are π before the end.',
+        collatz:
+          'Mode: Collatz hailstone numbers (fixed for this video). A number is halved if even or tripled plus one if odd, again and again; its flight soars and crashes on a live chart until it reaches 1. With compare=true two neighbouring numbers race to 1. "Guess how many steps" (or "pick which one reaches 1 first") angles work; you can mention that nobody has proved every number gets there. The CTA may use {result} (e.g. "111 steps", or "26 won by 101 steps"). Never give the step count or the winner away.',
+        'times-table':
+          'Mode: times tables on a circle (fixed for this video). Points round a circle, each joined to the point at its number × a multiplier; as the multiplier sweeps, the lines form a cardioid (×2), a nephroid (×3), more cusps, then wilder patterns. Mesmerising / "this is just multiplication" angles work, and asking viewers to pick their favourite shape. The CTA may use {result} (the last multiplier and its shape).',
+        phyllotaxis:
+          'Mode: the sunflower angle (fixed for this video). Seeds are placed one by one, each turned by the same angle; most angles make straight spokes, and as the angle sweeps closer to the golden angle (137.5°) the spokes vanish into the 21 and 34 spirals of a real sunflower. "Which angle does nature use?" and "count the spirals" angles work. The CTA may use {result} ("137.5°"). Do not give the golden angle away in the hook or title.',
+        'chaos-game':
+          'Mode: the chaos game (fixed for this video). A dot jumps part of the way toward a randomly rolled corner, over and over, leaving a mark each time; the marks look random until a fractal appears (which one is picked after you write). "What will random dots draw?" angles work. The CTA may use {result} (the fractal\'s name). Never name or hint at the shape.',
+        'monty-hall':
+          'Mode: the Monty Hall problem (fixed for this video). One game show round is played (pick a door, the host opens goat doors, switch or stay?), then hundreds of games per strategy race side by side. "Would you switch?" / "most people get this wrong" angles work; invite viewers to commit to switch or stay. The CTA may use {result} (e.g. "Switching won 67%"). Never say which strategy is better before the end.',
+        birthday:
+          'Mode: the birthday paradox (fixed for this video). People enter a room one by one and land on a calendar until two share a birthday, over one or more rooms. "Guess how many people it takes" angles work. The CTA may use {result} (e.g. "23, 17 and 41 people"). Never give the number away.',
+      },
+    },
+  ],
   'grow-until-full': [
     {
       param: 'mode',
@@ -442,7 +465,7 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'shell-escape': ['🤯', '💎', '😱'],
   'gravity-funnel': ['🌀', '😱', '🔥'],
   'grow-until-full': ['😱', '🫧', '👀'],
-  'colliding-blocks': ['🤯', '🧱', '😱'],
+  'math-curiosities': ['🤯', '🧮', '✨'],
   'pathfinding-race': ['🧭', '🏁', '🤓'],
   'fourier-drawing': ['✏️', '🤯', '👀'],
   'spin-battle': ['🌀', '⚔️', '🔥'],
@@ -506,7 +529,8 @@ export function describeTemplate(template: Template): string {
     .filter(([, p]) => !p.playgroundOnly)
     .map(([key, p]) => {
       const range = p.enum ? `one of ${p.enum.map((e: string) => `"${e}"`).join(', ')}` : p.type === 'boolean' ? 'true/false' : `${p.minimum}–${p.maximum}`;
-      return `- ${key} (${p.title ?? key}): ${range}; default ${JSON.stringify(p.default)}`;
+      const only = Array.isArray(p.modes) ? ` (only does anything when mode is ${p.modes.map((m: string) => `"${m}"`).join(' or ')})` : '';
+      return `- ${key} (${p.title ?? key}): ${range}; default ${JSON.stringify(p.default)}${only}`;
     });
   return [
     `Template "${template.id}" (${template.name}, family: ${template.family})`,

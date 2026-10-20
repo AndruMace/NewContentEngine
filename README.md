@@ -64,7 +64,7 @@ aren't approved or exported.
 | `snake-ai` | kinetic | AI snake tries to fill the whole board; ends full or trapped a few cells short |
 | `shell-escape` | bounce | 3D, real rigid-body physics (Rapier): ball bounces inside nested spinning glass polyhedra; each shell shatters into shards that rattle round the next shell and can knock the ball |
 | `gravity-funnel` | race | 3D: marbles (colours or flags) spiral down a coin-funnel; last one still spinning wins |
-| `colliding-blocks` | bounce | Blocks 1 kg vs 100ⁿ kg: the collision counts spell the digits of π (3, 31, 314…), with a velocity-circle diagram |
+| `math-curiosities` | bounce | Surprising maths, one per video (`mode`): colliding blocks that count out π, Collatz hailstone numbers, times tables on a circle, the sunflower (golden) angle, the chaos game, the Monty Hall problem and the birthday paradox |
 | `pathfinding-race` | kinetic | BFS, DFS, Dijkstra, A*, Greedy… race through the same maze/field; badges show who found the shortest route |
 | `fourier-drawing` | kinetic | Spinning circles draw a mystery country, US state, dinosaur, animal or mythical creature, 1 → 200 circles, then the reveal |
 | `spin-battle` | race | 3D: two battle tops (Attack, Defense, Stamina, Balance) clash in a bowl stadium after a 3-2-1 launch; spin finish or over finish (pocket / over the wall); single duel, first-to-N points match, or 3-4 top free-for-all |

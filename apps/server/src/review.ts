@@ -1,7 +1,7 @@
 import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zipSync } from 'fflate';
-import { Rng } from '@sim/engine';
+import { Rng, searchBudgetOf } from '@sim/engine';
 import { RENDERS_DIR } from '@sim/render';
 import {
   PLATFORMS,
@@ -133,7 +133,7 @@ export class ReviewActions {
     let run = { seed: r.recipe.seed, score: r.score, scoreParts: r.scoreParts, altSeeds: r.altSeeds };
     const template = getTemplate(r.recipe.templateId);
     if (template.melodyDriven) {
-      const results = await this.pool.search({ ...r.recipe, melodyId, seed: 0 }, { count: template.searchBudget ?? 6, targetS: r.recipe.targetS ?? 30, start: r.recipe.seed });
+      const results = await this.pool.search({ ...r.recipe, melodyId, seed: 0 }, { count: searchBudgetOf(template, r.recipe.params, 6), targetS: r.recipe.targetS ?? 30, start: r.recipe.seed });
       const ok = results.filter((x) => !x.timedOut);
       if (!ok.length) throw new Error('This melody did not produce a usable run');
       run = { seed: ok[0].seed, score: ok[0].total, scoreParts: ok[0].parts, altSeeds: ok.slice(1).map((x) => x.seed) };

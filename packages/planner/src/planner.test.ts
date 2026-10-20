@@ -12,6 +12,11 @@ describe('arm selection', () => {
     expect(chooseArms({ count: 4, templateIds: [], themeIds: [], minLengthS: 15, maxLengthS: 24 }, flatArmModel, new Rng(2)).every((c) => c.arm.lengthBucket === 'short')).toBe(true);
   });
 
+  it('keeps templates picked under an old (renamed) id', () => {
+    const arms = chooseArms({ count: 3, templateIds: ['colliding-blocks'], themeIds: [], minLengthS: 20, maxLengthS: 45 }, flatArmModel, new Rng(4)).map((c) => c.arm);
+    expect(arms.every((a) => a.templateId === 'math-curiosities')).toBe(true);
+  });
+
   it('runs no experiments until the model is ready', () => {
     expect(chooseArms({ count: 9, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45 }, flatArmModel, new Rng(3)).some((c) => c.experiment)).toBe(false);
   });

@@ -206,10 +206,11 @@ void main() {
 
 export interface Water {
   group: THREE.Group;
-  update(o: { t: number; L: number; s: number; v: number; bubbleT: number; bubbleEmitS: number; bubbleFrom: [number, number, number] }): void;
+  /** snow: 0..1 how much marine snow shows; flood: whether the floodlight's beam shows. */
+  update(o: { t: number; L: number; s: number; v: number; bubbleT: number; bubbleEmitS: number; bubbleFrom: [number, number, number]; snow: number; flood: boolean }): void;
 }
 
-export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number; flood: boolean; seed: number }): Water {
+export function buildWater(depth: Depth, U: WaterUniforms, opts: { seed: number }): Water {
   const group = new THREE.Group();
   const add = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending } as const;
 
@@ -230,8 +231,10 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
     }
   }
 
-  // Marine snow in front of the porthole: denser close up, falling slowly.
-  const n = Math.round(2000 + 7000 * opts.snow);
+  // Marine snow in front of the porthole: denser close up, falling slowly. Built at its densest;
+  // the setting draws a share of it (the particles are in random order, so any share is even).
+  const n = 9000;
+  const shown = (snow: number) => Math.round(2000 + 7000 * snow);
   const pos = new Float32Array(n * 3);
   const attr = new Float32Array(n * 4);
   let s = opts.seed >>> 0 || 1;
@@ -261,8 +264,9 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
   group.add(snow);
   let snowFor = -1;
 
-  // The floodlight's beam: a long cone from the lamp to the seabed.
-  if (opts.flood && z.flood > 0) {
+  // The floodlight's beam: a long cone from the lamp to the seabed (shown when the floodlight is on).
+  let beam: THREE.Mesh | null = null;
+  if (z.flood > 0) {
     const from = new THREE.Vector3(...FLOOD.pos);
     const to = new THREE.Vector3(...FLOOD.aim);
     const len = from.distanceTo(to) * 1.4;
@@ -273,6 +277,7 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
     cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
     cone.renderOrder = 5;
     group.add(cone);
+    beam = cone;
   }
 
   // Bubbles: 90 per stream.
@@ -295,7 +300,9 @@ export function buildWater(depth: Depth, U: WaterUniforms, opts: { snow: number;
 
   return {
     group,
-    update({ t, L, s, v, bubbleT, bubbleEmitS, bubbleFrom }) {
+    update({ t, L, s, v, bubbleT, bubbleEmitS, bubbleFrom, snow: snowAmount, flood }) {
+      geo.setDrawRange(0, shown(snowAmount));
+      if (beam) beam.visible = flood;
       snowU.uS.value = s;
       bubbleU.uV.value = v;
       if (snowFor !== L) {

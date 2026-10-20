@@ -115,8 +115,6 @@ const SOURCES: Source[] = [
   // ---- Deep Sea Observatory ----
   { id: 393819, author: 'Kinoton', title: 'Underwater Ambience', url: 'https://freesound.org/people/Kinoton/sounds/393819/', use: 'Deep Sea water bed', build: { bed: { name: 'deep-water', lengthS: 300, fromS: 3, lufs: -24 } } },
   { id: 465472, author: 'blaukreuz', title: 'Submarine internal', url: 'https://freesound.org/people/blaukreuz/sounds/465472/', use: 'Deep Sea station hum (5.1 mixed to stereo)', build: { bed: { name: 'station-hum', lengthS: 200, fromS: 15, lufs: -26 } } },
-  // Pistol shrimp crackle for the reef; a mono hydrophone, widened by taking the right channel from later on.
-  { id: 630436, author: 'KaleidacousticsAudio', title: 'Underwater crackling sounds_Hydrophone.wav', url: 'https://freesound.org/people/KaleidacousticsAudio/sounds/630436/', use: 'Deep Sea reef bed (snapping shrimp)', build: { bed: { name: 'reef-shrimp', lengthS: 600, fromS: 15, rightFromS: 205, lufs: -25 } } },
   { id: 514306, author: 'Lewooz', title: 'Sub Sul FONDO.mp3', url: 'https://freesound.org/people/Lewooz/sounds/514306/', use: 'Deep Sea hull groan', build: { clips: [{ from: 2.5, to: 9.5, name: 'hull-creak', lufs: -25, crestDb: 18, fadeOutS: 1.5 }] } },
   {
     id: 59160, author: 'f_ilippo', title: 'grincements_helvetia.aif', url: 'https://freesound.org/people/f_ilippo/sounds/59160/', use: 'Deep Sea hull creaks',

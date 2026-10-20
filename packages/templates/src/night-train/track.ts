@@ -124,6 +124,8 @@ export interface TimetableOptions {
   bridgesPerHour: number;
   /** 0..1 horn volume (0: no horn). */
   horn: number;
+  /** Which way the train runs across the view (+1 right, -1 left): sides of the clicks and horn. */
+  dir?: number;
 }
 
 export const SOUNDS = {
@@ -155,6 +157,7 @@ const STATION_LENGTH_M = 300;
  */
 export function timetable(o: TimetableOptions, L: number, rng: Rng): Timetable {
   const EDGE = 40;
+  const dir = o.dir ?? 1;
   const taken: [number, number][] = [];
   const free = (a: number, b: number, gap: number) => a > EDGE && b < L - EDGE && taken.every(([x, y]) => b + gap < x || a - gap > y);
 
@@ -189,7 +192,7 @@ export function timetable(o: TimetableOptions, L: number, rng: Rng): Timetable {
     bridge: clipPicker(rng, [...SOUNDS.bridge]),
   };
   const horn = (t: number) => {
-    if (o.horn > 0 && t > 0 && t < L - 25) cues.push({ t, type: 'sample', clip: pick.horn(), vel: 0.5 + 0.5 * o.horn, pan: 0.35, rate: rng.range(0.97, 1.03) });
+    if (o.horn > 0 && t > 0 && t < L - 25) cues.push({ t, type: 'sample', clip: pick.horn(), vel: 0.5 + 0.5 * o.horn, pan: 0.35 * dir, rate: rng.range(0.97, 1.03) });
   };
 
   // Tunnels: the roar clip sets the length.
@@ -233,7 +236,7 @@ export function timetable(o: TimetableOptions, L: number, rng: Rng): Timetable {
         if (t >= L) continue;
         clicks.push(t);
         // The front bogie is towards the right (we travel right); slightly louder and more even when slow.
-        cues.push({ t, type: 'click', clip: pickClick(), vel: rng.range(0.32, 0.5), pan: off > 0 ? 0.35 : -0.35, rate: rng.range(0.94, 1.02) });
+        cues.push({ t, type: 'click', clip: pickClick(), vel: rng.range(0.32, 0.5), pan: (off > 0 ? 0.35 : -0.35) * dir, rate: rng.range(0.94, 1.02) });
       }
     }
     clicks.sort((a, b) => a - b);

@@ -182,7 +182,10 @@ export function AmbientPage() {
       <section className="stage">
         <div className="widescreen">
           <canvas ref={canvasRef} width={1920} height={1080} />
-          {!player.ready && <div className="loading">{player.error ? `Couldn't load the scene (${player.error}). Is the server running? Reload the page to try again.` : 'Loading the scene…'}</div>}
+          {(!player.ready || player.error) && (
+            <div className="loading">{player.error ? `Couldn't load the scene (${player.error}). Is the server running? Reload the page to try again.` : 'Loading the scene…'}</div>
+          )}
+          {player.ready && player.updating && !player.error && <div className="updating">Updating…</div>}
         </div>
         <div className="transport wide-transport">
           {player.playing ? (

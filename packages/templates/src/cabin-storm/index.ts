@@ -117,6 +117,8 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
   format: { width: 1920, height: 1080, fps: 30 },
   longForm: {
     beds,
+    // Lightning and thunder are in the timetable; these are read per frame (and by the beds).
+    liveParams: ['storm', 'fire', 'precipitation', 'rainSound'],
     minLoopS: 20 * 60,
     maxLoopS: 60 * 60,
     defaultLoopS: 30 * 60,

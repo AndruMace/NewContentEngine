@@ -10,6 +10,8 @@ export function ParamControls({ schema, values, onChange }: Props) {
   return (
     <div className="params">
       {Object.entries(schema.properties).map(([key, prop]) => {
+        // Settings that only apply to some modes are hidden for the others.
+        if (Array.isArray(prop.modes) && !prop.modes.includes(values.mode ?? schema.properties.mode?.default)) return null;
         const label = prop.title ?? key;
         const value = values[key] ?? prop.default;
         if (prop.type === 'boolean') {

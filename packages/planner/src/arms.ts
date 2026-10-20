@@ -1,5 +1,5 @@
 import { THEMES, type Rng } from '@sim/engine';
-import { TEMPLATES } from '@sim/templates';
+import { TEMPLATES, canonicalTemplateId } from '@sim/templates';
 
 /** A bandit arm: one combination the learner can score (Phase 5 updates the stats). */
 export interface Arm {
@@ -105,8 +105,8 @@ export function targetLength(bucket: LengthBucket, minS: number, maxS: number, r
  * get a boost.
  */
 export function chooseArms(settings: ArmChoiceSettings, model: ArmModel, rng: Rng): ChosenArm[] {
-  // Saved settings may name templates that have since been removed.
-  const known = settings.templateIds.filter((id) => TEMPLATES.some((t) => t.id === id));
+  // Saved settings may name templates that have since been removed (or renamed).
+  const known = [...new Set(settings.templateIds.map(canonicalTemplateId))].filter((id) => TEMPLATES.some((t) => t.id === id));
   const templates = known.length ? known : TEMPLATES.map((t) => t.id);
   const themes = settings.themeIds.length ? settings.themeIds : THEMES.map((t) => t.id);
   const buckets = allowedBuckets(settings.minLengthS, settings.maxLengthS);

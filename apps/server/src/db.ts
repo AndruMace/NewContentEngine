@@ -6,7 +6,7 @@ import type { Recipe } from '@sim/engine';
 import type { Concept, SocialCopy } from '@sim/planner';
 import { ROOT, type QcReport } from '@sim/render';
 import type { PostFeatures } from '@sim/analytics';
-import { LONG_FORM_TEMPLATES } from '@sim/templates';
+import { LONG_FORM_TEMPLATES, canonicalTemplateId } from '@sim/templates';
 
 /** SIM_DATA_DIR points the database (and tokens) elsewhere, e.g. for tests. */
 export const DATA_DIR = process.env.SIM_DATA_DIR ?? join(ROOT, 'data');
@@ -199,6 +199,12 @@ const json = <T>(s: unknown, fallback: T): T => (typeof s === 'string' ? (JSON.p
 export function getKv<T>(key: string, fallback: T): T {
   const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | undefined;
   return row ? (JSON.parse(row.value) as T) : fallback;
+}
+
+/** The saved batch settings over the defaults, with renamed template ids brought up to date. */
+export function savedBatchSettings(): BatchSettings {
+  const s = { ...DEFAULT_BATCH_SETTINGS, ...getKv<Partial<BatchSettings>>('batchSettings', {}) };
+  return { ...s, templateIds: [...new Set(s.templateIds.map(canonicalTemplateId))] };
 }
 
 export function setKv(key: string, value: unknown) {

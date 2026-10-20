@@ -20,10 +20,9 @@ try {
 }
 
 const {
-  DEFAULT_BATCH_SETTINGS,
   EXPORTS_DIR,
   getExport,
-  getKv,
+  savedBatchSettings,
   getRender,
   insertRender,
   listBatches,
@@ -90,12 +89,12 @@ await app.register(fastifyStatic, { root: join(ROOT, 'assets/ambient'), prefix: 
 
 app.get('/api/status', async () => ({ claude: claudeAvailable(), busy: batches.isBusy(), rendering: scheduler.current }));
 
-app.get('/api/batch-settings', async () => ({ ...DEFAULT_BATCH_SETTINGS, ...getKv<Partial<BatchSettings>>('batchSettings', {}) }));
+app.get('/api/batch-settings', async () => savedBatchSettings());
 
 // ---- batches --------------------------------------------------------------------------------
 
 app.post<{ Body: { settings?: Partial<BatchSettings> } }>('/api/batches', async (req, reply) => {
-  const settings: BatchSettings = { ...DEFAULT_BATCH_SETTINGS, ...getKv<Partial<BatchSettings>>('batchSettings', {}), ...(req.body?.settings ?? {}) };
+  const settings: BatchSettings = { ...savedBatchSettings(), ...(req.body?.settings ?? {}) };
   settings.postsWanted = Math.max(1, Math.min(10, Math.round(settings.postsWanted)));
   settings.factor = Math.max(1, Math.min(5, settings.factor));
   settings.minLengthS = Math.max(12, Math.min(settings.minLengthS, settings.maxLengthS - 3));

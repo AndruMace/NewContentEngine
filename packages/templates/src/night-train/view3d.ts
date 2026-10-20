@@ -49,13 +49,19 @@ const view = sceneCache((s: NightTrainState) => {
   const land = buildLandscape();
   scene.add(land.group);
 
-  // Rain on the glass, pushed back along the window by the train's speed (it runs left and down).
+  // Rain on the glass, blown back along the window by the train's speed: streaks run towards the
+  // rear, sloping down less the faster it goes (about 17° at 110 km/h), and the beads creep after them.
   const cx = (WINDOW.x0 + WINDOW.x1) / 2;
   const cy = (WINDOW.y0 + WINDOW.y1) / 2;
+  const dir = s.p.facing === 'forward' ? -1 : 1;
+  const down = Math.min(1, Math.max(0.15, 9 / s.tt.motion.v));
+  const flowLen = Math.hypot(1, down);
   const glass = buildRainGlass({
     panes: [{ center: [cx, cy, WALL - 0.03], width: WINDOW.x1 - WINDOW.x0, height: WINDOW.y1 - WINDOW.y0, lightDir: [-1, -0.6], reflectSide: 1 }],
-    flow: [-0.86, -0.51],
-    runSpeed: 3.5,
+    flow: [-dir / flowLen, -down / flowLen],
+    runSpeed: 6,
+    runDensity: 2.5,
+    creep: 0.03,
     dropScale: 0.45,
     lightColor: [1.0, 0.62, 0.32],
   });
@@ -65,7 +71,7 @@ const view = sceneCache((s: NightTrainState) => {
   scene.add(land.reflection);
 
   // The lamp: the room's main light, warm, with a static shadow (nothing in the room moves).
-  const lamp = new THREE.PointLight(0xffa860, 1.0, 0, 2);
+  const lamp = new THREE.PointLight(0xffa860, 0.6, 0, 2);
   lamp.position.copy(room.lampAt);
   lamp.castShadow = true;
   lamp.shadow.mapSize.set(1024, 1024);
@@ -75,12 +81,12 @@ const view = sceneCache((s: NightTrainState) => {
   lamp.shadow.radius = 4;
   scene.add(lamp);
   // Warm light off the walls and ceiling (no shadow), and a dim reading light over the berth.
-  const fill = new THREE.PointLight(0xc89070, 0.6, 0, 2);
+  const fill = new THREE.PointLight(0xc89070, 0.32, 0, 2);
   fill.position.set(0.3, CEILING - 0.25, 0.9);
   scene.add(fill);
   // The wall sconces either side of the window: a soft glow each, no shadows.
   const sconceLights = room.sconces.map((p) => {
-    const l = new THREE.PointLight(0xffb070, 0.28, 0, 2);
+    const l = new THREE.PointLight(0xffb070, 0.14, 0, 2);
     l.position.copy(p);
     scene.add(l);
     return l;
@@ -108,7 +114,7 @@ const view = sceneCache((s: NightTrainState) => {
   const red = new THREE.PointLight(0xff2010, 0, 0, 2);
   scene.add(red);
 
-  return { scene, camera, room, land, glass, lamp, fill, sconceLights, moon, passing, red };
+  return { scene, camera, room, land, glass, lamp, fill, sconceLights, moon, passing, red, dir };
 });
 
 /**
@@ -160,7 +166,8 @@ export function drawTrain(rc: RenderCtx, s: NightTrainState) {
     if (rel0 < -motion.D / 2) rel0 += motion.D;
     const rel1 = rel0 + (f.s1 - f.s0);
     if (rel1 < -400 || rel0 > 400) continue;
-    near.push({ kind: KIND[f.kind], rel0, rel1, seed: (f.seed % 997) / 997 });
+    // On the planes: mirrored when the train runs the other way across the view.
+    near.push(v.dir > 0 ? { kind: KIND[f.kind], rel0, rel1, seed: (f.seed % 997) / 997 } : { kind: KIND[f.kind], rel0: -rel1, rel1: -rel0, seed: (f.seed % 997) / 997 });
     const inside = Math.min(1, Math.max(0, Math.min(-rel0, rel1) / 4 + 0.5));
     if (f.kind === 'tunnel') {
       tunnel = Math.max(tunnel, inside);
@@ -185,27 +192,27 @@ export function drawTrain(rc: RenderCtx, s: NightTrainState) {
   // The lamp dips very slightly on the bigger jolts (a loose contact in an old carriage).
   const j = jolt(clicks, t, L);
   const lampLevel = lampOn * (0.985 + 0.015 * Math.max(-1, Math.min(1, j)));
-  v.lamp.intensity = 1.0 * lampLevel;
-  v.fill.intensity = 0.6 * lampLevel;
-  v.room.shade.emissiveIntensity = 0.32 * lampLevel;
-  v.room.sconceGlass.emissiveIntensity = 0.2 * lampLevel;
-  for (const l of v.sconceLights) l.intensity = 0.28 * lampLevel;
+  v.lamp.intensity = 0.6 * lampLevel;
+  v.fill.intensity = 0.32 * lampLevel;
+  v.room.shade.emissiveIntensity = 0.22 * lampLevel;
+  v.room.sconceGlass.emissiveIntensity = 0.12 * lampLevel;
+  for (const l of v.sconceLights) l.intensity = 0.14 * lampLevel;
   const moonLight = (weather === 1 ? 0.35 : weather === 2 ? 0.25 : 0.06) * (1 - tunnel);
   v.moon.intensity = moonLight;
 
   // A lamp sweeping past: brightest level with the window, fading as it goes.
   if (stationLamp !== null) {
     v.passing.color.setHex(0xffe0b0);
-    v.passing.position.set(stationLamp, GROUND_Y + 3.1, WALL - 3.2);
+    v.passing.position.set(v.dir * stationLamp, GROUND_Y + 3.1, WALL - 3.2);
     v.passing.intensity = 3.5 * Math.exp(-Math.pow(stationLamp / 3, 2));
   } else if (tunnelLamp !== null) {
     v.passing.color.setHex(0xff9a40);
-    v.passing.position.set(tunnelLamp, GROUND_Y + 2.6, WALL - 3.2);
+    v.passing.position.set(v.dir * tunnelLamp, GROUND_Y + 2.6, WALL - 3.2);
     v.passing.intensity = 2.0 * tunnel * Math.exp(-Math.pow(tunnelLamp / 3.5, 2));
   } else v.passing.intensity = 0;
   // The crossing's alternating red lamps glow faintly on the frame and table (whole cycles per loop).
   const blink = 0.5 + 0.5 * Math.cos(2 * Math.PI * Math.round(L) * (t / L));
-  v.red.position.set(-0.5, GROUND_Y + 2.1, WALL - 3);
+  v.red.position.set(-0.5 * v.dir, GROUND_Y + 2.1, WALL - 3);
   v.red.intensity = 0.6 * crossing * (0.4 + 0.6 * blink);
 
   const tc = timeCircle(t, L, 0.004);
@@ -224,7 +231,10 @@ export function drawTrain(rc: RenderCtx, s: NightTrainState) {
     // Darker outside (tunnels, rain) and the glass shows more of the room.
     reflect: (0.35 + 0.5 * tunnel + (weather === 0 ? 0.15 : 0)) * lampLevel,
     tunnel,
+    dir: v.dir,
   });
+  // A dry pane on a clear night: no drops at all (in snow the glass frosts at its edges).
+  v.glass.group.visible = weather !== 1;
   v.glass.update({ t, L, rain: weather === 0 ? s.p.precip : 0, flash: 0, light: lampLevel, snow: weather === 2 });
 
   // Where the lamp's reflection sits on the glass: the lamp mirrored in the window, seen from the eye.
