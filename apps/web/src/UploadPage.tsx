@@ -166,15 +166,31 @@ export function UploadPage({ id }: { id: string }) {
     setDraft(null);
     server.current = null;
     setNotes(null);
-    const es = new EventSource(`/api/review/${id}/stream`);
-    es.onmessage = (e) => setItem(JSON.parse(e.data));
-    es.onerror = () => {
-      api.item(id).catch((err: Error) => {
-        setMissing(err.message);
-        es.close();
-      });
+    // Reconnect if the server restarts (an error response closes an EventSource for good), unless
+    // the item itself is gone.
+    let es: EventSource | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    const stop = () => {
+      closed = true;
+      clearTimeout(timer);
+      es?.close();
     };
-    return () => es.close();
+    const open = () => {
+      es = new EventSource(`/api/review/${id}/stream`);
+      es.onmessage = (e) => setItem(JSON.parse(e.data));
+      es.onerror = () => {
+        api.item(id).catch((err: Error & { status?: number }) => {
+          if (closed || err.status !== 404) return;
+          setMissing(err.message);
+          stop();
+        });
+        if (closed || es?.readyState !== EventSource.CLOSED) return;
+        timer = setTimeout(open, 3000);
+      };
+    };
+    open();
+    return stop;
   }, [id]);
 
   // New copy from the server (Claude finished, or a save came back): take it for every field you

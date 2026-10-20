@@ -27,9 +27,24 @@ function useBatchStream(id: string | null) {
   useEffect(() => {
     setSnap(null);
     if (!id) return;
-    const es = new EventSource(`/api/batches/${id}/stream`);
-    es.onmessage = (e) => setSnap(JSON.parse(e.data));
-    return () => es.close();
+    // Reconnect if the server restarts (an error response closes an EventSource for good).
+    let es: EventSource | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    const open = () => {
+      es = new EventSource(`/api/batches/${id}/stream`);
+      es.onmessage = (e) => setSnap(JSON.parse(e.data));
+      es.onerror = () => {
+        if (closed || es?.readyState !== EventSource.CLOSED) return;
+        timer = setTimeout(open, 3000);
+      };
+    };
+    open();
+    return () => {
+      closed = true;
+      clearTimeout(timer);
+      es?.close();
+    };
   }, [id]);
   return snap;
 }
