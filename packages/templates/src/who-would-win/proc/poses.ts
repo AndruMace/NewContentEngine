@@ -56,7 +56,8 @@ const toModel = (f: FighterView, ang: number) => {
 function base(f: FighterView, simT: number, others: FighterView[]): { p: PoseIn; rel: number; t: FighterView | null; flinch: number; side: number } {
   const p = restPose();
   const proc = f.def.proc!;
-  p.speed = Math.abs(f.spd);
+  // (Its feet step with whatever moves it: a shove back too.)
+  p.speed = Math.abs(f.stepV);
   p.stride = strideFor(proc, p.speed);
   p.gait = f.gait;
   p.time = simT + f.idx * 1.37;
@@ -92,6 +93,76 @@ function base(f: FighterView, simT: number, others: FighterView[]): { p: PoseIn;
     p.chestPitch -= 0.08 * ev;
   }
   return { p, rel, t, flinch, side };
+}
+
+/**
+ * Locked with another: horns (or tusks, or a brow) down and driving, legs braced; or reared up
+ * grappling (a big cat or a bear: forepaws on the other's shoulders, jaws at its neck; a person or an ape:
+ * hands on its shoulders, leaning in). Where the head and paws go is finished by the stage (it aims them
+ * at the other); this is the body's effort. Pushed back, its feet step back with it.
+ */
+export function clinched(p: PoseIn, f: FighterView, simT: number) {
+  const c = f.clinch;
+  if (!c) return;
+  const e = ramp(simT - c.t0, 0, 0.2);
+  const strain = Math.sin(simT * 9 + f.idx) * 0.5 + c.surge * 0.5;
+  const kind = f.def.proc.kind;
+  const spec = SPECIES[kind];
+  const biped = spec.legs.some((l) => l.arm);
+  const stepping = Math.abs(f.stepV) > 0.25;
+  if (c.style === 'horns') {
+    p.neckPitch += 0.6 * e;
+    p.headPitch += 0.35 * e;
+    p.chestPitch += 0.08 * e;
+    p.y -= 0.06 * e * spec.rollY;
+    p.lean = [p.lean[0], p.lean[1], p.lean[2] + (0.12 + 0.05 * strain) * e];
+    p.jaw = 0.15 + 0.1 * Math.max(0, strain);
+    if (!stepping && !biped)
+      for (const l of spec.legs) {
+        const h = l.home;
+        p.legs[l.name] = h[2] > 0 ? [h[0] * 1.25, 0, h[2] + 0.12 * e] : [h[0] * 1.2, 0, h[2] - 0.2 * e];
+      }
+    if (biped) p.pitch += 0.35 * e;
+    p.gaitScale = stepping ? 1 : 0;
+    return;
+  }
+  if (biped) {
+    // Grappling upright, leaning in, braced.
+    p.pitch += 0.2 * e;
+    p.lean = [p.lean[0], p.lean[1], p.lean[2] + 0.1 * e];
+    p.neckPitch += 0.25 * e;
+    if (!stepping) {
+      p.legs.LL = [0.2, 0, -0.08];
+      p.legs.RL = [-0.2, 0, 0.12];
+    }
+    return;
+  }
+  // Reared up, wrestling: the hind legs braced under it, the front end up against the other.
+  p.pitch = lerp(p.pitch, -0.75 - 0.08 * strain, e);
+  p.y += 0.04 * e;
+  p.neckPitch += 0.35 * e;
+  p.jaw = 0.35 + 0.35 * Math.max(0, Math.sin(simT * 7 + f.idx));
+  p.tailWave = 0.4;
+  p.gaitScale = stepping ? 1 : 0;
+}
+
+/** Pawing the ground before a charge: head low, a forefoot scraping back, snorting. */
+function pawing(p: PoseIn, f: FighterView, simT: number) {
+  const spec = SPECIES[f.def.proc.kind];
+  const t = simT - f.stateT;
+  const e = ramp(t, 0, 0.15);
+  p.neckPitch += 0.5 * e;
+  p.headPitch += 0.2 * e;
+  p.y -= 0.04 * e * spec.rollY;
+  p.jaw = 0.12 * Math.max(0, Math.sin(t * 14));
+  const leg = spec.legs.find((l) => l.name === 'RF');
+  if (leg) {
+    const ph = (t * 3.2) % 1;
+    const h = leg.home;
+    // Lift, scrape back along the ground, lift again.
+    p.legs.RF = ph < 0.3 ? [h[0], 0.12 * Math.sin((ph / 0.3) * Math.PI), h[2] + 0.12 * (ph / 0.3)] : [h[0], 0.01, h[2] + 0.12 - 0.32 * ((ph - 0.3) / 0.7)];
+  }
+  p.gaitScale = 0;
 }
 
 /** Knocked off its feet: thrown onto its side, struggling, then scrambling back up. */
@@ -204,6 +275,10 @@ export function lionPose(f: FighterView, simT: number, others: FighterView[]): P
     knocked(p, f, simT, 0.5, 1.45);
     return p;
   }
+  if (f.state === 'clinch') {
+    clinched(p, f, simT);
+    return p;
+  }
   // Stalking crouch: belly to the ground, head low, tail tip twitching.
   const c = f.crouch;
   p.y -= 0.24 * c;
@@ -220,8 +295,8 @@ export function lionPose(f: FighterView, simT: number, others: FighterView[]): P
     const e = ramp(simT - f.grab.t0, 0, 0.2);
     p.pitch = -0.45 * e * clamp(h / 1.2, 0.3, 1);
     p.y = 0.05 * e;
-    p.legs.LF = lerpV(home('lion', 'LF'), [0.22, clamp(h, 0.3, 1.5), 0.62], e);
-    p.legs.RF = lerpV(home('lion', 'RF'), [-0.22, clamp(h, 0.3, 1.5), 0.62], e);
+    p.legs.LF = lerpV(home(f.def.proc.kind, 'LF'), [0.22, clamp(h, 0.3, 1.5), 0.62], e);
+    p.legs.RF = lerpV(home(f.def.proc.kind, 'RF'), [-0.22, clamp(h, 0.3, 1.5), 0.62], e);
     p.gaitScale = 0;
     p.neckPitch = 0.35;
     p.headPitch = 0.25;
@@ -243,7 +318,7 @@ export function lionPose(f: FighterView, simT: number, others: FighterView[]): P
       const up = ramp(u, 0, 0.35);
       const across = ramp(u, 0.35, 0.55);
       const back = ramp(u, 0.6, 1);
-      const h = home('lion', 'RF');
+      const h = home(f.def.proc.kind, 'RF');
       const raised: V3 = [h[0] - 0.05, 0.5, h[2] + 0.35];
       const struck: V3 = [h[0] + 0.3, 0.12, h[2] + 0.55];
       p.legs.RF = lerpV(lerpV(lerpV(h, raised, up), struck, across), h, back);
@@ -278,10 +353,10 @@ export function lionPose(f: FighterView, simT: number, others: FighterView[]): P
         p.y = Math.sin(Math.PI * Math.min(1, s)) * 0.75 * (1 - land) - 0.1 * (1 - s);
         p.pitch = lerp(-0.4, 0.15, s) * (1 - land);
         const body = p.y + 0.9;
-        p.legs.LF = lerpV([0.17, body + 0.25, 1.05], home('lion', 'LF'), land);
-        p.legs.RF = lerpV([-0.17, body + 0.2, 1.0], home('lion', 'RF'), land);
-        p.legs.LH = lerpV([0.17, body - 0.2, -1.1], home('lion', 'LH'), land);
-        p.legs.RH = lerpV([-0.17, body - 0.25, -1.05], home('lion', 'RH'), land);
+        p.legs.LF = lerpV([0.17, body + 0.25, 1.05], home(f.def.proc.kind, 'LF'), land);
+        p.legs.RF = lerpV([-0.17, body + 0.2, 1.0], home(f.def.proc.kind, 'RF'), land);
+        p.legs.LH = lerpV([0.17, body - 0.2, -1.1], home(f.def.proc.kind, 'LH'), land);
+        p.legs.RH = lerpV([-0.17, body - 0.25, -1.05], home(f.def.proc.kind, 'RH'), land);
         p.jaw = 1 - land;
         p.tailPitch = -0.6 * (1 - land);
         p.gaitScale = 0;
@@ -315,6 +390,10 @@ export function bearPose(f: FighterView, simT: number, others: FighterView[]): P
   }
   if (f.state === 'down') {
     knocked(p, f, simT, 0.45, 1.4);
+    return p;
+  }
+  if (f.state === 'clinch') {
+    clinched(p, f, simT);
     return p;
   }
   // Heavy head sway when walking.
@@ -509,6 +588,14 @@ function begin(f: FighterView, simT: number, others: FighterView[], lie: number,
     knocked(b.p, f, simT, lie, roll);
     return { ...b, done: true, m: null as MoveDef | null, u: 0 };
   }
+  if (f.state === 'clinch') {
+    clinched(b.p, f, simT);
+    return { ...b, done: true, m: null as MoveDef | null, u: 0 };
+  }
+  if (f.state === 'prep') {
+    pawing(b.p, f, simT);
+    return { ...b, done: true, m: null as MoveDef | null, u: 0 };
+  }
   const m = moveOf(f);
   return { ...b, done: false, m, u: m ? (simT - f.stateT) / m.len : 0 };
 }
@@ -571,6 +658,47 @@ export function mammalPose(f: FighterView, simT: number, others: FighterView[]):
     case 'buck':
       kick(pulse(u, 0.25, 0.6, 0.95));
       break;
+    case 'toss': {
+      // Head down and in, then flung up: the horn tossing what it caught.
+      const at = m.hits[0].at;
+      butt(pulse(u, 0, at - 0.05, at + 0.1));
+      const fling = pulse(u, at - 0.02, at + 0.12, 0.85);
+      p.neckPitch -= 0.9 * fling;
+      p.headPitch -= 0.45 * fling;
+      p.pitch -= 0.12 * fling;
+      break;
+    }
+    case 'swat': {
+      // The trunk swung across from one side to the other, the head turning with it.
+      const dir = rel > 0 ? -1 : 1;
+      const sweep = lerp(1, -1, ramp(u, 0.2, m.hits[0].at + 0.06)) * (1 - ramp(u, 0.7, 1));
+      p.neckYaw += 0.7 * sweep * dir;
+      p.headYaw += 0.4 * sweep * dir;
+      p.neckPitch += 0.15 * pulse(u, 0.1, 0.4, 0.8);
+      break;
+    }
+    case 'stomp': {
+      // Up on the hind legs, then the forefeet brought down on it.
+      const at = m.hits[0].at;
+      const rear = pulse(u, 0.05, at - 0.18, at);
+      p.pitch -= 0.45 * rear;
+      p.y += 0.05 * rear * spec.rollY;
+      p.neckPitch -= 0.3 * rear;
+      for (const leg of ['LF', 'RF']) {
+        const h = home(kind, leg);
+        if (rear > 0.05) p.legs[leg] = lerpV(h, [h[0], spec.rollY * 0.9, h[2] + 0.35], rear);
+      }
+      break;
+    }
+    case 'roar': {
+      // Head (and trunk) thrown up, calling.
+      const b = pulse(u, 0.05, 0.3, 0.95);
+      p.neckPitch -= 0.7 * b;
+      p.headPitch -= 0.35 * b;
+      p.jaw = b;
+      p.pitch -= 0.1 * b;
+      break;
+    }
     case 'combo':
       butt(pulse(u, 0, 0.15, 0.4));
       kick(pulse(u, 0.45, 0.75, 1));
@@ -579,42 +707,95 @@ export function mammalPose(f: FighterView, simT: number, others: FighterView[]):
   return p;
 }
 
-/** People: guard stances, slashes, kicks and punches, sidesteps. */
+/**
+ * People and the other upright fighters: guard stances (a sword up, an axe ready, a shield in front, a club
+ * hanging, a boxer's fists), slashes, chops, smashes, kicks, punches, a shield bash, a backhand, a stomp,
+ * sidesteps; a gorilla knuckle-walks and rears up to pummel, beat its chest or grab; a troll hunches.
+ * Positions are worked out for a person 1.9 m tall and scaled to the fighter (a troll, a minotaur).
+ */
 export function humanPose(f: FighterView, simT: number, others: FighterView[]): PoseIn {
-  const sword = !!f.def.weapon;
-  const { p, done, m, u } = begin(f, simT, others, 0.72, 1.45);
+  const kind = f.def.proc.kind;
+  const spec = SPECIES[kind];
+  const weapon = f.def.weapon;
+  const shield = f.def.trait === 'shield';
+  const ape = kind === 'gorilla';
+  const { p, done, m, u } = begin(f, simT, others, 0.72 * (spec.rollY / 0.9), 1.45);
+  // (Sizes: k for height, kx for the breadth of the shoulders.)
+  const k = spec.bones.neck1[1] / 1.52;
+  const kx = Math.abs(spec.legs.find((l) => l.name === 'LA')!.hip[0]) / 0.215 / k;
   if (done) return p;
   p.neckYaw *= 0.6;
   p.headYaw *= 0.5;
   p.spineYaw *= 0.4;
+  if (f.state === 'grab') {
+    // Down over what it holds, pounding (the stage brings the fists down on it).
+    p.pitch += 0.7;
+    p.y -= 0.25;
+    p.neckPitch += 0.3;
+    p.jaw = 0.5 + 0.4 * Math.sin(simT * 11);
+    return scaleBiped(p, k, kx);
+  }
   const running = Math.abs(f.spd) > 3;
-  // Guard: sword up and forward, the other hand ready; a boxer's fists by the chin.
-  const guardL: V3 = sword ? [0.2, 1.12, 0.25] : [0.14, 1.42, 0.26];
-  const guardR: V3 = sword ? [-0.2, 1.08, 0.3] : [-0.15, 1.38, 0.3];
-  const bladeGuard: V3 = [0.15, 0.85, 0.5];
+  // Guard: a sword up and forward; an axe raised (a shield in front of the body); a club hanging ready;
+  // a boxer's fists by the chin.
+  const guardL: V3 = shield ? [0.18, 1.22, 0.38] : weapon === 'axe' ? [0.12, 1.12, 0.32] : weapon ? [0.2, 1.12, 0.25] : [0.14, 1.42, 0.26];
+  const guardR: V3 = weapon === 'club' ? [-0.3, 1.02, 0.25] : weapon === 'axe' ? [-0.2, 1.22, 0.28] : weapon ? [-0.2, 1.08, 0.3] : [-0.15, 1.38, 0.3];
+  const bladeGuard: V3 = weapon === 'club' ? [0.1, 0.55, 1] : weapon === 'axe' ? [0.2, 1, 0.35] : [0.15, 0.85, 0.5];
   if (!running) {
     p.legs.LA = guardL;
     p.legs.RA = guardR;
   }
   p.props.sword = running ? [0, 0.4, 1] : bladeGuard;
-  // A slight fighting crouch and bounce.
+  p.props.shield = [0, 1, 0.12];
+  // A slight fighting crouch and bounce; a troll hunches.
   p.y -= 0.03 + Math.abs(Math.sin(simT * 4)) * 0.015 * (1 - Math.min(1, Math.abs(f.spd)));
+  if (kind === 'troll') {
+    p.pitch += 0.22;
+    p.y -= 0.06;
+  }
   if (f.state === 'stagger') {
-    const k = pulse((simT - f.stateT) / 0.45, 0, 0.2, 1);
-    p.pitch -= 0.25 * k;
-    p.neckPitch -= 0.3 * k;
-    p.legs.LA = lerpV(guardL, [0.35, 1.55, -0.05], k);
-    p.legs.RA = lerpV(guardR, [-0.35, 1.5, -0.05], k);
+    const kk = pulse((simT - f.stateT) / 0.45, 0, 0.2, 1);
+    p.pitch -= 0.25 * kk;
+    p.neckPitch -= 0.3 * kk;
+    p.legs.LA = lerpV(guardL, [0.35, 1.55, -0.05], kk);
+    p.legs.RA = lerpV(guardR, [-0.35, 1.5, -0.05], kk);
   }
   if (f.state === 'dodge') {
     // Sidestep: lean away, feet wide.
-    const k = pulse((simT - f.stateT) / 0.6, 0, 0.3, 1);
-    p.roll += -0.28 * f.dodgeDir * k;
-    p.y -= 0.08 * k;
+    const kk = pulse((simT - f.stateT) / 0.6, 0, 0.3, 1);
+    p.roll += -0.28 * f.dodgeDir * kk;
+    p.y -= 0.08 * kk;
     p.legs.LL = [0.3, 0, 0.02];
     p.legs.RL = [-0.3, 0, 0.02];
   }
-  if (!m) return p;
+  // A blow taken on the shield: braced behind it, the shield up.
+  const block = pulse(simT - f.blockT, 0, 0.06, 0.4);
+  if (shield && block > 0) {
+    p.legs.LA = lerpV(guardL, [0.12, 1.45, 0.45], block);
+    p.props.shield = [0, 1, 0.35 * block + 0.12];
+    p.pitch -= 0.12 * block;
+  }
+  // A gorilla goes on its knuckles unless it is up on its legs to fight.
+  const upright = m && ['pummel', 'beat', 'grapple'].includes(m.clip) ? pulse(u, 0, 0.25, 0.95) : 0;
+  if (ape) {
+    const down = 1 - upright;
+    p.pitch += 0.85 * down;
+    p.y -= 0.3 * down;
+    p.neckPitch -= 0.7 * down;
+    const g = Math.min(1, Math.abs(f.stepV) / 0.6);
+    for (const [limb, sx, off] of [
+      ['LA', 1, 0.5],
+      ['RA', -1, 0],
+    ] as const) {
+      const ph = (((f.gait + off) % 1) + 1) % 1;
+      const swing = ph > 0.55;
+      const t = swing ? (ph - 0.55) / 0.45 : ph / 0.55;
+      const dz = (swing ? -0.5 + t : 0.5 - t) * 0.5 * g;
+      const knuckle: V3 = [sx * 0.34, 0.04 + (swing ? Math.sin(Math.PI * t) * 0.12 * g : 0), 0.5 + dz];
+      p.legs[limb] = lerpV(knuckle, p.legs[limb] as V3 ?? knuckle, upright);
+    }
+  }
+  if (!m) return scaleBiped(p, k, kx);
   switch (m.clip) {
     case 'slash': {
       // Overhead and across: hand up behind the head, then down to the left, the torso unwinding.
@@ -633,13 +814,113 @@ export function humanPose(f: FighterView, simT: number, others: FighterView[]): 
       p.legs.RL = [-0.12, 0, 0.03 + 0.25 * strike * (1 - back)];
       break;
     }
+    case 'chop':
+    case 'club': {
+      // Overhead and straight down: the weapon wound up behind the head (both hands on an axe without a
+      // shield), the body coming down with it.
+      const at = m.hits[0].at;
+      const up = ramp(u, 0.05, at - 0.12);
+      const strike = ramp(u, at - 0.12, at);
+      const back = ramp(u, at + 0.12, 1);
+      const raised: V3 = [-0.08, 1.95, -0.12];
+      const struck: V3 = [0.02, 0.95, 0.6];
+      p.legs.RA = lerpV(lerpV(lerpV(guardR, raised, up), struck, strike), guardR, back);
+      if (!shield) p.legs.LA = lerpV(lerpV(lerpV(guardL, [0.06, 1.85, -0.08], up), [0.08, 1.05, 0.5], strike), guardL, back);
+      p.props.sword = lerpV(lerpV(lerpV(bladeGuard, [0, 0.4, -1], up), [0, -0.3, 1], strike), bladeGuard, back);
+      p.pitch += (-0.15 * up + (m.clip === 'club' ? 0.45 : 0.3) * strike) * (1 - back);
+      p.legs.LL = [0.12, 0, 0.03 + 0.25 * strike * (1 - back)];
+      break;
+    }
+    case 'bash': {
+      // Shield first, the shoulder behind it.
+      const kk = pulse(u, 0.15, m.hits[0].at, 0.85);
+      p.legs.LA = lerpV(guardL, [0.1, 1.25, 0.7], kk);
+      p.props.shield = [0, 1, 0.12 + 0.2 * kk];
+      p.pitch += 0.18 * kk;
+      p.spineYaw -= 0.35 * kk;
+      p.legs.LL = [0.12, 0, 0.03 + 0.3 * kk];
+      break;
+    }
+    case 'backhand': {
+      // The free arm swept across from the far side.
+      const wind = ramp(u, 0, m.hits[0].at - 0.12);
+      const sweep = ramp(u, m.hits[0].at - 0.12, m.hits[0].at + 0.05);
+      const back = ramp(u, m.hits[0].at + 0.15, 1);
+      p.legs.LA = lerpV(lerpV(lerpV(guardL, [-0.35, 1.3, 0.15], wind), [0.45, 1.15, 0.5], sweep), guardL, back);
+      p.spineYaw += (-0.45 * wind + 0.9 * sweep) * (1 - back);
+      break;
+    }
+    case 'stomp': {
+      // A foot raised high and brought down on whatever is on the ground.
+      const raise = ramp(u, 0.1, m.hits[0].at - 0.12);
+      const down = ramp(u, m.hits[0].at - 0.12, m.hits[0].at);
+      const back = ramp(u, m.hits[0].at + 0.15, 1);
+      p.legs.RL = lerpV(lerpV(lerpV([-0.12, 0, 0.03], [-0.12, 0.65, 0.35], raise), [-0.12, 0, 0.5], down), [-0.12, 0, 0.03], back);
+      p.legs.LA = lerpV(guardL, [0.45, 1.3, 0.0], raise * (1 - back));
+      p.legs.RA = lerpV(guardR, [-0.45, 1.3, 0.0], raise * (1 - back));
+      p.pitch -= 0.15 * raise * (1 - down);
+      break;
+    }
+    case 'pummel': {
+      // Both fists up overhead, then hammered down together.
+      const at = m.hits[0].at;
+      const up = ramp(u, 0.05, at - 0.15);
+      const slam = ramp(u, at - 0.15, at);
+      const back = ramp(u, at + 0.15, 1);
+      for (const [limb, sx] of [
+        ['LA', 1],
+        ['RA', -1],
+      ] as const) {
+        const g = p.legs[limb] as V3;
+        p.legs[limb] = lerpV(lerpV(lerpV(g, [sx * 0.22, 2.0, 0.15], up), [sx * 0.16, 0.6, 0.65], slam), g, back);
+      }
+      p.pitch += (-0.2 * up + 0.5 * slam) * (1 - back);
+      p.jaw = 0.6 * up;
+      break;
+    }
+    case 'beat': {
+      // Up on its legs, fists drumming on its chest, roaring.
+      const on = pulse(u, 0.05, 0.25, 0.9);
+      const drum = Math.sin(simT * 26);
+      p.legs.LA = lerpV(p.legs.LA as V3, [0.09, 1.3 + 0.06 * Math.max(0, drum), 0.24], on);
+      p.legs.RA = lerpV(p.legs.RA as V3, [-0.09, 1.3 + 0.06 * Math.max(0, -drum), 0.24], on);
+      p.pitch -= 0.15 * on;
+      p.neckPitch -= 0.4 * on;
+      p.jaw = on;
+      break;
+    }
+    case 'grapple': {
+      // Arms out to seize it.
+      const kk = pulse(u, 0.1, m.hits[0].at, 1);
+      p.legs.LA = lerpV(p.legs.LA as V3, [0.3, 1.25, 0.65], kk);
+      p.legs.RA = lerpV(p.legs.RA as V3, [-0.3, 1.25, 0.65], kk);
+      p.pitch += 0.3 * kk;
+      p.jaw = 0.5 * kk;
+      break;
+    }
+    case 'bite': {
+      // Head down and in, jaws open, then snapping shut.
+      const kk = pulse(u, 0, m.hits[0].at, 1);
+      p.pitch += 0.35 * kk;
+      p.neckPitch += 0.3 * kk;
+      p.jaw = ramp(u, 0, m.hits[0].at - 0.05) * (1 - ramp(u, m.hits[0].at - 0.05, m.hits[0].at + 0.05));
+      break;
+    }
+    case 'charge': {
+      // Head down, horns first, arms back.
+      p.pitch += 0.5;
+      p.neckPitch += 0.5;
+      p.legs.LA = [0.3, 1.0, -0.25];
+      p.legs.RA = [-0.3, 1.0, -0.25];
+      break;
+    }
     case 'kick': {
       // Right foot up and out at the target, leaning back, arms out for balance.
-      const k = pulse(u, 0.15, 0.5, 0.9);
-      p.legs.RL = lerpV([-0.12, 0, 0.03], [-0.08, 0.85, 0.72], k);
-      p.pitch -= 0.2 * k;
-      p.legs.LA = lerpV(guardL, [0.4, 1.2, -0.05], k);
-      p.legs.RA = lerpV(guardR, [-0.4, 1.2, -0.05], k);
+      const kk = pulse(u, 0.15, 0.5, 0.9);
+      p.legs.RL = lerpV([-0.12, 0, 0.03], [-0.08, 0.85, 0.72], kk);
+      p.pitch -= 0.2 * kk;
+      p.legs.LA = lerpV(guardL, [0.4, 1.2, -0.05], kk);
+      p.legs.RA = lerpV(guardR, [-0.4, 1.2, -0.05], kk);
       break;
     }
     case 'punch_l':
@@ -656,6 +937,42 @@ export function humanPose(f: FighterView, simT: number, others: FighterView[]): 
       p.legs[right ? 'RL' : 'LL'] = [sx * 0.12, 0, 0.03 + 0.15 * out * (1 - back)];
       break;
     }
+  }
+  return scaleBiped(p, k, kx);
+}
+
+/** A biped's pose worked out for a person of standard size, scaled to this one (height k, shoulders kx). */
+function scaleBiped(p: PoseIn, k: number, kx: number) {
+  if (Math.abs(k - 1) < 1e-3 && Math.abs(kx - 1) < 1e-3) return p;
+  for (const [name, v] of Object.entries(p.legs)) if (Array.isArray(v)) p.legs[name] = [v[0] * kx * k, v[1] * k, v[2] * k];
+  p.y *= k;
+  return p;
+}
+
+/** The griffin: flying low like the dragon; beak strikes, talon rakes, and a dive talons first. */
+export function griffinPose(f: FighterView, simT: number, others: FighterView[]): PoseIn {
+  const m = f.state === 'attack' && f.moveIdx >= 0 ? f.def.moves[f.moveIdx] : null;
+  if (!m || m.clip !== 'dive' || !f.alive) {
+    // (A bird's wings: a broad, flatter beat than a dragon's high V.)
+    const p = dragonPose(f, simT, others);
+    if (f.alive && f.hover > 0.35) p.wingFlap = p.wingFlap * 0.75 - 0.3;
+    return p;
+  }
+  // The dive: wings swept back, nose down, forefeet thrown forward, then the wings flare at the strike.
+  const p = dragonPose({ ...f, moveIdx: -1, state: 'move' }, simT, others);
+  const u = (simT - f.stateT) / m.len;
+  const at = m.hits[0].at;
+  const tuck = ramp(u, 0.05, at - 0.15) * (1 - ramp(u, at, at + 0.2));
+  const flare = pulse(u, at - 0.1, at + 0.05, at + 0.35);
+  p.wingFold = lerp(p.wingFold, 0.75, tuck);
+  p.wingFlap = lerp(p.wingFlap, 1.1, flare);
+  p.pitch += 0.35 * tuck - 0.3 * flare;
+  p.neckPitch += 0.2 * tuck;
+  p.jaw = 0.7 * flare;
+  const spec = SPECIES[f.def.proc.kind];
+  for (const leg of ['LF', 'RF']) {
+    const h = home(f.def.proc.kind, leg);
+    p.legs[leg] = [h[0], spec.rollY * 0.6, h[2] + 0.55];
   }
   return p;
 }
@@ -776,4 +1093,12 @@ export const PROC_POSES = {
   brawler: humanPose,
   dragon: dragonPose,
   spider: spiderPose,
+  tiger: lionPose,
+  griffin: griffinPose,
+  rhino: mammalPose,
+  elephant: mammalPose,
+  gorilla: humanPose,
+  minotaur: humanPose,
+  troll: humanPose,
+  viking: humanPose,
 } as const;

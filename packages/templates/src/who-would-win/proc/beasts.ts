@@ -41,25 +41,27 @@ const base = quadruped({
   ],
 });
 
-/** A wing panel: a bony leading edge (arm) with a membrane hanging behind it to the body. */
-function wingPart(len: number, chordIn: number, chordOut: number, fingers: number) {
+/** A wing panel: a bony leading edge (arm) with a membrane (or feathers) hanging behind it to the body. */
+export function wingPart(len: number, chordIn: number, chordOut: number, fingers: number, edgeC = SCALE_DARK, skinC = MEMBRANE, strut = true, feathers = false) {
   return (b: MeshBuilder) => {
     // Leading edge.
-    loft(b, [{ c: [0, 0, 0], w: 0.045, h: 0.05 }, { c: [len, 0.05, 0.05], w: 0.03, h: 0.035 }], { sides: 6, ref: [0, 1, 0], seed: 4, color: (_t, _a, p) => shade(SCALE_DARK, 1, p, 0.05), capStart: 0.3, capEnd: 0.3 });
+    loft(b, [{ c: [0, 0, 0], w: 0.045, h: 0.05 }, { c: [len, 0.05, 0.05], w: 0.03, h: 0.035 }], { sides: 6, ref: [0, 1, 0], seed: 4, color: (_t, _a, p) => shade(edgeC, 1, p, 0.05), capStart: 0.3, capEnd: 0.3 });
     // Membrane: a fan of triangles from the edge back to the trailing points, both faces drawn.
     const pts: V3[] = [];
     for (let k = 0; k <= fingers; k++) {
       const t = k / fingers;
-      pts.push([t * len, 0.05 * t - 0.02, -(chordIn + (chordOut - chordIn) * t) * (0.85 + 0.15 * Math.sin(t * Math.PI * fingers))]);
+      // (Feathers: long tips and short notches in turn.)
+      const notch = feathers ? (k % 2 ? 0.78 : 1.05) : 0.85 + 0.15 * Math.sin(t * Math.PI * fingers);
+      pts.push([t * len, 0.05 * t - 0.02, -(chordIn + (chordOut - chordIn) * t) * notch]);
     }
     for (let k = 0; k < fingers; k++) {
       const a: V3 = [(k / fingers) * len, 0.05 * (k / fingers), 0.02];
       const c: V3 = [((k + 1) / fingers) * len, 0.05 * ((k + 1) / fingers), 0.02];
-      const col = shade(lerpColor(MEMBRANE, SCALE_DARK, hash(k) * 0.4), 1, a, 0.05);
+      const col = shade(feathers ? (k % 2 ? skinC : skinC.clone().multiplyScalar(0.82)) : lerpColor(skinC, edgeC, hash(k) * 0.4), 1, a, 0.05);
       b.tri(a, pts[k], pts[k + 1], col);
       b.tri(a, pts[k + 1], c, col);
-      // Finger struts.
-      cone(b, a, [pts[k + 1][0] - a[0], pts[k + 1][1] - a[1], pts[k + 1][2] - a[2]], Math.hypot(pts[k + 1][0] - a[0], pts[k + 1][2] - a[2]), 0.012, SCALE_DARK, 3);
+      // Finger struts (a bat's or a dragon's; feathers have none).
+      if (strut) cone(b, a, [pts[k + 1][0] - a[0], pts[k + 1][1] - a[1], pts[k + 1][2] - a[2]], Math.hypot(pts[k + 1][0] - a[0], pts[k + 1][2] - a[2]), 0.012, edgeC, 3);
     }
   };
 }

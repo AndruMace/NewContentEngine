@@ -9,12 +9,14 @@ const MOTIONS: Record<string, string[]> = {
   lion: ['swipe', 'bite', 'pounce', 'roar'],
   bear: ['swipe', 'rear', 'bite', 'charge', 'maul', 'roar'],
   croc: ['lunge', 'snap', 'tail'],
-  mammal: ['headbutt', 'charge', 'bite', 'buck', 'combo'],
-  human: ['slash', 'kick', 'punch_l', 'punch_r'],
+  mammal: ['headbutt', 'charge', 'bite', 'buck', 'combo', 'toss', 'swat', 'stomp', 'roar'],
+  human: ['slash', 'kick', 'punch_l', 'punch_r', 'chop', 'club', 'bash', 'backhand', 'stomp', 'pummel', 'beat', 'grapple', 'bite', 'charge'],
   dragon: ['bite', 'breath'],
+  griffin: ['bite', 'swipe', 'dive'],
   spider: ['bite', 'leap'],
 };
-const bodyOf = (kind: string) => (kind in MOTIONS ? kind : ['swordsman', 'king', 'brawler'].includes(kind) ? 'human' : 'mammal');
+const bodyOf = (kind: string) =>
+  kind in MOTIONS ? kind : kind === 'tiger' ? 'lion' : ['swordsman', 'king', 'brawler', 'gorilla', 'minotaur', 'troll', 'viking'].includes(kind) ? 'human' : 'mammal';
 
 describe('roster', () => {
   it.each(CREATURES.map((c) => [c.id, c] as const))('%s: every move has a pose and lands within its length', (_id, c) => {

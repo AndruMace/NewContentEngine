@@ -22,7 +22,11 @@ export interface HeadOpts {
   /** Resting tilt of the head on the neck (rad, + nose down). */
   tilt: number;
   ears: { len: number; w: number; out: number; back: number; color?: THREE.Color; inner?: THREE.Color };
-  horns?: 'bull' | 'antlers' | 'unicorn';
+  horns?: 'bull' | 'antlers' | 'unicorn' | 'rhino';
+  /** An elephant's trunk (hanging from the muzzle, curling out at the tip), tusks and fan ears. */
+  trunk?: { len: number; thick: number };
+  tusks?: number;
+  fanEars?: { w: number; h: number; color: THREE.Color };
   hornColor?: THREE.Color;
   muzzleColor?: THREE.Color;
   nose: THREE.Color;
@@ -50,7 +54,7 @@ export interface QuadOpts {
   hump?: number;
   neck: { len: number; angle: number; thick: number; dewlap?: number };
   head: HeadOpts;
-  legs: { hoof: boolean; thick: number; hoofColor?: THREE.Color; paw?: (b: MeshBuilder) => void; upper?: number };
+  legs: { hoof: boolean; thick: number; hoofColor?: THREE.Color; paw?: (b: MeshBuilder) => void; upper?: number; columns?: boolean };
   tail: { len: number; thick: number; droop: number; hair?: number; bushy?: number; up?: number; color?: THREE.Color; tip?: THREE.Color };
   coat: { base: THREE.Color; back: THREE.Color; belly: THREE.Color; legs?: THREE.Color; lower?: THREE.Color; mark?: (p: V3, a: number) => THREE.Color | null };
   /** Fur roughness (radial jitter of the facets). */
@@ -164,12 +168,69 @@ function buildHead(b: MeshBuilder, o: HeadOpts, coat: QuadOpts['coat'], seed: nu
         cone(b, add(at, mul(d, l * 0.5 / n)), [s * 0.2, 0.7, 1], 0.13 - k * 0.015, 0.018, hc, 4);
         at = next;
       });
+    } else if (o.horns === 'rhino' && s === 1) {
+      // Two horns on the nose, the front one long and swept up.
+      cone(b, [0, h * 0.2, len * 0.82], [0, 1, 0.35], len * 0.55, w * 0.42, hc, 7, undefined, hc.clone().multiplyScalar(0.7));
+      cone(b, [0, h * 0.42, len * 0.55], [0, 1, 0.15], len * 0.22, w * 0.3, hc, 6);
     } else if (o.horns === 'unicorn') {
       // Spiralled: three cones twisting into one.
       cone(b, [0, h * 0.95, len * 0.32], [0, 1, 0.75], 0.55, 0.05, o.hornColor ?? new THREE.Color('#f3dc8a'), 6, undefined, new THREE.Color('#fff6cf'));
     }
   }
   if (o.forelock) for (let k = 0; k < 4; k++) cone(b, [(k - 1.5) * w * 0.25, h * 0.95, len * 0.12], [0, 0.4, 1], h * 0.6, w * 0.15, o.forelock, 3);
+  const skinC = coat.base;
+  if (o.trunk) {
+    const { len: tl, thick } = o.trunk;
+    const pts: V3[] = [
+      [0, -h * 0.1, len * 0.95],
+      [0, -h * 0.35 - tl * 0.12, len + tl * 0.12],
+      [0, -h * 0.35 - tl * 0.45, len + tl * 0.16],
+      [0, -h * 0.35 - tl * 0.75, len + tl * 0.12],
+      [0, -h * 0.35 - tl * 0.92, len + tl * 0.22],
+      [0, -h * 0.35 - tl * 0.98, len + tl * 0.34],
+    ];
+    loft(
+      b,
+      pts.map((c, k) => ({ c, w: thick * (1 - 0.55 * (k / 5)), h: thick * (1 - 0.55 * (k / 5)) })),
+      { sides: 9, ref: [0, 0, 1], jitter: 0.04, seed: seed + 11, color: (t, _a, p) => shade(skinC.clone().multiplyScalar(0.95 - 0.1 * Math.abs(Math.sin(t * 40))), 1, p, 0.04), capStart: 0.2, capEnd: 0.3 },
+    );
+  }
+  if (o.tusks) {
+    const ivory = new THREE.Color('#efe6cc');
+    for (const s of [1, -1]) {
+      let at: V3 = [s * w * 0.45, -h * 0.3, len * 0.72];
+      const dirs: V3[] = [[s * 0.15, -0.45, 1], [s * 0.1, 0.05, 1], [s * 0.02, 0.55, 1]];
+      dirs.forEach((d, k) => {
+        const l = o.tusks! / 3;
+        cone(b, at, d, l * 1.15, w * (0.12 - k * 0.03), ivory, 6);
+        at = add(at, mul(d, l / Math.hypot(...d)));
+      });
+    }
+  }
+  if (o.fanEars) {
+    const { w: ew, h: eh, color } = o.fanEars;
+    for (const s of [1, -1]) {
+      // A broad flap behind the cheek, both faces drawn.
+      const c: V3 = [s * w * 0.95, h * 0.15, len * 0.02];
+      const rim: V3[] = [];
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * Math.PI * 2;
+        const r = 1 + 0.12 * Math.sin(a * 3 + s);
+        rim.push([c[0] + s * 0.05 * Math.cos(a), c[1] + Math.sin(a) * eh * 0.5 * r - eh * 0.12, c[2] - ew * 0.5 + Math.cos(a) * ew * 0.5 * r]);
+      }
+      const inner = color.clone().multiplyScalar(1.1);
+      for (let k = 0; k < 10; k++) {
+        const k1 = (k + 1) % 10;
+        b.tri(c, rim[k], rim[k1], color);
+        b.tri(c, rim[k1], rim[k], inner);
+      }
+    }
+  }
+}
+
+/** Quadruped head on its own (a minotaur wears a bull's). */
+export function quadHead(o: HeadOpts, coat: QuadOpts['coat'], seed: number) {
+  return (b: MeshBuilder) => buildHead(b, o, coat, seed);
 }
 
 export function quadruped(o: QuadOpts): ProcSpec {
@@ -224,7 +285,7 @@ export function quadruped(o: QuadOpts): ProcSpec {
   const lower = o.coat.lower ?? legColor;
   const hoofC = o.legs.hoofColor ?? new THREE.Color('#2a2420');
   const t = o.legs.thick;
-  const paw = o.legs.hoof ? hoofPaw(t * 0.55, hoofC) : (o.legs.paw ?? softPaw(t * 0.75, lower));
+  const paw = o.legs.hoof ? hoofPaw(t * (o.legs.columns ? 0.85 : 0.55), hoofC) : (o.legs.paw ?? softPaw(t * 0.75, lower));
   const mkLeg = (name: LegName, front: boolean, side: 1 | -1): LegSpec => {
     const hy = front ? shY : hipY;
     const x = side * (front ? cw * 0.55 : cw * rumpR * 0.58);
@@ -234,9 +295,11 @@ export function quadruped(o: QuadOpts): ProcSpec {
       bone: front ? 'chest' : 'pelvis',
       hip: [x, hy, front ? L * 0.36 : -L * 0.3],
       home: [x * 0.92, 0, front ? L * 0.42 : -L * 0.34],
-      lens: front ? [0.38 * hy, 0.38 * hy] : [0.4 * hy, 0.38 * hy],
-      end: { up: endUp, back: front ? 0.02 : (o.legs.hoof ? 0.12 : 0.08) * hy, segment: true },
-      radii: front ? [t * (o.legs.upper ?? 1), t * 0.6, t * 0.42] : [t * 1.3 * (o.legs.upper ?? 1), t * 0.65, t * 0.42],
+      lens: o.legs.columns ? [0.465 * hy, 0.44 * hy] : front ? [0.38 * hy, 0.38 * hy] : [0.4 * hy, 0.38 * hy],
+      // (Columns stand straight down onto a foot: no long pastern or hock.)
+      end: o.legs.columns ? { up: 0.1 * hy, back: 0.01, segment: false } : { up: endUp, back: front ? 0.02 : (o.legs.hoof ? 0.12 : 0.08) * hy, segment: true },
+      // (An elephant's legs are columns.)
+      radii: o.legs.columns ? [t * 1.1, t * 0.9, t * 0.5] : front ? [t * (o.legs.upper ?? 1), t * 0.6, t * 0.42] : [t * 1.3 * (o.legs.upper ?? 1), t * 0.65, t * 0.42],
       pole: [0, 0, front ? -1 : 1],
       paw,
       color: legColor,

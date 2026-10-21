@@ -321,3 +321,73 @@ export const FOX = quadruped({
   jitter: 0.08,
   gaits: DOG_GAITS,
 });
+
+const RHINO_SKIN = rgb('#8c7e6c');
+export const RHINO = quadruped({
+  seed: 61,
+  withers: 1.6,
+  length: 2.15,
+  chest: [0.55, 0.56],
+  tuck: 0.05,
+  rump: 1.05,
+  hump: 0.12,
+  neck: { len: 0.42, angle: 0.25, thick: 0.38, dewlap: 0.3 },
+  head: {
+    len: 0.82,
+    w: 0.22,
+    h: 0.26,
+    muzzle: 0.85,
+    tilt: 0.55,
+    ears: { len: 0.16, w: 0.05, out: 0.3, back: 0.3, color: rgb('#6c665e') },
+    horns: 'rhino',
+    hornColor: rgb('#b8ab90'),
+    nose: rgb('#3a3632'),
+    eye: rgb('#1c1712'),
+  },
+  legs: { hoof: true, thick: 0.2, hoofColor: rgb('#4a4540'), upper: 1.2 },
+  tail: { len: 0.45, thick: 0.05, droop: 1.3, color: rgb('#5e5952') },
+  coat: {
+    base: RHINO_SKIN,
+    back: rgb('#6e685f'),
+    belly: rgb('#8e877c'),
+    legs: rgb('#726c63'),
+    lower: rgb('#5e5951'),
+    // Armour-plate folds at the shoulder and the hip.
+    mark: (p) => (Math.abs(p[2] - 0.62) < 0.03 || Math.abs(p[2] + 0.55) < 0.03 ? rgb('#57524b') : null),
+  },
+  jitter: 0.025,
+  gaits: CATTLE_GAITS,
+});
+
+const ELEPHANT_SKIN = rgb('#8a8580');
+export const ELEPHANT = quadruped({
+  seed: 67,
+  withers: 2.75,
+  length: 2.5,
+  chest: [0.78, 0.82],
+  tuck: 0,
+  rump: 1.0,
+  hump: 0.05,
+  neck: { len: 0.45, angle: 0.35, thick: 0.55 },
+  head: {
+    len: 0.72,
+    w: 0.42,
+    h: 0.52,
+    muzzle: 0.72,
+    tilt: 0.55,
+    ears: { len: 0.05, w: 0.02, out: 0.2, back: 0.3, color: ELEPHANT_SKIN },
+    fanEars: { w: 0.85, h: 1.05, color: rgb('#7d7873') },
+    trunk: { len: 1.55, thick: 0.15 },
+    tusks: 0.9,
+    nose: ELEPHANT_SKIN,
+    eye: rgb('#1c1712'),
+  },
+  legs: { hoof: true, thick: 0.3, hoofColor: rgb('#bdb6a8'), upper: 1.15, columns: true },
+  tail: { len: 0.9, thick: 0.05, droop: 1.35, hair: 0.04, color: rgb('#6e6965'), tip: rgb('#2a2622') },
+  coat: { base: ELEPHANT_SKIN, back: rgb('#7c7772'), belly: rgb('#94908a'), legs: rgb('#86817c'), lower: rgb('#7a756f') },
+  jitter: 0.03,
+  gaits: [
+    { from: 0, duty: 0.68, offsets: LATERAL, lift: 0.14, bob: 0.03, flex: 0.01 },
+    { from: 2.5, duty: 0.5, offsets: LATERAL, lift: 0.2, bob: 0.06, flex: 0.02 },
+  ],
+});

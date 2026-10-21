@@ -5,9 +5,10 @@
 import { THREE } from '../../three-layer';
 import { MeshBuilder, blob, cone, hash, lerpColor, loft, rgb, shade, smoothRings, type Ring, type Skin, type V3 } from './builder';
 import type { Gait, LegName, LegSpec, ProcSpec } from './rig';
-import { ALPACA, BULL, DEER, DONKEY, FOX, HORSE, HUSKY, STAG, UNICORN, WOLF } from './mammals';
-import { BRAWLER, KING, SWORDSMAN } from './bipeds';
-import { DRAGON, SPIDER } from './beasts';
+import { ALPACA, BULL, DEER, DONKEY, ELEPHANT, FOX, HORSE, HUSKY, RHINO, STAG, UNICORN, WOLF } from './mammals';
+import { BRAWLER, GORILLA, KING, MINOTAUR, SWORDSMAN, TROLL, VIKING } from './bipeds';
+import { DRAGON, SPIDER, wingPart } from './beasts';
+import { scaleSpec } from './rig';
 
 const LATERAL: Record<LegName, number> = { LH: 0, LF: 0.25, RH: 0.5, RF: 0.75 };
 const ROTARY: Record<LegName, number> = { LH: 0, RH: 0.09, LF: 0.5, RF: 0.6 };
@@ -82,7 +83,37 @@ function catPaw(w: number, color: THREE.Color) {
   };
 }
 
-export const LION: ProcSpec = {
+export interface BigCatOpts {
+  coat: THREE.Color;
+  back: THREE.Color;
+  belly: THREE.Color;
+  dark: THREE.Color;
+  /** A lion's mane (colour and tips), or none. */
+  mane?: { base: THREE.Color; tip: THREE.Color };
+  /** Black stripes (a tiger's), or none. */
+  stripes?: THREE.Color;
+  /** A white muzzle and cheeks. */
+  cheeks?: THREE.Color;
+  /** Its own head (and jaw) instead of a cat's, and its own forefeet. */
+  head?: Pick<ProcSpec, 'head' | 'jaw' | 'jawPivot' | 'headScale'>;
+  forePaw?: (b: MeshBuilder) => void;
+  /** A tufted tail tip (a lion's). */
+  tuft: boolean;
+}
+
+/** A tiger's stripes: dark bands down the flanks, wavy, thinning to the belly. */
+function striped(base: (t: number, a: number, p: V3) => THREE.Color, stripe: THREE.Color) {
+  return (t: number, a: number, p: V3) => {
+    // (Wide enough to survive the facets: each face takes the mean of its corners.)
+    const band = Math.sin(p[2] * 11 + 1.6 * Math.sin(p[1] * 6 + p[2] * 2)) + 0.25 * Math.sin(a * 2 + p[2] * 4);
+    return band > 0.35 && Math.sin(a) > -0.45 ? shade(stripe, 1, p, 0.05) : base(t, a, p);
+  };
+}
+
+/** A big cat (lion, tiger; a griffin's body): long, low, deep-chested, heavy forelimbs. */
+export function bigCat(o: BigCatOpts): ProcSpec {
+  const bodyColor = coat(o.coat, o.back, o.belly);
+  return {
   bones: {
     pelvis: [0, 0.93, -0.58],
     spine: [0, 0.91, -0.1],
@@ -100,19 +131,24 @@ export const LION: ProcSpec = {
   rollY: 0.9,
   headScale: 1.3,
   body(b, skin) {
-    loft(b, smoothRings(LION_RINGS, 3), { sides: 14, jitter: 0.035, seed: 1, color: coat(LION_COAT, LION_BACK, LION_BELLY), capStart: 0.5, capEnd: 0.2, skin, twist: 0.2 });
+    loft(b, smoothRings(LION_RINGS, 3), { sides: 14, jitter: 0.035, seed: 1, color: o.stripes ? striped(bodyColor, o.stripes) : bodyColor, capStart: 0.5, capEnd: 0.2, skin, twist: 0.2 });
     // Tail tuft.
-    const tip: V3 = [0, 0.42, -1.96];
-    const sk = skin(tip);
-    for (let k = 0; k < 7; k++) {
-      const a = (k / 7) * Math.PI * 2;
-      cone(b, [0, 0.42, -1.9], [Math.cos(a) * 0.5, Math.sin(a) * 0.5, -1], 0.13, 0.035, LION_DARK, 4, sk);
+    if (o.tuft) {
+      const tip: V3 = [0, 0.42, -1.96];
+      const sk = skin(tip);
+      for (let k = 0; k < 7; k++) {
+        const a = (k / 7) * Math.PI * 2;
+        cone(b, [0, 0.42, -1.9], [Math.cos(a) * 0.5, Math.sin(a) * 0.5, -1], 0.13, 0.035, o.dark, 4, sk);
+      }
     }
   },
   head(b) {
     const face = (_t: number, a: number, p: V3) => {
       const muzzle = Math.max(0, Math.min(1, (p[2] - 0.18) / 0.12)) * Math.max(0, -Math.sin(a) + 0.4);
-      return shade(lerpColor(lerpColor(LION_COAT, LION_BACK, Math.max(0, Math.sin(a)) * 0.6), LION_BELLY, muzzle), 1, p, 0.06);
+      const fur = lerpColor(lerpColor(o.coat, o.back, Math.max(0, Math.sin(a)) * 0.6), o.cheeks ?? o.belly, o.cheeks ? Math.min(1, muzzle * 1.6) : muzzle);
+      // (Stripes over the brow and cheeks.)
+      if (o.stripes && Math.sin(p[0] * 30) * Math.cos(p[2] * 14) > 0.35 && p[1] > 0.0) return shade(o.stripes, 1, p, 0.05);
+      return shade(fur, 1, p, 0.06);
     };
     loft(
       b,
@@ -130,10 +166,10 @@ export const LION: ProcSpec = {
     for (const s of [1, -1]) {
       blob(b, [s * 0.075, 0.095, 0.17], 0.024, 0.015, 0.014, rgb('#c88f2c'));
       blob(b, [s * 0.078, 0.097, 0.178], 0.01, 0.008, 0.008, rgb('#120c08'));
-      blob(b, [s * 0.065, 0.12, 0.16], 0.04, 0.012, 0.03, LION_BACK);
+      blob(b, [s * 0.065, 0.12, 0.16], 0.04, 0.012, 0.03, o.back);
       // Rounded ears, half hidden in the mane.
-      blob(b, [s * 0.11, 0.17, -0.01], 0.045, 0.05, 0.022, LION_BACK);
-      blob(b, [s * 0.11, 0.168, 0.006], 0.028, 0.032, 0.01, LION_DARK);
+      blob(b, [s * 0.11, 0.17, -0.01], 0.045, 0.05, 0.022, o.back);
+      blob(b, [s * 0.11, 0.168, 0.006], 0.028, 0.032, 0.01, o.dark);
       cone(b, [s * 0.05, -0.055, 0.29], [0, -1, 0.15], 0.05, 0.012, rgb('#f1ead8'), 4);
     }
   },
@@ -146,13 +182,13 @@ export const LION: ProcSpec = {
         { c: [0, -0.02, 0.13], w: 0.09, h: 0.045 },
         { c: [0, -0.02, 0.27], w: 0.065, h: 0.035 },
       ],
-      { sides: 10, jitter: 0.03, seed: 4, color: (_t, a, p) => shade(lerpColor(LION_COAT, LION_BELLY, Math.max(0, -Math.sin(a)) * 0.5 + 0.2), 1, p, 0.05), capStart: 0.2, capEnd: 0.4 },
+      { sides: 10, jitter: 0.03, seed: 4, color: (_t, a, p) => shade(lerpColor(o.coat, o.cheeks ?? o.belly, Math.max(0, -Math.sin(a)) * 0.5 + 0.2), 1, p, 0.05), capStart: 0.2, capEnd: 0.4 },
     );
     for (const s of [1, -1]) cone(b, [s * 0.042, 0.01, 0.24], [0, 1, 0.1], 0.04, 0.011, rgb('#f1ead8'), 4);
     // Red mouth inside (visible when it opens).
     blob(b, [0, 0.015, 0.12], 0.06, 0.012, 0.12, rgb('#7a2a26'));
   },
-  extras: [
+  extras: o.mane ? [
     {
       bone: 'neck1',
       build(b) {
@@ -172,17 +208,17 @@ export const LION: ProcSpec = {
             sides: 20,
             jitter: 0.17,
             seed: 9,
-            color: (t, a, p) => shade(lerpColor(MANE, MANE_TIP, 0.25 + 0.6 * hash(p[0] * 31 + p[1] * 17 + p[2] * 11) * (1 - t * 0.4) + Math.max(0, Math.sin(a)) * 0.2), 1, p, 0.04),
+            color: (t, a, p) => shade(lerpColor(o.mane!.base, o.mane!.tip, 0.25 + 0.6 * hash(p[0] * 31 + p[1] * 17 + p[2] * 11) * (1 - t * 0.4) + Math.max(0, Math.sin(a)) * 0.2), 1, p, 0.04),
             capStart: 0.3,
             capEnd: 0.1,
             twist: 0.1,
           },
         );
         // Forelock tufts between the ears.
-        for (let k = 0; k < 5; k++) cone(b, [(k - 2) * 0.05, 0.22 + hash(k) * 0.03, 0.2], [0, 0.6, 1], 0.1, 0.045, MANE_TIP, 4);
+        for (let k = 0; k < 5; k++) cone(b, [(k - 2) * 0.05, 0.22 + hash(k) * 0.03, 0.2], [0, 0.6, 1], 0.1, 0.045, o.mane!.tip, 4);
       },
     },
-  ],
+  ] : [],
   legs: [
     ...mirror({
       name: 'LF',
@@ -193,8 +229,8 @@ export const LION: ProcSpec = {
       end: { up: 0.11, back: 0.02, segment: true },
       radii: [0.125, 0.085, 0.064],
       pole: [0, 0, -1],
-      paw: catPaw(0.085, LION_COAT),
-      color: LION_COAT,
+      paw: o.forePaw ?? catPaw(0.085, o.coat),
+      color: o.coat,
     }),
     ...mirror({
       name: 'LH',
@@ -205,14 +241,103 @@ export const LION: ProcSpec = {
       end: { up: 0.2, back: 0.1, segment: true },
       radii: [0.16, 0.09, 0.06],
       pole: [0, 0, 1],
-      paw: catPaw(0.08, LION_COAT),
-      color: LION_COAT,
+      paw: catPaw(0.08, o.coat),
+      color: o.coat,
     }),
   ],
   gaits: [
     { from: 0, duty: 0.62, offsets: LATERAL, lift: 0.12, bob: 0.02, flex: 0.02 },
     { from: 4.5, duty: 0.32, offsets: ROTARY, lift: 0.22, bob: 0.06, flex: 0.14 },
   ],
+  ...(o.head ?? {}),
+  };
+}
+
+export const LION = bigCat({ coat: LION_COAT, back: LION_BACK, belly: LION_BELLY, dark: LION_DARK, mane: { base: MANE, tip: MANE_TIP }, tuft: true });
+
+/** A tiger: bigger than the lion, maneless, orange with black stripes and a white muzzle and belly. */
+export const TIGER = scaleSpec(
+  bigCat({ coat: rgb('#d8782c'), back: rgb('#c4651f'), belly: rgb('#f2e6d0'), dark: rgb('#1a1310'), stripes: rgb('#1e1612'), cheeks: rgb('#f4ebdc'), tuft: false }),
+  1.08,
+);
+
+const GRIFFIN_FEATHER = rgb('#f2ede2');
+const GRIFFIN_BROWN = rgb('#8a5a2c');
+const BEAK = rgb('#e8b02a');
+/** An eagle's head (white, a hooked yellow beak) for the griffin, built along +Z from the neck. */
+const eagleHead: Pick<ProcSpec, 'head' | 'jaw' | 'jawPivot' | 'headScale'> = {
+  headScale: 1.25,
+  head(b) {
+    loft(
+      b,
+      smoothRings(
+        [
+          { c: [0, 0.0, -0.08], w: 0.1, h: 0.11 },
+          { c: [0, 0.04, 0.03], w: 0.12, h: 0.12 },
+          { c: [0, 0.05, 0.13], w: 0.1, h: 0.09 },
+          { c: [0, 0.03, 0.2], w: 0.06, h: 0.06 },
+        ],
+        2,
+      ),
+      { sides: 12, seed: 71, jitter: 0.08, color: (_t, _a, p) => shade(GRIFFIN_FEATHER, 1, p, 0.06), capStart: 0.3, capEnd: 0.2 },
+    );
+    // The hooked beak.
+    loft(b, [{ c: [0, 0.03, 0.19], w: 0.05, h: 0.055 }, { c: [0, 0.03, 0.29], w: 0.032, h: 0.04 }, { c: [0, 0.0, 0.35], w: 0.015, h: 0.02 }], { sides: 8, seed: 72, color: () => BEAK, capEnd: 0.4 });
+    cone(b, [0, 0.0, 0.34], [0, -1, 0.35], 0.06, 0.012, BEAK.clone().multiplyScalar(0.85), 4);
+    for (const s of [1, -1]) {
+      blob(b, [s * 0.07, 0.07, 0.12], 0.022, 0.018, 0.015, rgb('#e89a20'));
+      blob(b, [s * 0.075, 0.072, 0.128], 0.01, 0.01, 0.008, rgb('#100a06'));
+      blob(b, [s * 0.065, 0.1, 0.11], 0.04, 0.012, 0.03, GRIFFIN_FEATHER.clone().multiplyScalar(0.85));
+    }
+    for (let k = 0; k < 6; k++) cone(b, [(k - 2.5) * 0.03, 0.08, -0.08], [(k - 2.5) * 0.15, 0.3, -1], 0.14, 0.03, GRIFFIN_FEATHER, 3);
+  },
+  jawPivot: [0, -0.02, 0.18],
+  jaw(b) {
+    loft(b, [{ c: [0, -0.01, 0.0], w: 0.035, h: 0.02 }, { c: [0, -0.012, 0.12], w: 0.02, h: 0.012 }], { sides: 8, seed: 73, color: () => BEAK.clone().multiplyScalar(0.9), capEnd: 0.3 });
+  },
+};
+
+/** An eagle's talons for the griffin's forefeet. */
+function talons(w: number) {
+  return (b: MeshBuilder) => {
+    loft(b, [{ c: [0, w * 0.6, -w * 0.3], w: w * 0.5, h: w * 0.5 }, { c: [0, w * 0.4, w * 0.4], w: w * 0.55, h: w * 0.35, flat: 0.5 }], { sides: 7, seed: 74, color: () => BEAK.clone().multiplyScalar(0.85), capStart: 0.3, capEnd: 0.3 });
+    for (let k = 0; k < 3; k++) cone(b, [(k - 1) * w * 0.4, w * 0.3, w * 0.6], [(k - 1) * 0.3, -0.5, 1], w * 1.1, w * 0.12, rgb('#2a2420'), 4);
+    cone(b, [0, w * 0.35, -w * 0.4], [0, -0.4, -1], w * 0.9, w * 0.12, rgb('#2a2420'), 4);
+  };
+}
+
+/** A griffin: a lion's body with an eagle's head, forefeet and wings; it flies low like the dragon. */
+const griffinBody = bigCat({ coat: rgb('#c49a5c'), back: rgb('#a57a43'), belly: rgb('#e8d4ae'), dark: rgb('#3b2a1c'), head: eagleHead, forePaw: talons(0.09), tuft: true });
+export const GRIFFIN: ProcSpec = {
+  ...griffinBody,
+  // White feathers down the neck, over the mane's place.
+  extras: [
+    {
+      bone: 'neck1',
+      build(b) {
+        loft(
+          b,
+          smoothRings(
+            [
+              { c: [0, -0.04, -0.3], w: 0.24, h: 0.28 },
+              { c: [0, 0.0, -0.12], w: 0.26, h: 0.3 },
+              { c: [0, 0.06, 0.08], w: 0.2, h: 0.24 },
+              { c: [0, 0.12, 0.22], w: 0.13, h: 0.15 },
+            ],
+            2,
+          ),
+          { sides: 16, jitter: 0.14, seed: 75, color: (t, _a, p) => shade(lerpColor(GRIFFIN_FEATHER, GRIFFIN_BROWN, (1 - t) * 0.35), 1, p, 0.05), capStart: 0.3, capEnd: 0.1 },
+        );
+      },
+    },
+  ],
+  wings: {
+    bone: 'chest',
+    root: [0.18, 0.42, 0.0],
+    elbow: [0.9, 0.05, 0.05],
+    inner: wingPart(0.9, 0.62, 0.66, 6, GRIFFIN_BROWN, rgb('#b88a52'), false, true),
+    outer: wingPart(1.05, 0.66, 0.3, 7, GRIFFIN_BROWN, GRIFFIN_FEATHER, false, true),
+  },
 };
 
 // ---- grizzly ---------------------------------------------------------------------------------------
@@ -511,6 +636,6 @@ export const CROC: ProcSpec = {
   gaits: [{ from: 0, duty: 0.7, offsets: { LF: 0, RH: 0.05, RF: 0.5, LH: 0.55 }, lift: 0.07, bob: 0.008, flex: 0 }],
 };
 
-export const SPECIES = { lion: LION, bear: BEAR, croc: CROC, horse: HORSE, unicorn: UNICORN, donkey: DONKEY, bull: BULL, stag: STAG, deer: DEER, alpaca: ALPACA, wolf: WOLF, husky: HUSKY, fox: FOX, swordsman: SWORDSMAN, king: KING, brawler: BRAWLER, dragon: DRAGON, spider: SPIDER } as const;
+export const SPECIES = { lion: LION, bear: BEAR, croc: CROC, horse: HORSE, unicorn: UNICORN, donkey: DONKEY, bull: BULL, stag: STAG, deer: DEER, alpaca: ALPACA, wolf: WOLF, husky: HUSKY, fox: FOX, swordsman: SWORDSMAN, king: KING, brawler: BRAWLER, dragon: DRAGON, spider: SPIDER, tiger: TIGER, griffin: GRIFFIN, rhino: RHINO, elephant: ELEPHANT, gorilla: GORILLA, minotaur: MINOTAUR, troll: TROLL, viking: VIKING } as const;
 export type SpeciesId = keyof typeof SPECIES;
 export type { Skin };

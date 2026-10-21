@@ -41,6 +41,10 @@ const _Q = new THREE.Vector3();
  * forepaws hooked over its prey's back, a bear's paws raking down on it.
  */
 function strike(rig: ProcRig, f: FighterView, p: PoseIn, simT: number, rigs: Map<number, ProcRig>, all: FighterView[]) {
+  if (f.alive && f.state === 'clinch' && f.clinch) {
+    grapple(rig, f, p, simT, rigs, all);
+    return;
+  }
   if (!f.alive || !f.aim) return;
   const t = all.find((o) => o.idx === (f.grab ? f.grab.target : f.target));
   const tr = t && rigs.get(t.idx);
@@ -61,8 +65,9 @@ function strike(rig: ProcRig, f: FighterView, p: PoseIn, simT: number, rigs: Map
   const g = f.grab;
   const e = clamp01((simT - g.t0) / 0.2);
   if (g.kind === 'latch' || g.kind === 'pin') {
-    // Forepaws on its back (a bear's slamming down in turn), either side of the hold.
-    for (const [limb, du] of [['LF', 0.1], ['RF', -0.1]] as const) {
+    // Forepaws (an ape's fists) on its back (a bear's slamming down in turn), either side of the hold.
+    const biped = rig.spec.legs.some((l) => l.arm);
+    for (const [limb, du] of [[biped ? 'LA' : 'LF', 0.1], [biped ? 'RA' : 'RF', -0.1]] as const) {
       const back = at({ zone: 'body', side: g.side, u: Math.max(0, Math.min(1, g.aim.u - 0.15 + du)), v: 0 });
       if (!back) continue;
       const slam = g.kind === 'pin' ? Math.max(0, Math.sin(simT * 9 + (limb === 'LF' ? 0 : Math.PI))) : 0;
@@ -75,6 +80,37 @@ function strike(rig: ProcRig, f: FighterView, p: PoseIn, simT: number, rigs: Map
   if (hold) reachFor(rig, p, [{ kind: 'snout' }], spotWorld(hold, _P), e * 0.95, { flier });
 }
 
+
+/**
+ * Locked with another: horns meet the other's head (brow to brow); a reared animal's forepaws grip the
+ * other's shoulders and its jaws go for the neck; a person's (or ape's) hands grip the other's shoulders.
+ */
+function grapple(rig: ProcRig, f: FighterView, p: PoseIn, simT: number, rigs: Map<number, ProcRig>, all: FighterView[]) {
+  const c = f.clinch!;
+  const t = all.find((o) => o.idx === c.with);
+  const tr = t && rigs.get(t.idx);
+  if (!t || !tr) return;
+  const e = clamp01((simT - c.t0) / 0.25);
+  const side = sideNow(t, f.x, f.y);
+  const biped = rig.spec.legs.some((l) => l.arm);
+  if (c.style === 'horns') {
+    const s = spotOf(tr, { zone: 'head', side, u: 0.85, v: 0.75 });
+    if (s) reachFor(rig, p, [{ kind: 'brow' }], spotWorld(s, _P), e);
+    return;
+  }
+  const hands = biped ? (['LA', 'RA'] as const) : (['LF', 'RF'] as const);
+  for (const [limb, sd] of [
+    [hands[0], 1],
+    [hands[1], -1],
+  ] as const) {
+    const s = spotOf(tr, { zone: 'body', side: sd as 1 | -1, u: 0.95, v: 0.15 });
+    if (s) reachFor(rig, p, [{ kind: 'paw', limb }], spotWorld(s, _Q), e * 0.95);
+  }
+  if (!biped) {
+    const s = spotOf(tr, { zone: 'body', side, u: 1, v: 0.35 });
+    if (s) reachFor(rig, p, [{ kind: 'snout' }], spotWorld(s, _P), e * 0.9);
+  }
+}
 
 /** Pose every fighter (rigs by fighter index) at sim time simT. */
 export function stage(rigs: Map<number, ProcRig>, fighters: FighterView[], simT: number, horde: boolean) {

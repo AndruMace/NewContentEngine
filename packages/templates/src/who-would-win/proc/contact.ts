@@ -55,7 +55,7 @@ function cast(geo: THREE.BufferGeometry, from: THREE.Vector3, dir: THREE.Vector3
   return { point: hit.point.clone(), color };
 }
 
-const SPINE = ['pelvis', 'spine', 'chest', 'neck1'] as const;
+const SPINE = ['pelvis', 'spine', 'chest', 'neck1', 'neck2'] as const;
 
 function bodySpot(rig: ProcRig, a: Aim): Spot | null {
   const spec = rig.spec;
@@ -63,7 +63,7 @@ function bodySpot(rig: ProcRig, a: Aim): Spot | null {
   // Along the torso (rump to shoulders), then round it from the top (or the front, upright) to the side.
   const lens = pts.slice(1).map((p, i) => p.distanceTo(pts[i]));
   const total = lens.reduce((x, y) => x + y, 0);
-  let d = (0.08 + 0.84 * a.u) * total;
+  let d = (0.08 + 0.86 * a.u) * total;
   let i = 0;
   while (i < lens.length - 1 && d > lens[i]) d -= lens[i++];
   const axis = pts[i].clone().lerp(pts[i + 1], lens[i] ? d / lens[i] : 0);
@@ -308,7 +308,7 @@ export function reachFor(rig: ProcRig, p: PoseIn, parts: StrikePart[], P: THREE.
       const l = rig.limb(name);
       if (!l) continue;
       const hip = rig.root.worldToLocal(l.pivot.getWorldPosition(new THREE.Vector3()));
-      const len = limbReach(l.spec) + (sword ? (rig.props[0]?.tip ?? 0.9) * 0.85 : 0);
+      const len = limbReach(l.spec) + (sword ? (rig.props.find((x) => x.spec.limb === 'RA')?.tip ?? 0.9) * 0.85 : 0);
       const need = Pm.clone().sub(hip);
       const excess = need.length() - len;
       if (excess > 0) shift.addScaledVector(need.normalize(), Math.min(excess + 0.05, LEAN + 0.2) / reaching.length);
@@ -322,7 +322,7 @@ export function reachFor(rig: ProcRig, p: PoseIn, parts: StrikePart[], P: THREE.
     const cur = l.paw.position.clone();
     // Two limbs land side by side.
     const want = Pm.clone();
-    if (limbs.length > 1) want.x += 0.11 * Math.sign(l.spec.hip[0] || 1);
+    if (limbs.length > 1) want.x += 0.07 * Math.sign(l.spec.hip[0] || 1);
     const v = cur.lerp(want, a);
     p.legs[x.limb] = [v.x, v.y, v.z];
     if (a > 0.3) p.reach = { ...p.reach, [x.limb]: true };
@@ -331,10 +331,12 @@ export function reachFor(rig: ProcRig, p: PoseIn, parts: StrikePart[], P: THREE.
     const hand = rig.limb('RA');
     if (hand) {
       const cur = hand.paw.position.clone();
-      const tipLen = rig.props[0]?.tip ?? 0.9;
+      const tipLen = rig.props.find((x) => x.spec.limb === 'RA')?.tip ?? 0.9;
       const dir = Pm.clone().sub(cur).normalize();
-      // Hand where the blade's point (most of its length out) meets the spot.
-      const want = Pm.clone().addScaledVector(dir, -tipLen * 0.85);
+      // Hand where the weapon meets the spot (a blade most of its length out, cutting through; a club's or
+      // an axe's head on it).
+      const thru = rig.props.find((x) => x.spec.limb === 'RA')?.tip ?? 0;
+      const want = Pm.clone().addScaledVector(dir, -tipLen * (thru > 0.95 && rig.spec.legs.some((l) => l.arm) && tipLen < 0.95 ? 0.85 : 0.97));
       const v = cur.lerp(want, a);
       p.legs.RA = [v.x, v.y, v.z];
       const was = new THREE.Vector3(...(p.props.sword ?? [0, 0.6, 0.8])).normalize();
@@ -345,17 +347,28 @@ export function reachFor(rig: ProcRig, p: PoseIn, parts: StrikePart[], P: THREE.
   const head = parts.find((x) => x.kind === 'snout' || x.kind === 'brow') as { kind: 'snout' | 'brow' } | undefined;
   if (head) {
     const lean = [...p.lean] as V3;
-    for (let it = 0; it < 4; it++) {
+    // The move's own curl of the head gives way to reaching for the spot.
+    p.neckPitch *= 1 - 0.6 * a;
+    p.headPitch *= 1 - 0.6 * a;
+    const err = () => {
       rig.pose(p);
       rig.root.updateWorldMatrix(true, false);
-      const S = rig.root.worldToLocal(rig.headPoint(head.kind, tmp));
-      const E = Pm.clone().sub(S);
+      return Pm.clone().sub(rig.root.worldToLocal(rig.headPoint(head.kind, tmp)));
+    };
+    for (let it = 0; it < 6; it++) {
+      const E = err();
       lean[2] = clampV(lean[2] + E.z * a * 0.85, -LEAN - 0.15, LEAN + 0.2);
       lean[0] = clampV(lean[0] + E.x * a * 0.4, -0.4, 0.4);
       lean[1] = clampV(lean[1] + E.y * a * (opts.flier ? 0.6 : opts.leap ? 0.8 : 0.2), opts.flier ? -1 : -0.3, 0.2 + (opts.leap ?? 0));
       p.lean = [...lean];
-      p.neckPitch = clampV(p.neckPitch - (E.y / 0.7) * a * 0.75, -1.4, 1.6);
       p.neckYaw = clampV(p.neckYaw + (E.x / 0.6) * a * 0.8, -1.3, 1.3);
+      // Pitch the neck by measuring which way brings the head nearer (long heads swing far).
+      const e0 = err().length();
+      const was = p.neckPitch;
+      p.neckPitch = was + 0.08;
+      const e1 = err().length();
+      const g = (e1 - e0) / 0.08;
+      p.neckPitch = clampV(was - clampV(Math.abs(g) > 0.05 ? (e0 / g) * 0.7 : 0, -0.4, 0.4) * a, -1.4, 1.6);
     }
   }
   rig.pose(p);

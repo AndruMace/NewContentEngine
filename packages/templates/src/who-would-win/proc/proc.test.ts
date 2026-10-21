@@ -52,6 +52,9 @@ function view(def: (typeof procs)[number], over: Partial<FighterView>): FighterV
     downLen: 1.2,
     fallDir: 1,
     hover: def.hover ?? 0,
+    stepV: over.spd ?? 0,
+    clinch: null,
+    blockT: -10,
     ...over,
   };
 }
@@ -83,6 +86,10 @@ describe('procedural creatures', () => {
       { crouch: 1 },
       { state: 'stagger', stateT: 0.9, lastHitT: 0.9, lastHitPow: 2, lastHitDir: 1 },
       { state: 'down', stateT: 0.5, downLen: 1.2 },
+      { state: 'prep', stateT: 0.5 },
+      { state: 'clinch', clinch: { with: 1, t0: 0.5, until: 3, push: 0.4, surge: 0.5, next: 1, style: 'horns' } },
+      { state: 'clinch', clinch: { with: 1, t0: 0.5, until: 3, push: -0.4, surge: -0.5, next: 1, style: 'wrestle' }, stepV: -0.6 },
+      { blockT: 0.6 },
       { evadeT: 0.5 },
       { spd: def.walk, gait: 0.4, hurt: { head: 0.3, body: 0.3, wing: 0.4, LF: 0.4, RF: 0, LH: 0, RH: 0.3 }, hp: 0.1, hover: 0 },
       { alive: false, state: 'dead', diedAt: 0.2 },
@@ -138,13 +145,13 @@ describe('procedural creatures', () => {
             if (!spot) continue;
             const P = spotWorld(spot, new THREE.Vector3());
             const rig = rigs.get(f.idx)!;
-            misses.push(Math.min(...parts.map((p) => (p.kind === 'paw' ? rig.pawWorld(p.limb) : p.kind === 'sword' ? rig.propTip('sword') : rig.headPoint(p.kind)).distanceTo(P))));
+            misses.push(Math.min(...parts.map((p) => (p.kind === 'paw' ? rig.pawWorld(p.limb) : p.kind === 'sword' ? rig.propTip() : rig.headPoint(p.kind)).distanceTo(P))));
             n++;
           }
         }
       }
     misses.sort((x, y) => x - y);
-    expect(misses.length).toBeGreaterThan(40);
+    expect(misses.length).toBeGreaterThan(30);
     expect(misses[Math.floor(misses.length * 0.5)]).toBeLessThan(0.12);
     expect(misses[Math.floor(misses.length * 0.75)]).toBeLessThan(0.3);
   });

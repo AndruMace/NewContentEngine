@@ -52,8 +52,8 @@ export interface PropSpec {
   build: (b: MeshBuilder) => void;
 }
 
-/** A wing on a spine bone: the inner part from `root`, the outer part hinged at `elbow` (both built
- * along +X, outwards, for the left wing; the right one is mirrored). */
+/** A wing on a spine bone: the inner part from `root` (relative to the bone), the outer part hinged at
+ * `elbow` (both built along +X, outwards, for the left wing; the right one is mirrored). */
 export interface WingSpec {
   bone: SpineBone;
   root: V3;
@@ -289,6 +289,43 @@ function build(spec: ProcSpec): Built {
 
 export const triangleCount = (spec: ProcSpec) => build(spec).triangles;
 
+/** The same body built k times the size (bones, limbs, geometry, gait), for a bigger or smaller kind. */
+export function scaleSpec(spec: ProcSpec, k: number): ProcSpec {
+  const s3 = (v: V3): V3 => [v[0] * k, v[1] * k, v[2] * k];
+  const scaled =
+    <A extends unknown[]>(fn: (b: MeshBuilder, ...rest: A) => void) =>
+    (b: MeshBuilder, ...rest: A) => {
+      const old = b.scale;
+      b.scale = old * k;
+      fn(b, ...rest);
+      b.scale = old;
+    };
+  return {
+    ...spec,
+    bones: { pelvis: s3(spec.bones.pelvis), spine: s3(spec.bones.spine), chest: s3(spec.bones.chest), neck1: s3(spec.bones.neck1), neck2: s3(spec.bones.neck2), tail: spec.bones.tail.map(s3) },
+    // (Skin weights are worked out on the scaled bones: hand them the scaled point.)
+    body: (b, skin) => scaled(spec.body)(b, (p: V3) => skin(s3(p))),
+    head: scaled(spec.head),
+    jaw: scaled(spec.jaw),
+    jawPivot: s3(spec.jawPivot),
+    extras: spec.extras?.map((e) => ({ ...e, build: scaled(e.build) })),
+    props: spec.props?.map((pr) => ({ ...pr, build: scaled(pr.build) })),
+    wings: spec.wings ? { ...spec.wings, root: s3(spec.wings.root), elbow: s3(spec.wings.elbow), inner: scaled(spec.wings.inner), outer: scaled(spec.wings.outer) } : undefined,
+    legs: spec.legs.map((l) => ({
+      ...l,
+      hip: s3(l.hip),
+      home: s3(l.home),
+      lens: [l.lens[0] * k, l.lens[1] * k],
+      end: { ...l.end, up: l.end.up * k, back: l.end.back * k },
+      radii: [l.radii[0] * k, l.radii[1] * k, l.radii[2] * k],
+      paw: scaled(l.paw),
+      arm: l.arm ? { swing: l.arm.swing * k } : undefined,
+    })),
+    gaits: spec.gaits.map((g) => ({ ...g, lift: g.lift * k, bob: g.bob * k })),
+    rollY: spec.rollY * k,
+  };
+}
+
 export interface LegRig {
   spec: LegSpec;
   pivot: THREE.Object3D;
@@ -432,10 +469,10 @@ export class ProcRig {
     if (spec.wings && built.wings) {
       const wm = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.8, metalness: 0, side: THREE.DoubleSide });
       this.wingMaterial = wm;
-      const bonePos = pos(spec.bones[spec.wings.bone]);
       for (const side of [1, -1] as const) {
         const inner = new THREE.Group();
-        inner.position.set(spec.wings.root[0] * side - bonePos.x, spec.wings.root[1] - bonePos.y, spec.wings.root[2] - bonePos.z);
+        // (The root is relative to its bone: on the back, over the shoulders.)
+        inner.position.set(spec.wings.root[0] * side, spec.wings.root[1], spec.wings.root[2]);
         inner.scale.x = side;
         const im = new THREE.Mesh(built.wings.inner, wm);
         im.castShadow = true;
@@ -591,9 +628,9 @@ export class ProcRig {
     return this.headMesh.localToWorld(out.copy(which === 'snout' ? this.snout : this.brow));
   }
 
-  /** World position of a held prop's tip (a sword's point). */
-  propTip(name: string, out = new THREE.Vector3()) {
-    const pr = this.props.find((x) => x.spec.name === name);
+  /** World position of a held prop's tip (a sword's point; by default the weapon in the right hand). */
+  propTip(name?: string, out = new THREE.Vector3()) {
+    const pr = this.props.find((x) => (name ? x.spec.name === name : x.spec.limb === 'RA'));
     if (!pr) return this.headPoint('snout', out);
     return pr.mesh.localToWorld(out.set(0, pr.tip, 0));
   }

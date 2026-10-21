@@ -13,7 +13,7 @@
 import type { Rng } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { COOLDOWN_MUL, DAMAGE_MUL } from './balance';
-import { strideFor, type CreatureDef, type MoveDef } from './roster';
+import { strideFor, type CreatureDef, type DamageType, type MoveDef } from './roster';
 import { anatomyOf, strikeParts } from './proc/anatomy';
 import type { V3 } from './proc/builder';
 
@@ -44,6 +44,10 @@ const SWARM_HP = 0.7;
 const GRAB_TICK = 0.25;
 /** How long a stagger lasts. */
 const PROC_STAGGER_S = 0.45;
+/** Pawing the ground before a charge. */
+const PREP_S = 0.7;
+/** A clinch's struggle surges this often (and grinds both sides every other surge). */
+const SURGE_S = 0.3;
 /** A blow connects up to this far past the move's reach (the striking part stretching the last bit). */
 const CONTACT = 0.12;
 /** An attack lunges to leave this fraction of its reach between the bodies at the impact (before it knows
@@ -61,7 +65,30 @@ export const GATES = [-Math.PI / 2, -Math.PI / 2 + 0.9, -Math.PI / 2 - 0.9];
 
 export type Emit = (e: { type: string; [k: string]: unknown }) => void;
 
-export type FighterState = 'idle' | 'move' | 'attack' | 'stagger' | 'dodge' | 'dead' | 'grab' | 'held' | 'down';
+export type FighterState = 'idle' | 'move' | 'attack' | 'stagger' | 'dodge' | 'dead' | 'grab' | 'held' | 'down' | 'prep' | 'clinch';
+
+/** How a fighter meets another head on: horns or tusks locked and pushing, or reared up wrestling. */
+export type ClinchStyle = 'horns' | 'wrestle';
+const CLINCH: Partial<Record<string, ClinchStyle>> = {
+  bull: 'horns', stag: 'horns', unicorn: 'horns', rhino: 'horns', minotaur: 'horns', elephant: 'horns',
+  bear: 'wrestle', lion: 'wrestle', tiger: 'wrestle', gorilla: 'wrestle', troll: 'wrestle',
+  swordsman: 'wrestle', king: 'wrestle', brawler: 'wrestle', viking: 'wrestle',
+};
+export const clinchStyle = (d: CreatureDef): ClinchStyle | null => CLINCH[d.proc.kind] ?? null;
+/** Animals that paw the ground before they charge. */
+const PAWS_GROUND = new Set(['bull', 'rhino', 'minotaur', 'stag', 'unicorn', 'elephant']);
+
+/** Locked head to head (both sides carry it): until when, who is winning (+ this one), the struggle's
+ * current surges. */
+export interface Clinch {
+  with: number;
+  t0: number;
+  until: number;
+  push: number;
+  surge: number;
+  next: number;
+  style: ClinchStyle;
+}
 
 /** Where a blow lands: the head, the body, a fore limb (front leg, or a person's arm), a hind limb, a wing. */
 export type Zone = 'head' | 'body' | 'fore' | 'hind' | 'wing';
@@ -188,6 +215,20 @@ export interface Fighter {
   evadeAt: number;
   evadeFrom: number;
   evadeT: number;
+  /** Its speed along its heading, knockback included (its feet step with it, backwards too). */
+  stepV: number;
+  /** Locked with another, and when it can lock again. */
+  clinch: Clinch | null;
+  clinchReady: number;
+  /** Traits: a burn that keeps going, a roar's fire, a second wind used, its first blow, a dart back out,
+   * a shield blow just blocked, trait moments already called. */
+  burnUntil: number;
+  prideUntil: number;
+  windUsed: boolean;
+  struck: boolean;
+  retreatUntil: number;
+  blockT: number;
+  saidTrait: boolean;
   /** Knocked down: how long it stays down, and which way it fell (1: onto its left). */
   downLen: number;
   fallDir: 1 | -1;
@@ -237,10 +278,19 @@ export interface Condition {
   wing: number;
   /** Worn out: near the end of its HP. */
   spent: number;
+  /** Sloppy (0..1): winded or worn out. It fights on at full pace but stops slipping blows, is easier to
+   * stagger and knock down, and loses shoving matches and grips. */
+  sloppy: number;
 }
 
 /** What its injuries add up to (sim and view both read it). */
 export function condition(f: { hurt: Hurt; hp: number; maxHp: number; def: CreatureDef }): Condition {
+  const c = conditionOf(f);
+  c.sloppy = Math.max(c.body, c.spent);
+  return c;
+}
+
+function conditionOf(f: { hurt: Hurt; hp: number; maxHp: number; def: CreatureDef }): Condition {
   const h = f.hurt;
   const legs = (isBiped(f.def) ? [h.LH, h.RH] : [h.LF, h.RF, h.LH, h.RH]).map(severity).sort((a, b) => b - a);
   return {
@@ -249,9 +299,10 @@ export function condition(f: { hurt: Hurt; hp: number; maxHp: number; def: Creat
     arm: isBiped(f.def) ? severity(Math.max(h.LF, h.RF)) : 0,
     // (Head and body take more: most blows land there.)
     head: severity(h.head * 0.7),
-    body: severity(h.body * 0.75),
+    body: severity(h.body * (f.def.trait === 'tireless' ? 0.35 : 0.75)),
     wing: severity(h.wing),
-    spent: clamp((0.35 - f.hp / f.maxHp) / 0.35, 0, 1),
+    spent: f.def.trait === 'tireless' ? 0 : clamp((0.35 - f.hp / f.maxHp) / 0.35, 0, 1),
+    sloppy: 0,
   };
 }
 
@@ -324,6 +375,16 @@ function makeFighter(idx: number, side: 0 | 1, def: CreatureDef, x: number, y: n
     evadeT: -10,
     downLen: 0,
     fallDir: 1,
+    stepV: 0,
+    clinch: null,
+    clinchReady: simT + 1.5,
+    burnUntil: 0,
+    prideUntil: 0,
+    windUsed: false,
+    struck: false,
+    retreatUntil: 0,
+    blockT: -10,
+    saidTrait: false,
   };
 }
 
@@ -368,8 +429,8 @@ function setState(f: Fighter, state: FighterState, simT: number, rng?: Rng) {
   f.stateT = simT;
   if (rng && state === 'idle') {
     const c = condition(f);
-    // Dazed: slow to act. Nearly beaten: nothing left to lose.
-    f.commitAt = simT + rng.range(0, 0.35) * (c.spent > 0.6 ? 0.4 : 1) + 0.6 * c.head;
+    // Nearly beaten: nothing left to lose, no hesitation at all.
+    f.commitAt = simT + rng.range(0, 0.35) * (c.spent > 0.6 ? 0.4 : 1);
   }
 }
 
@@ -378,8 +439,10 @@ function procTick(f: Fighter, dt: number, simT: number) {
   const yaw = wrap(f.heading - f.prevHeading);
   f.prevHeading = f.heading;
   f.yawRate += (yaw / dt - f.yawRate) * (1 - dm.exp(-dt * 8));
-  const s = Math.abs(f.spd);
-  if (s > 0.15 && f.state !== 'grab' && f.state !== 'held' && f.state !== 'dead' && f.state !== 'down') f.gait += (dt * s) / strideFor(f.def.proc, s);
+  // Its feet step with whatever moves it along its heading, a shove back included (backwards then).
+  f.stepV = f.state === 'dead' || f.state === 'down' || f.state === 'held' ? 0 : f.spd + f.kx * dm.cos(f.heading) + f.ky * dm.sin(f.heading);
+  const s = Math.abs(f.stepV);
+  if (s > 0.15 && f.state !== 'grab') f.gait += (dt * f.stepV) / strideFor(f.def.proc, s);
   f.crouch += (f.crouchWant - f.crouch) * (1 - dm.exp(-dt * 4));
   // A dragon swoops down to bite (and is within reach for a moment after), sags when rocked, flies lower
   // as a wing gives, and comes down when it tears (or when knocked out of the air).
@@ -398,6 +461,7 @@ export function idleWorld(w: World, dt: number) {
   for (const f of w.fighters) {
     if (f.alive && f.state !== 'dead') {
       if (f.grab) release(w, f, false, () => {});
+      f.clinch = null;
       f.spd *= dm.exp(-dt * 6);
       if (f.state !== 'idle' && f.state !== 'move' && !(f.state === 'down' && w.simT - f.stateT < f.downLen)) setState(f, 'idle', w.simT);
     }
@@ -483,11 +547,16 @@ export function shortOf(f: Fighter, o: Fighter, m: MoveDef, k: number, aim: Aim,
   for (const part of parts) {
     const s = an.striker(part);
     const b = toWorld(f, s.at, ahead);
+    // (Struck from reared up: from higher, and further in.)
+    if (m.rise) b.h += m.rise;
     // (A flier dives at what is below it, the whole body coming down; on the ground, it leaps up at a flier.)
     let dh = sp.h - b.h;
+    const leap = o.hover > 0.3 && f.hover < 0.3 ? LEAP : 0;
     if (f.hover > 0.3 && dh < 0) dh = Math.min(0, dh + 0.8);
-    else if (o.hover > 0.3 && f.hover < 0.3 && dh > 0) dh = Math.max(0, dh - LEAP);
-    best = Math.min(best, dm.hypot(dm.hypot(sp.x - b.x, sp.y - b.y), dh) - s.span);
+    else if (leap && dh > 0) dh = Math.max(0, dh - leap);
+    // (A head reaches down to anything, but only so far up.)
+    const over = s.top !== undefined ? sp.h - (s.top + f.hover + (m.rise ?? 0) + leap) : 0;
+    best = Math.min(best, Math.max(dm.hypot(dm.hypot(sp.x - b.x, sp.y - b.y), dh) - s.span, over));
   }
   return best;
 }
@@ -499,7 +568,9 @@ function canReach(f: Fighter, o: Fighter, m: MoveDef, ahead: number) {
   const side = sideOf(o, f);
   const rel = Math.abs(wrap(dm.atan2(f.y - o.y, f.x - o.x) - o.heading));
   const u = rel < 0.75 ? 0.85 : rel > 2.35 ? 0.15 : 0.5;
-  for (const zone of ['head', 'body', 'fore', 'hind'] as Zone[]) if (shortOf(f, o, m, 0, { zone, side, u: zone === 'body' ? u : 0.5, v: 0.5 }, ahead) <= 0) return true;
+  for (const zone of ['head', 'body', 'fore', 'hind'] as Zone[])
+    for (const lu of zone === 'fore' || zone === 'hind' ? [0.3, 0.85] : [0.5])
+      if (shortOf(f, o, m, 0, { zone, side, u: zone === 'body' ? u : lu, v: 0.5 }, ahead) <= 0) return true;
   return false;
 }
 
@@ -520,8 +591,8 @@ const sideOf = (o: Fighter, f: Fighter): 1 | -1 => (wrap(dm.atan2(f.y - o.y, f.x
 
 /** Moves made with a limb (a damaged limb hits weaker): claws, fists and blades in front, kicks behind. */
 const limbOf = (m: MoveDef, hitIdx: number): 'fore' | 'hind' | null => {
-  if (m.hits[hitIdx]?.back || m.clip === 'kick') return 'hind';
-  if (m.clip === 'swipe' || m.clip === 'rear' || m.clip === 'slash' || m.clip.startsWith('punch')) return 'fore';
+  if (m.hits[hitIdx]?.back || m.clip === 'kick' || m.clip === 'stomp') return 'hind';
+  if (['swipe', 'rear', 'slash', 'chop', 'club', 'bash', 'backhand', 'pummel', 'grapple'].includes(m.clip) || m.clip.startsWith('punch')) return 'fore';
   return null;
 };
 
@@ -582,10 +653,10 @@ function pickAim(w: World, f: Fighter, o: Fighter, m: MoveDef, k = 0, ahead = 0)
       }
     }
     tried.add(zone);
-    for (let k2 = 0; k2 < 3; k2++) {
-      // Along the body, the end facing the attacker.
+    for (let k2 = 0; k2 < 4; k2++) {
+      // Along the body, the end facing the attacker (from the front: the neck and shoulders).
       const u0 = w.rng.next();
-      const u = zone === 'body' ? (front ? 0.55 + 0.45 * u0 : rear ? 0.45 * u0 : 0.2 + 0.6 * u0) : u0;
+      const u = zone === 'body' ? (front ? 0.72 + 0.28 * u0 : rear ? 0.45 * u0 : 0.2 + 0.6 * u0) : u0;
       const aim: Aim = { zone, side, u, v: w.rng.next() };
       const sh = shortOf(f, o, m, k, aim, ahead);
       if (sh <= 0) return aim;
@@ -595,20 +666,40 @@ function pickAim(w: World, f: Fighter, o: Fighter, m: MoveDef, k = 0, ahead = 0)
       }
     }
   }
-  // The middle of each part (what the AI checked it could reach before committing).
+  // The middle of each part, and a leg's upper and lower halves (what the AI checked it could reach).
   for (const zone of zones) {
     if (!has(zone)) continue;
-    const aim: Aim = { zone, side, u: zone === 'body' ? (front ? 0.85 : rear ? 0.15 : 0.5) : 0.5, v: 0.5 };
-    const sh = shortOf(f, o, m, k, aim, ahead);
-    if (sh < bestShort) {
-      bestShort = sh;
-      best = aim;
+    for (const lu of zone === 'fore' || zone === 'hind' ? [0.3, 0.85] : [0.5]) {
+      const aim: Aim = { zone, side, u: zone === 'body' ? (front ? 0.85 : rear ? 0.15 : 0.5) : lu, v: 0.5 };
+      const sh = shortOf(f, o, m, k, aim, ahead);
+      if (sh < bestShort) {
+        bestShort = sh;
+        best = aim;
+      }
     }
   }
   return best ?? { zone: 'body', side, u: 0.5, v: 0.5 };
 }
 
 const markOf = (f: Fighter, m: MoveDef): WoundKind => m.mark ?? (m.breath ? 'burn' : m.sound === 'bite' ? 'bite' : m.sound === 'slash' ? (f.def.weapon ? 'cut' : 'claw') : 'blunt');
+/** What kind of damage a move does (fangs, horns and tusks pierce; claws and blades cut). */
+export const typeOf = (d: CreatureDef, m: MoveDef): DamageType => {
+  if (m.type) return m.type;
+  if (m.breath) return 'fire';
+  const k = m.mark ?? (m.sound === 'bite' ? 'bite' : m.sound === 'slash' ? (d.weapon ? 'cut' : 'claw') : 'blunt');
+  return k === 'bite' || k === 'gore' ? 'pierce' : k === 'claw' || k === 'cut' ? 'slash' : 'blunt';
+};
+
+/** Damage multipliers from traits on the attacking side. */
+function traitDamage(w: World, f: Fighter) {
+  const t = f.def.trait;
+  const hpf = f.hp / f.maxHp;
+  let k = 1;
+  if (t === 'lastStand' && hpf < 0.3) k *= 1.35;
+  if (t === 'berserk' && hpf < 0.5) k *= 1.25;
+  if (t === 'pride' && f.prideUntil > w.simT) k *= 1.3;
+  return k;
+}
 
 /** Record a wound and the injury it adds to; tell (once) when a part gives. */
 function wound(w: World, o: Fighter, aim: Aim, kind: WoundKind, dmg: number, by: number, emit: Emit) {
@@ -637,8 +728,8 @@ function startAttack(w: World, f: Fighter, i: number, emit: Emit) {
   f.hitIdx = 0;
   const firstHit = m.hits[0].at * m.len;
   f.breathNext = firstHit;
-  f.chargeBonus = m.charge ? 1 + 0.6 * clamp(f.spd / f.def.run, 0, 1) : 1;
-  f.ready[i] = w.simT + m.cooldown * COOLDOWN_MUL * (1 + 0.45 * c.body + 0.25 * c.head);
+  f.chargeBonus = m.charge ? 1 + 0.6 * clamp(f.spd / f.def.run, 0, 1) + (f.def.trait === 'rampage' && f.hp < f.maxHp * 0.5 ? 0.35 : 0) : 1;
+  f.ready[i] = w.simT + m.cooldown * COOLDOWN_MUL;
   f.lastActT = w.simT;
   // Commit to a lunge that closes in on the target, leaving the blow's own reach to land it (charges
   // come in at their running speed). Kicks behind back into it.
@@ -672,14 +763,16 @@ function startAttack(w: World, f: Fighter, i: number, emit: Emit) {
     const d = o.def.dodge;
     if (d && o.dodgeReady <= w.simT) {
       o.dodgeReady = w.simT + d.cooldown;
-      if (w.rng.chance(d.chance * (1 - 0.7 * oc.leg))) {
+      if (w.rng.chance(d.chance * (1 - 0.7 * oc.leg) * (1 - 0.8 * oc.sloppy))) {
         o.dodgeDir = w.rng.chance(0.5) ? 1 : -1;
         setState(o, 'dodge', w.simT);
         emit({ type: 'dodge', who: o.idx, x: r1(o.x) });
         continue;
       }
     }
-    if (o.evadeAt <= 0 && w.rng.chance(evasion(f.def, o.def) * (1 - 0.6 * oc.leg) * (1 - 0.5 * oc.head))) {
+    const nimble = o.def.trait === 'skittish' ? 2 : o.def.trait === 'sly' ? 1.6 : 1;
+    // (Dazed or sloppy, it doesn't see it coming.)
+    if (o.evadeAt <= 0 && w.rng.chance(evasion(f.def, o.def) * nimble * (1 - 0.6 * oc.leg) * (1 - 0.5 * oc.head) * (1 - 0.8 * oc.sloppy))) {
       o.evadeAt = w.simT + Math.max(0.02, firstHit - EVADE_LEAD_S);
       o.evadeFrom = f.idx;
     }
@@ -701,10 +794,12 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
   const them = condition(t);
   // Down: staggered, held, knocked over, crippled, or nearly finished.
   const downed = t.state === 'stagger' || t.state === 'held' || t.state === 'down' || t.hp < t.maxHp * 0.3 || them.leg >= 0.6;
-  // It can tell when its foe is hurt (and goes after it), and when it is losing itself (and keeps its distance).
-  const press = downed || them.leg >= 0.45 || them.head >= 0.45;
-  const wary = !press && me.spent < 0.6 && f.hp / f.maxHp < t.hp / t.maxHp - 0.2;
+  // It can tell when its foe is hurt or sloppy, and goes after it.
+  const press = downed || them.leg >= 0.45 || them.head >= 0.45 || them.sloppy >= 0.5;
   const grabbable = t.hover < 0.3 && t.heldBy < 0 && !t.grab;
+
+  // A sly one darts back out after its bite.
+  if (f.retreatUntil > w.simT) return { heading: r.ang + Math.PI + f.orbit * 0.4, speed: d.run * 0.8 };
 
   // Horde members not yet engaged wait their turn, circling at a distance.
   if (w.mode === 'horde' && f.side === 1 && !f.engaged) {
@@ -750,6 +845,25 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     }
   }
 
+  // Squared up close, head to head: horns lock, or the two rear up and grapple.
+  if (
+    w.mode === 'duel' &&
+    clinchStyle(d) &&
+    clinchStyle(t.def) &&
+    f.clinchReady <= w.simT &&
+    t.clinchReady <= w.simT &&
+    (t.state === 'idle' || t.state === 'move') &&
+    r.gap < (clinchStyle(d) === 'horns' && clinchStyle(t.def) === 'horns' ? 0.7 : 0.3) &&
+    Math.abs(r.rel) < 0.7 &&
+    Math.abs(relation(t, f).rel) < 0.8 &&
+    f.hover < 0.3 &&
+    t.hover < 0.3 &&
+    w.rng.chance(0.025)
+  ) {
+    startClinch(w, f, t, emit);
+    return { heading: f.heading, speed: 0 };
+  }
+
   // Moves it could start right now, weighted by preference and damage.
   let total = 0;
   const options: { i: number; w: number }[] = [];
@@ -766,7 +880,7 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
       return;
     }
     if (m.charge) {
-      if (Math.abs(r.rel) < 0.5 && r.gap < ARENA_R) options.push({ i, w: (m.weight ?? 1) * m.damage });
+      if (Math.abs(r.rel) < 0.5 && r.gap < ARENA_R) options.push({ i, w: (m.weight ?? 1) * m.damage * (d.trait === 'rampage' && f.hp < f.maxHp * 0.5 ? 2 : 1) });
       return;
     }
     const back = m.hits.every((h) => h.back);
@@ -784,7 +898,13 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     if (d.moves[chosen.i].charge) {
       f.charging = chosen.i;
       f.bluffing = w.rng.chance(d.moves[chosen.i].bluff ?? 0);
-      f.ready[chosen.i] = w.simT + d.moves[chosen.i].cooldown * COOLDOWN_MUL;
+      f.ready[chosen.i] = w.simT + d.moves[chosen.i].cooldown * COOLDOWN_MUL * (d.trait === 'rampage' && f.hp < f.maxHp * 0.5 ? 0.6 : 1);
+      // From a distance, a bull (and its kind) paws the ground first.
+      if (PAWS_GROUND.has(d.proc.kind) && r.gap > 4.5) {
+        setState(f, 'prep', w.simT);
+        emit({ type: 'prep', who: f.idx, ...voiceOf(d), x: r1(f.x) });
+        return { heading: r.ang, speed: 0 };
+      }
       emit({ type: 'charge', who: f.idx, ...voiceOf(d), x: r1(f.x) });
       return { heading: r.ang, speed: d.run };
     }
@@ -822,7 +942,7 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     return { heading: r.ang + veer, speed };
   }
   // Waiting on cooldowns: circle the target (well back when it is losing), backing off if right on top of it.
-  if (r.gap < closest * 0.6 || (wary && r.gap < 1.6)) return { heading: r.ang + f.orbit * 2.3, speed: d.walk };
+  if (r.gap < closest * 0.6) return { heading: r.ang + f.orbit * 2.3, speed: d.walk };
   return { heading: r.ang + f.orbit * (r.gap > 3 ? 0.6 : 1.35), speed: r.gap > 4 ? d.run * 0.7 : d.walk * 1.1 };
 }
 
@@ -831,7 +951,10 @@ export const evasion = (a: CreatureDef, b: CreatureDef) => clamp(0.1 + 0.035 * (
 
 function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | null, emit: Emit) {
   const dmgMul = w.fightT > w.capS ? 1 + (w.fightT - w.capS) * 0.5 : 1;
-  const crit = !m.breath && w.rng.chance(CRIT_CHANCE);
+  // (An ambusher's first blow and a stalker's first pounce always crit; a dive bomber's talons often do.)
+  const sure = (f.def.trait === 'ambush' && !f.struck) || (f.def.trait === 'stealth' && m.clip === 'pounce' && !f.struck);
+  const crit = !m.breath && (sure || w.rng.chance(CRIT_CHANCE * (f.def.trait === 'diveBomb' && m.clip === 'dive' ? 3 : 1)));
+  if (!m.breath) f.struck = true;
   const fc = condition(f);
   const oc = condition(o);
   // Flanking: hitting from behind while one of its allies keeps the target's attention.
@@ -843,7 +966,9 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
   const limb = limbOf(m, Math.max(0, f.hitIdx - 1));
   const limbMul = limb === 'fore' ? 1 - 0.3 * (isBiped(f.def) ? fc.arm : fc.leg) : limb === 'hind' ? 1 - 0.25 * fc.leg : 1;
   const desperate = fc.spent > 0.6 ? 1.15 : 1;
-  const dmg = m.damage * DAMAGE_MUL * w.rng.range(0.75, 1.25) * (crit ? CRIT : 1) * f.chargeBonus * (flank ? FLANK : 1) * (1 - o.def.armor) * (1 - braced) * dmgMul * limbMul * desperate;
+  // Its hide takes some kinds of blow better than others.
+  const hide = 1 - (o.def.hide.resist[typeOf(f.def, m)] ?? 0);
+  const dmg = m.damage * DAMAGE_MUL * w.rng.range(0.75, 1.25) * (crit ? CRIT : 1) * f.chargeBonus * (flank ? FLANK : 1) * (1 - o.def.armor) * (1 - braced) * dmgMul * limbMul * desperate * hide * traitDamage(w, f);
   o.hp -= dmg;
   o.lastHitBy = f.idx;
   o.lastHitT = w.simT;
@@ -856,7 +981,8 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
   const dx = o.x - f.x;
   const dy = o.y - f.y;
   const dl = Math.max(0.01, dm.hypot(dx, dy));
-  const k = m.knock * f.chargeBonus * ((2 * f.def.mass) / (f.def.mass + o.def.mass));
+  // (Knocked back by the mass ratio and the attacker's strength; a stubborn or colossal body barely moves.)
+  const k = m.knock * f.chargeBonus * ((2 * f.def.mass) / (f.def.mass + o.def.mass)) * (0.55 + 0.075 * f.def.strength) * (o.def.trait === 'stubborn' ? 0.6 : o.def.trait === 'colossus' ? 0.4 : 1);
   o.kx += (dx / dl) * k;
   o.ky += (dy / dl) * k;
   if (!m.breath) {
@@ -870,11 +996,17 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
     o.poisonDps = m.poison;
     o.poisonBy = f.idx;
   }
-  const poise = o.def.poise * DAMAGE_MUL * (1 - 0.35 * oc.body);
+  if (m.breath && f.def.trait === 'inferno') o.burnUntil = w.simT + 2.5;
+  if (f.def.trait === 'sly' && !m.breath) f.retreatUntil = w.simT + 0.9;
+  // (Sloppy or dazed, it is rocked more easily.)
+  const poise = o.def.poise * DAMAGE_MUL * (1 - 0.45 * oc.sloppy) * (1 - 0.25 * oc.head) * (o.def.trait === 'stubborn' ? 1.6 : 1);
   const power = dmg / Math.max(1, poise);
-  o.lastHitPow = m.breath ? 0.1 : power;
   // Where it landed (the blow's own aim at its target; a cleave catches others wherever they face it).
   const aim: Aim = aimIn ?? pickAim(w, f, o, m, Math.max(0, f.hitIdx - 1));
+  // A blow to a part already hurt makes it wince all the harder.
+  o.lastHitPow = m.breath ? 0.1 : power * (1 + 0.8 * severity(o.hurt[keyOf(aim)]));
+  // (A hamstringer's bites to the legs cripple faster.)
+  if (f.def.trait === 'hamstring' && (aim.zone === 'fore' || aim.zone === 'hind')) o.hurt[keyOf(aim)] += (dmg / o.maxHp) * 0.6;
   if (m.breath) {
     o.burnAcc += dmg;
     o.hurt.body += (dmg / o.maxHp) * 0.5;
@@ -891,14 +1023,33 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
   // Falling is settled once every blow of the step has landed (see stepWorld).
   if (o.hp <= 0) return;
   // Grapples: latch on, clamp and roll, or pin.
-  if (m.grab && f.alive && f.state === 'attack' && f.move === m && o.heldBy < 0 && !o.grab && o.hover < 0.3 && w.rng.chance(m.grab.chance ?? 1)) {
+  if (m.grab && f.alive && f.state === 'attack' && f.move === m && o.heldBy < 0 && !o.grab && o.hover < 0.3 && !(o.def.trait === 'colossus' && m.grab.kind !== 'latch') && w.rng.chance(m.grab.chance ?? 1)) {
     startGrab(w, f, o, m.grab, aim, emit);
+    return;
+  }
+  // Horn meets horn: two horned heads facing, the blow locks them together.
+  if (
+    w.mode === 'duel' &&
+    (m.clip === 'headbutt' || m.clip === 'charge') &&
+    clinchStyle(f.def) === 'horns' &&
+    clinchStyle(o.def) === 'horns' &&
+    (o.state === 'idle' || o.state === 'move' || o.state === 'attack') &&
+    f.clinchReady <= w.simT &&
+    o.clinchReady <= w.simT &&
+    Math.abs(wrap(dm.atan2(f.y - o.y, f.x - o.x) - o.heading)) < 0.7 &&
+    w.rng.chance(0.5)
+  ) {
+    f.kx = f.ky = o.kx = o.ky = 0;
+    startClinch(w, f, o, emit);
     return;
   }
   if (m.breath || braced || o.staggerReady > w.simT || o.state === 'dodge' || o.state === 'held' || o.state === 'down') return;
   // Hard enough to take it off its feet (anything on the ground; a flier is only rocked)…
-  const bowled = power >= KNOCKDOWN_AT || (m.charge && f.def.mass >= o.def.mass * 0.8 && power >= 1.1) || (f.def.mass >= o.def.mass * 4 && power >= 1);
-  if (bowled && o.hover < 0.3 && (o.state !== 'attack' || o.hitIdx === 0)) {
+  const at = KNOCKDOWN_AT * (f.def.trait === 'hindKick' && m.hits[0].back ? 0.55 : 1) * (o.def.trait === 'stubborn' ? 1.6 : 1) * (1 - 0.35 * oc.sloppy);
+  const bowled =
+    power >= at || (m.charge && f.def.mass >= o.def.mass * 0.8 && power >= 1.1) || (f.def.mass >= o.def.mass * 4 && power >= 1) || (m.charge && f.def.trait === 'juggernaut' && o.def.mass < f.def.mass);
+  const footed = o.def.trait === 'unstoppable' || o.def.trait === 'colossus';
+  if (bowled && !footed && o.hover < 0.3 && (o.state !== 'attack' || o.hitIdx === 0)) {
     if (o.grab) release(w, o, false, emit);
     o.charging = -1;
     o.move = null;
@@ -918,6 +1069,130 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
     setState(o, 'stagger', w.simT);
     emit({ type: 'stagger', who: o.idx, x: r1(o.x) });
   }
+}
+
+function startClinch(w: World, f: Fighter, t: Fighter, emit: Emit) {
+  const until = w.simT + w.rng.range(1.3, 2.6);
+  for (const [a, b] of [
+    [f, t],
+    [t, f],
+  ] as const) {
+    a.clinch = { with: b.idx, t0: w.simT, until, push: 0, surge: 0, next: w.simT + SURGE_S, style: clinchStyle(a.def)! };
+    a.charging = -1;
+    a.move = null;
+    a.spd = 0;
+    setState(a, 'clinch', w.simT);
+  }
+  emit({ type: 'clinch', a: f.idx, b: t.idx, horns: f.clinch!.style === 'horns' && t.clinch!.style === 'horns' ? 1 : 0, ...voiceOf(f.def), vcall: t.def.voice?.call ?? '', vcp: t.def.voice?.pitch ?? 0.5, x: r1(f.x) });
+}
+
+/** How hard it pushes right now. */
+function clinchPower(f: Fighter) {
+  const c = condition(f);
+  const t = f.def.trait;
+  return f.def.strength * (t === 'antlerLock' ? 1.6 : t === 'stubborn' ? 1.3 : 1) * (1 - 0.4 * c.sloppy) * (1 - 0.3 * c.leg) * (1 + 0.4 * f.clinch!.surge);
+}
+
+/** A grinding blow while locked: horns and heads crack together; wrestlers bite and claw at the neck. */
+function grind(w: World, f: Fighter, o: Fighter, emit: Emit) {
+  const horns = f.clinch!.style === 'horns';
+  const type: DamageType = horns ? 'blunt' : 'pierce';
+  const dmg = (1.5 + 0.6 * f.def.strength) * DAMAGE_MUL * 0.6 * (1 - o.def.armor) * (1 - (o.def.hide.resist[type] ?? 0)) * (w.fightT > w.capS ? 1 + (w.fightT - w.capS) * 0.5 : 1);
+  o.hp -= dmg;
+  o.lastHitBy = f.idx;
+  o.lastHitT = w.simT;
+  o.lastHitDir = dm.atan2(o.y - f.y, o.x - f.x);
+  o.lastHitPow = 0.35;
+  o.flash = Math.min(1, o.flash + 0.25);
+  f.dealt += dmg;
+  const side = sideOf(o, f);
+  const aim: Aim = horns ? { zone: 'head', side, u: w.rng.range(0.5, 1), v: w.rng.range(0.4, 1) } : { zone: 'body', side, u: w.rng.range(0.8, 1), v: w.rng.range(0, 0.5) };
+  if (w.rng.chance(0.5)) wound(w, o, aim, horns ? 'blunt' : w.rng.chance(0.5) ? 'bite' : 'claw', dmg * 2, f.idx, emit);
+  else o.hurt[keyOf(aim)] += dmg / o.maxHp;
+  emit({ type: 'grind', a: f.idx, b: o.idx, horns: horns ? 1 : 0, dmg: Math.round(dmg * 10) / 10, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000), x: r1(o.x) });
+}
+
+/**
+ * Locked together (run by the lower-numbered of the pair): each pushes with its strength, in surges; the
+ * pair grinds towards the weaker one, circling slowly, trading blows; until one gives and is shoved aside,
+ * turned to show its flank, or thrown down.
+ */
+function runClinch(w: World, a: Fighter, dt: number, emit: Emit) {
+  const c = a.clinch!;
+  const b = w.fighters[c.with];
+  if (!b.alive || b.clinch?.with !== a.idx) {
+    a.clinch = null;
+    setState(a, 'idle', w.simT, w.rng);
+    return;
+  }
+  if (w.simT >= c.next) {
+    c.next += SURGE_S;
+    c.surge = w.rng.range(-1, 1);
+    b.clinch!.surge = w.rng.range(-1, 1);
+    if (Math.round((c.next - c.t0) / SURGE_S) % 2 === 0) {
+      grind(w, a, b, emit);
+      grind(w, b, a, emit);
+    }
+  }
+  const net = clinchPower(a) - clinchPower(b);
+  c.push += net * dt;
+  b.clinch!.push = -c.push;
+  const ang = dm.atan2(b.y - a.y, b.x - a.x) + a.orbit * 0.35 * dt;
+  const v = clamp(net * 0.12, -0.9, 0.9);
+  const mx = (a.x + b.x) / 2 + dm.cos(ang) * v * dt;
+  const my = (a.y + b.y) / 2 + dm.sin(ang) * v * dt;
+  const da = extent(a, ang) - 0.03;
+  const db = extent(b, ang + Math.PI) - 0.03;
+  const off = (da - db) / 2;
+  a.x = mx - dm.cos(ang) * (da - off);
+  a.y = my - dm.sin(ang) * (da - off);
+  b.x = mx + dm.cos(ang) * (db + off);
+  b.y = my + dm.sin(ang) * (db + off);
+  a.heading = ang;
+  b.heading = wrap(ang + Math.PI);
+  a.spd = v;
+  b.spd = -v;
+  a.kx = a.ky = b.kx = b.ky = 0;
+  if (w.simT < c.until && Math.abs(c.push) < 2.6) return;
+  // One gives.
+  const aWins = Math.abs(c.push) < 0.3 ? w.rng.chance(0.5 + 0.1 * Math.sign(c.push)) : c.push > 0;
+  const win = aWins ? a : b;
+  const lose = aWins ? b : a;
+  for (const f of [a, b]) {
+    f.clinch = null;
+    f.spd = 0;
+    f.clinchReady = w.simT + w.rng.range(4, 7);
+  }
+  // Shoved aside and turned (its flank to the winner), or thrown off its feet.
+  lose.heading = wrap(lose.heading + (w.rng.chance(0.5) ? 1 : -1) * w.rng.range(0.9, 1.5));
+  const away = dm.atan2(lose.y - win.y, lose.x - win.x);
+  const kick = 2.4 + 0.35 * Math.max(0, win.def.strength - lose.def.strength);
+  lose.kx += dm.cos(away) * kick;
+  lose.ky += dm.sin(away) * kick;
+  lose.lastHitDir = away;
+  lose.lastHitT = w.simT;
+  lose.lastHitPow = 1.2;
+  const footed = lose.def.trait === 'unstoppable' || lose.def.trait === 'colossus';
+  const thrown = !footed && (win.def.strength / lose.def.strength > 1.5 || (win.def.trait !== 'antlerLock' && clinchStyle(win.def) === 'wrestle' && w.rng.chance(0.3)));
+  if (thrown) {
+    lose.downLen = DOWN_S;
+    lose.fallDir = wrap(away - lose.heading) < 0 ? 1 : -1;
+    lose.staggerReady = w.simT + DOWN_S + STAGGER_GUARD_S;
+    setState(lose, 'down', w.simT);
+  } else {
+    lose.staggerReady = w.simT + STAGGER_GUARD_S;
+    setState(lose, 'stagger', w.simT);
+  }
+  // The winner goes straight for the opening.
+  setState(win, 'idle', w.simT);
+  win.commitAt = w.simT;
+  win.ready = win.ready.map((t, i) => (win.def.moves[i].roar ? t : Math.min(t, w.simT + 0.1)));
+  emit({ type: 'shove', a: win.idx, b: lose.idx, down: thrown ? 1 : 0, ...voiceOf(win.def), vcall: lose.def.voice?.call ?? '', vcp: lose.def.voice?.pitch ?? 0.5, mass: lose.def.mass, x: r1(lose.x) });
+}
+
+/** A trait coming into play: called out once. */
+function sayTrait(f: Fighter, text: string, emit: Emit) {
+  emit({ type: 'trait', who: f.idx, text, ...voiceOf(f.def), swarm: f.number > 0 ? 1 : 0, x: r1(f.x) });
 }
 
 function startGrab(w: World, f: Fighter, o: Fighter, g: NonNullable<MoveDef['grab']>, aim: Aim, emit: Emit) {
@@ -1003,15 +1278,24 @@ function runGrab(w: World, f: Fighter, emit: Emit) {
     else o.hurt[keyOf(g.aim)] += dmg / o.maxHp;
     emit({ type: 'maul', a: f.idx, b: o.idx, kind: g.kind, dmg: Math.round(dmg * 10) / 10, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000), x: r1(o.x) });
     if (o.hp <= 0) break;
-    // The heavier the target, the sooner it throws the grabber off.
-    const ratio = o.def.mass / f.def.mass;
-    const p = g.kind === 'latch' ? clamp(0.02 + 0.03 * ratio, 0.02, 0.4) : clamp(0.01 + 0.025 * ratio, 0.01, 0.3);
+    // The stronger the target (against the grabber), the sooner it throws it off; an iron grip holds.
+    // (A sloppy one struggles feebly.)
+    const ratio = (o.def.strength / f.def.strength) * 1.2 * (f.def.trait === 'ironGrip' ? 0.4 : 1) * (1 - 0.5 * condition(o).sloppy);
+    const p = g.kind === 'latch' ? clamp(0.02 + 0.045 * ratio, 0.02, 0.4) : clamp(0.01 + 0.035 * ratio, 0.01, 0.3);
     if (w.rng.chance(p)) release(w, f, true, emit);
   }
 }
 
 function kill(w: World, o: Fighter, by: number, emit: Emit) {
   if (o.grab) release(w, o, false, emit);
+  if (o.clinch) {
+    const p = w.fighters[o.clinch.with];
+    o.clinch = null;
+    if (p.clinch) {
+      p.clinch = null;
+      if (p.alive) setState(p, 'idle', w.simT, w.rng);
+    }
+  }
   if (o.heldBy >= 0) release(w, w.fighters[o.heldBy], false, emit);
   o.alive = false;
   o.diedAt = w.simT;
@@ -1031,8 +1315,9 @@ function resolveAttack(w: World, f: Fighter, emit: Emit) {
     const h = m.hits[f.hitIdx++];
     if (m.breath) continue;
     if (m.roar) {
-      // Smaller enemies nearby flinch.
-      emit({ type: 'roar', who: f.idx, ...voiceOf(f.def), x: r1(f.x) });
+      // Smaller enemies nearby flinch (and a proud one is fired up).
+      emit({ type: 'roar', who: f.idx, ...voiceOf(f.def), swarm: w.mode === 'horde' && f.side === 1 ? 1 : 0, x: r1(f.x) });
+      if (f.def.trait === 'pride') f.prideUntil = w.simT + 6;
       for (const o of enemiesOf(w, f)) {
         if (relation(f, o).gap > m.roar.radius || o.def.mass >= f.def.mass * 0.75 || o.staggerReady > w.simT || o.state === 'held' || o.state === 'down') continue;
         if (o.grab) release(w, o, false, emit);
@@ -1051,13 +1336,23 @@ function resolveAttack(w: World, f: Fighter, emit: Emit) {
     for (const o of foes) {
       const r = relation(f, o);
       const off = h.back ? Math.abs(wrap(r.rel + Math.PI)) : Math.abs(r.rel);
-      if (parts ? r.gap > m.reach + 1.2 || off > m.arc + 0.6 : r.gap > m.reach + CONTACT || off > m.arc) continue;
+      // (A striking part: the bodies within the blow's own reach, and the part able to reach the spot.)
+      if (parts ? r.gap > m.reach + 0.4 || off > m.arc + 0.6 : r.gap > m.reach + CONTACT || off > m.arc) continue;
       const aim = parts ? (o.idx === f.target && f.aim ? { ...f.aim, side: sideOf(o, f) } : pickAim(w, f, o, m, k)) : null;
-      if (aim && shortOf(f, o, m, k, aim) > CONTACT * 0.5) {
-        continue;
-      }
+      if (aim && shortOf(f, o, m, k, aim) > CONTACT * 0.5) continue;
       if (o.state === 'dodge' && w.simT - o.stateT < o.def.dodge!.len * 0.7) {
         emit({ type: 'miss', a: f.idx, b: o.idx, dodged: 1 });
+        continue;
+      }
+      // A shield takes blows from the front.
+      if (o.def.trait === 'shield' && (o.state === 'idle' || o.state === 'move' || o.state === 'prep') && Math.abs(wrap(dm.atan2(f.y - o.y, f.x - o.x) - o.heading)) < 0.9 && w.rng.chance(0.45)) {
+        o.blockT = w.simT;
+        const ang = dm.atan2(o.y - f.y, o.x - f.x);
+        const k = m.knock * 0.4 * ((2 * f.def.mass) / (f.def.mass + o.def.mass));
+        o.kx += dm.cos(ang) * k;
+        o.ky += dm.sin(ang) * k;
+        emit({ type: 'block', a: f.idx, b: o.idx, mass: f.def.mass, x: r1(o.x) });
+        landed++;
         continue;
       }
       w.pending.push({ f, o, m, aim });
@@ -1168,6 +1463,20 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
       f.hp -= f.poisonDps * dt * (w.fightT > w.capS ? 1 + (w.fightT - w.capS) * 0.5 : 1);
       if (f.hp <= 0) kill(w, f, f.poisonBy, emit);
     }
+    // Traits that run on their own: mending, regenerating (not while burnt), a fire that keeps burning.
+    if (d.trait === 'healing' || d.trait === 'regen') {
+      const burnt = f.burnUntil > w.simT || f.burn > 0.3;
+      if (!(d.trait === 'regen' && burnt)) {
+        const rate = d.trait === 'regen' ? 0.007 : 0.003;
+        f.hp = Math.min(f.maxHp, f.hp + f.maxHp * rate * dt);
+        for (const k of Object.keys(f.hurt) as HurtKey[]) f.hurt[k] = Math.max(0, f.hurt[k] - dt * rate);
+      }
+    }
+    if (f.burnUntil > w.simT) {
+      f.hp -= 1.6 * DAMAGE_MUL * dt * (1 - (d.hide.resist.fire ?? 0));
+      f.burn = Math.max(f.burn, 0.6);
+      if (f.hp <= 0) kill(w, f, f.lastHitBy, emit);
+    }
     if (!f.alive) continue;
     // It read a blow coming: a quick hop back (and aside) out of reach.
     if (f.evadeAt > 0 && w.simT >= f.evadeAt) {
@@ -1185,14 +1494,18 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
     const c = condition(f);
     let heading = f.heading;
     let speed = 0;
-    let turn = d.turn * (1 - 0.2 * c.leg) * (1 - 0.3 * c.head);
+    // (Paralysing venom slows it; a berserker hurt speeds up.)
+    const venom = f.poisonUntil > w.simT && w.fighters[f.poisonBy]?.def.trait === 'paralysis' ? 0.6 : 1;
+    const rage = d.trait === 'berserk' && f.hp < f.maxHp * 0.5 ? 1.25 : 1;
+    let turn = d.turn * (1 - 0.2 * c.leg) * (1 - 0.3 * c.head) * venom;
     switch (f.state) {
       case 'idle':
       case 'move': {
         const plan = think(w, f, emit);
         heading = plan.heading;
         // Injuries and exhaustion slow it down.
-        speed = plan.speed * (1 - 0.35 * c.leg - 0.15 * c.leg2) * (1 - 0.1 * c.body) * (1 - 0.15 * c.spent);
+        // (A bad leg slows it; nothing else does: winded or worn out, it fights on at full pace.)
+        speed = plan.speed * (1 - 0.35 * c.leg - 0.15 * c.leg2) * venom * rage;
         const next = speed > 0.2 ? 'move' : 'idle';
         // (Unless it just started an attack.)
         if ((f.state === 'idle' || f.state === 'move') && f.state !== next) setState(f, next, w.simT);
@@ -1225,6 +1538,22 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
         turn = 0;
         if (w.simT - f.stateT >= f.downLen) setState(f, 'idle', w.simT, w.rng);
         break;
+      case 'prep': {
+        // Pawing the ground, head down, facing its target: then the charge.
+        const t = w.fighters[f.target];
+        if (t && t.alive) heading = relation(f, t).ang;
+        speed = 0;
+        if (w.simT - f.stateT >= PREP_S) {
+          setState(f, 'move', w.simT);
+          emit({ type: 'charge', who: f.idx, ...voiceOf(d), x: r1(f.x) });
+        }
+        break;
+      }
+      case 'clinch':
+        if (f.clinch && f.idx < f.clinch.with) runClinch(w, f, dt, emit);
+        else if (!f.clinch) setState(f, 'idle', w.simT, w.rng);
+        heading = f.heading;
+        break;
       case 'grab':
         runGrab(w, f, emit);
         heading = f.heading;
@@ -1237,7 +1566,15 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
         const s = (dd.distance / (dd.len * 0.7)) * f.dodgeDir;
         f.x += dm.cos(f.heading + Math.PI / 2) * s * dt;
         f.y += dm.sin(f.heading + Math.PI / 2) * s * dt;
-        if (w.simT - f.stateT >= dd.len * 0.7) setState(f, 'idle', w.simT, w.rng);
+        if (w.simT - f.stateT >= dd.len * 0.7) {
+          setState(f, 'idle', w.simT, w.rng);
+          // A riposte: straight back at it.
+          if (d.trait === 'riposte') {
+            f.commitAt = w.simT;
+            f.ready = f.ready.map((t) => Math.min(t, w.simT));
+            sayTrait(f, 'RIPOSTE!', emit);
+          }
+        }
         break;
       }
     }
@@ -1246,14 +1583,17 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
       speed *= 0.5;
       turn *= 0.6;
     }
-    const dh = clamp(wrap(heading - f.heading), -turn * dt, turn * dt);
-    f.heading = wrap(f.heading + dh);
-    // Big turns slow you down (no full-speed hairpins).
-    const target = speed * (0.35 + 0.65 * Math.max(0, dm.cos(wrap(heading - f.heading))));
-    const accel = f.state === 'attack' ? 30 : f.state === 'down' ? 10 : target > f.spd ? 4 : 7;
-    f.spd += (target - f.spd) * (1 - dm.exp(-dt * accel));
-    f.x += dm.cos(f.heading) * f.spd * dt;
-    f.y += dm.sin(f.heading) * f.spd * dt;
+    // (Locked in a clinch, the struggle moves it.)
+    if (f.state !== 'clinch') {
+      const dh = clamp(wrap(heading - f.heading), -turn * dt, turn * dt);
+      f.heading = wrap(f.heading + dh);
+      // Big turns slow you down (no full-speed hairpins).
+      const target = speed * (0.35 + 0.65 * Math.max(0, dm.cos(wrap(heading - f.heading))));
+      const accel = f.state === 'attack' ? 30 : f.state === 'down' ? 10 : target > f.spd ? 4 : 7;
+      f.spd += (target - f.spd) * (1 - dm.exp(-dt * accel));
+      f.x += dm.cos(f.heading) * f.spd * dt;
+      f.y += dm.sin(f.heading) * f.spd * dt;
+    }
     if (f.state === 'attack') resolveAttack(w, f, emit);
   }
   // Everything that landed this step lands together: two blows trading in the same instant both count.
@@ -1265,6 +1605,21 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
     const standing = (side: number) => w.fighters.some((f) => f.alive && f.hp > 0 && f.side === side) || (side === 1 && w.swarm !== null && w.swarm.sent < w.swarm.total);
     if (!standing(0) && !standing(1)) falling.reduce((a, b) => (b.hp > a.hp ? b : a)).hp = 1;
     for (const f of falling) if (f.hp <= 0) kill(w, f, f.lastHitBy, emit);
+  }
+  for (const f of w.fighters) {
+    if (!f.alive) continue;
+    const t = f.def.trait;
+    if (t === 'secondWind' && !f.windUsed && f.hp < f.maxHp * 0.2) {
+      f.windUsed = true;
+      f.hp += f.maxHp * 0.25;
+      f.hurt.body = 0;
+      f.hurt.head *= 0.5;
+      sayTrait(f, 'SECOND WIND!', emit);
+    }
+    if (!f.saidTrait && ((t === 'lastStand' && f.hp < f.maxHp * 0.3) || (t === 'berserk' && f.hp < f.maxHp * 0.5) || (t === 'rampage' && f.hp < f.maxHp * 0.5))) {
+      f.saidTrait = true;
+      sayTrait(f, t === 'lastStand' ? 'LAST STAND!' : t === 'berserk' ? 'BERSERK!' : 'RAMPAGE!', emit);
+    }
   }
   for (const f of w.fighters) {
     if (f.alive) settle(f, dt);

@@ -27,6 +27,8 @@ const norm = (a: V3): V3 => {
 };
 
 export class MeshBuilder {
+  /** Everything added is scaled by this (a species built at one size, used at another: see scaleSpec). */
+  scale = 1;
   private pos: number[] = [];
   private col: number[] = [];
   private si: number[] = [];
@@ -37,8 +39,9 @@ export class MeshBuilder {
     const r = (ca.r + cb.r + cc.r) / 3;
     const g = (ca.g + cb.g + cc.g) / 3;
     const bl = (ca.b + cb.b + cc.b) / 3;
+    const k0 = this.scale;
     for (const [k, p] of [a, b, c].entries()) {
-      this.pos.push(p[0], p[1], p[2]);
+      this.pos.push(p[0] * k0, p[1] * k0, p[2] * k0);
       this.col.push(r, g, bl);
       const s = skin ? skin[k] : ([0, 0, 1, 0] as Skin);
       this.si.push(s[0], s[1], 0, 0);

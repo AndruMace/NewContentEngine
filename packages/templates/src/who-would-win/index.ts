@@ -3,16 +3,19 @@ import { FONT_FAMILY, type Ctx2D, type DramaScore, type Melody, type Rng, type S
 import * as dm from '@sim/physics/math';
 import { clamp01, gaussFit } from '../scoring';
 import { MAX_SWARM_DEFAULT, hpScaleFor } from './balance';
-import { CREATURES, CREATURE_IDS, DUELS, DUEL_IDS, HORDES, HORDE_IDS, creatureById, matchupId, statBars, type CreatureDef } from './roster';
-import { ARENA_R, condition, finisherIncoming, idleWorld, makeWorld, stepWorld, type Aim, type Fighter, type FighterState, type Grab, type Hurt, type World, type Wound } from './sim';
+import { CREATURES, CREATURE_IDS, DUELS, DUEL_IDS, HORDES, HORDE_IDS, TRAITS, creatureById, hideText, matchupId, statBars, type CreatureDef } from './roster';
+import { ARENA_R, condition, finisherIncoming, idleWorld, makeWorld, stepWorld, type Aim, type Clinch, type Fighter, type FighterState, type Grab, type Hurt, type World, type Wound } from './sim';
 import { drawScene, projectToScreen } from './view3d';
 import { BEAT_S, VS_S, VS_SLAM, VS_SLAM_Y, VS_STRIPS, vsSlide } from './vs';
+
+/** Fighters for the dropdowns, alphabetical (after 'random'). */
+const FIGHTER_CHOICES = ['random', ...[...CREATURE_IDS].sort()] as [string, ...string[]];
 
 export const whoWouldWinSchema = z.object({
   mode: z.enum(['duel', 'horde']).default('duel').meta({ title: 'Mode (one on one, or how many of a small kind it takes to beat a big one)' }),
   matchup: z.enum(['random', ...DUEL_IDS, ...HORDE_IDS, 'custom']).default('random').meta({ title: 'Matchup (curated; custom uses the two fighters below)' }),
-  fighterA: z.enum(['random', ...CREATURE_IDS]).default('random').meta({ title: 'Fighter A (custom matchup; the big one in a horde)' }),
-  fighterB: z.enum(['random', ...CREATURE_IDS]).default('random').meta({ title: 'Fighter B (custom matchup; the swarm in a horde)' }),
+  fighterA: z.enum(FIGHTER_CHOICES).default('random').meta({ title: 'Fighter A (custom matchup; the big one in a horde)' }),
+  fighterB: z.enum(FIGHTER_CHOICES).default('random').meta({ title: 'Fighter B (custom matchup; the swarm in a horde)' }),
   maxSwarm: z.number().int().min(10).max(60).default(MAX_SWARM_DEFAULT).meta({ title: 'Horde: most the swarm can send', step: 1 }),
   fightLength: z.number().min(6).max(30).default(16).meta({ title: 'Typical fight length, s (video ≈ this + 12 s)', step: 1 }),
   hitFreeze: z.number().min(0).max(0.12).default(0.06).meta({ title: 'Hit freeze on big hits (s)', step: 0.01 }),
@@ -77,6 +80,10 @@ export interface FighterView {
   downLen: number;
   fallDir: 1 | -1;
   hover: number;
+  /** Its speed along its heading, knockback included (its feet step with it); a clinch; a shield block. */
+  stepV: number;
+  clinch: Clinch | null;
+  blockT: number;
 }
 
 interface Snapshot {
@@ -182,6 +189,9 @@ export const viewOf = (f: Fighter | FighterView): FighterView => ({
   downLen: f.downLen,
   fallDir: f.fallDir,
   hover: f.hover,
+  stepV: f.stepV,
+  clinch: f.clinch ? { ...f.clinch } : null,
+  blockT: f.blockT,
 });
 
 const CALLOUTS: Record<string, { text: string; color: string }> = {
@@ -194,6 +204,11 @@ const CALLOUTS: Record<string, { text: string; color: string }> = {
   bluff: { text: 'BLUFF!', color: '#ffffff' },
   roar: { text: 'ROAR!', color: '#ffb03b' },
   knockdown: { text: 'KNOCKED DOWN!', color: '#ffd23b' },
+  'clinch:horns': { text: 'LOCKED HORNS!', color: '#ffd23b' },
+  'clinch:grapple': { text: 'GRAPPLE!', color: '#ffd23b' },
+  'shove:aside': { text: 'SHOVED ASIDE!', color: '#ffffff' },
+  'shove:down': { text: 'THROWN DOWN!', color: '#ff5a64' },
+  block: { text: 'BLOCKED!', color: '#9fd3ff' },
   'injury:leg': { text: 'LIMPING!', color: '#ff8a5a' },
   'injury:arm': { text: 'ARM HURT!', color: '#ff8a5a' },
   'injury:head': { text: 'DAZED!', color: '#ff8a5a' },
@@ -418,10 +433,11 @@ function drawVs(ctx: Ctx2D, s: State, theme: Theme) {
       ['SIZE', bars.size],
       ['POWER', bars.power],
       ['SPEED', bars.speed],
+      ['STRENGTH', bars.strength],
       ['TOUGHNESS', bars.toughness],
     ];
     rows.forEach(([label, v], i) => {
-      const y = st.titleY + 70 + i * 52;
+      const y = st.titleY + 66 + i * 46;
       textOutlined(ctx, label, col, y - 18, 20, 'rgba(255,255,255,0.9)', st.align);
       const bw = 440;
       const bx = right ? col - bw : col;
@@ -436,6 +452,13 @@ function drawVs(ctx: Ctx2D, s: State, theme: Theme) {
       ctx.roundRect(right ? bx + bw - fw : bx, y - 4, fw, 20, 10);
       ctx.fill();
     });
+    // Its hide and its trait, in a line each.
+    const lineY = st.titleY + 66 + rows.length * 46 + 6;
+    const appear = clamp01((since - 0.75) / 0.3);
+    const hide = `🛡 ${hideText(bl.c)}`;
+    const trait = `★ ${TRAITS[bl.c.trait].name}: ${TRAITS[bl.c.trait].text}`;
+    textOutlined(ctx, hide, col, lineY, fitText(ctx, hide, 24, 470), 'rgba(255,255,255,0.92)', st.align, appear);
+    textOutlined(ctx, trait, col, lineY + 34, fitText(ctx, trait, 24, 470), '#b6ff6a', st.align, appear);
     ctx.restore();
   });
   if (sl.slam < 0) return;
@@ -484,7 +507,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
   name: 'Who Would Win',
   family: 'race',
   description:
-    'Rendered in 3D low-poly: real animals, mythical creatures and fighters battle in a colosseum. Two modes. Duel: one on one (e.g. Bull vs Dragon, Horse vs King, Wolf vs Deer), each fighter with an HP bar, from a VS card with stat bars (size, power, speed, toughness) to a knockout, an instant replay of the knockout blow and the winner. Horde: "how many X does it take to beat a Y?": one big fighter (e.g. a Bull) against a stream of a smaller kind (e.g. Wolves) let in through the gates one after another, a few fighting at a time while the rest circle and wait; the counter shows how many were sent, and the answer is how many it took (or the big one survives them all). Fighters are a Bull, Horse, Unicorn, Stag, Deer, Donkey, Alpaca, Wolf, Husky, Fox, Swordsman, King, Brawler, Dragon (flies low, bites and breathes fire), Giant Spider (venom bite, leaps), and three with signature moves and their own fighting styles: a Lion (stalks and crouches, pounces and latches onto the back of its prey until shaken off), a Grizzly (rears up for a double swipe, bluff-charges, roars to make smaller foes flinch, pins and mauls a downed foe) and a Crocodile (lies still and ambushes, lunges and clamps on in a death roll that spins both over, whips its tail at anything behind it); these moments are called out on screen ("DEATH ROLL!", "LATCHED ON!"). Each has its own moves (gores, charges, bucking kicks, bites, sword slashes, punches), and blows physically connect: the attacker lunges in and its jaws, horns, claws, hooves, fists or blade land on the exact spot they hit (head, neck, shoulder, flank, a leg, a wing), or whiff when the target slips back. Every blow leaves a stylized wound there (claw rakes, bite marks, sword cuts, gores, bruises, scorches; no gore or blood spray), and wounds add up to injuries that change the fight: a hurt leg limps and slows it (no more charges or pounces), a blow to the head leaves it dazed and slow to react, a battered body has it winded and panting, a torn wing brings the dragon down to the ground; injuries are called out (LIMPING!, DAZED!, WINDED!, WING TORN!) and shown under the HP bars. Big blows knock fighters off their feet (KNOCKED DOWN!) and every hit rocks the body the way it was struck, with hit freezes, knockbacks, staggers, sidesteps and damage numbers; a fighter that is losing gets wary, one nearly beaten fights desperately, and a hurt foe gets pressed. Outcomes are decided by the fight itself (favourites usually but not always win). Knockouts, not deaths. Length: fightLength sets how long a typical fight lasts; the video runs about fightLength + 12 s.',
+    '3D low-poly creature battles in a colosseum. Duel: one on one, from a VS card (stats, hide, trait) to a knockout and its replay. Horde: how many of a smaller kind it takes to beat a big one (how many wolves to beat a bull?). 26 fighters: real animals (lion, tiger, grizzly, gorilla, crocodile, rhino, elephant, bull, horse, wolf and more), mythical creatures (dragon, griffin, unicorn, minotaur, troll, giant spider) and human fighters (swordsman, king, brawler, viking). Blows physically land and leave stylized wounds (no blood); injuries change the fight (limping, dazed, winded, a torn wing grounds a flier); fighters lock horns, grapple and get knocked down. The fight decides the winner: favourites usually win, not always. fightLength sets the typical fight length (video ≈ fightLength + 12 s).',
   schema: whoWouldWinSchema,
   substeps: 2,
   glowScale: 0.12,
@@ -600,10 +623,20 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
           // Old-style music: a melody note on each blow.
           if (p.music === 'hits') e.mm = 1;
           emit(e);
-          const call = CALLOUTS[e.type === 'grab' || e.type === 'shakeOff' ? `${e.type}:${e.kind}` : e.type === 'injury' ? `injury:${e.part}` : e.type];
+          const key =
+            e.type === 'grab' || e.type === 'shakeOff'
+              ? `${e.type}:${e.kind}`
+              : e.type === 'injury'
+                ? `injury:${e.part}`
+                : e.type === 'clinch'
+                  ? `clinch:${e.horns ? 'horns' : 'grapple'}`
+                  : e.type === 'shove'
+                    ? `shove:${e.down ? 'down' : 'aside'}`
+                    : e.type;
+          const call = e.type === 'trait' ? { text: e.text as string, color: '#b6ff6a' } : CALLOUTS[key];
           // (The swarm's injuries and falls aren't called out: there are too many of them.)
           if (call && s.visual && !e.swarm) {
-            s.callouts.push({ t, who: (e.a ?? e.who) as number, text: call.text, color: call.color });
+            s.callouts.push({ t, who: (e.type === 'shove' || e.type === 'block' ? e.b : (e.a ?? e.who)) as number, text: call.text, color: call.color });
             if (s.callouts.length > 6) s.callouts.shift();
           }
           // A grapple taking hold: a beat of slow motion on it.
@@ -614,8 +647,8 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
             s.focusX = o.x;
             s.focusY = o.y;
           }
-          if ((e.type === 'knockdown' || e.type === 'ko') && s.visual) {
-            const o = w.fighters[(e.who as number) ?? -1];
+          if ((e.type === 'knockdown' || e.type === 'ko' || (e.type === 'shove' && e.down)) && s.visual) {
+            const o = w.fighters[(e.type === 'shove' ? e.b : e.who) as number];
             if (o) {
               s.dust.push({ simT: w.simT + (e.type === 'ko' ? 0.35 : 0.2), x: o.x, y: o.y, size: Math.sqrt(o.def.height * (o.def.front ?? o.def.radius)) * 1.6 });
               if (s.dust.length > 16) s.dust.shift();
@@ -890,6 +923,18 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
         return [];
       case 'evade':
         return [sfx('swish', 0.25, 0.85)];
+      case 'prep':
+        return [sfx('step', 0.35, 0.2), sfx('hoof', 0.25, 0.25), ...call(e.call, Math.max(0, (e.cp as number) - 0.1), 0.35)];
+      case 'clinch':
+        return [sfx(e.horns ? 'clang' : 'impact', e.horns ? 0.35 : 0.5, 0.1), sfx('smack', 0.5, 0.2), ...call(e.call, e.cp, 0.5), ...call(e.vcall, e.vcp, 0.35), sfx('cheer', 0.3)];
+      case 'grind':
+        return e.horns ? [sfx('smack', 0.22, 0.25)] : [sfx(chance(0.5) ? 'crunch' : 'growl', 0.22, 0.3)];
+      case 'shove':
+        return [sfx('impact', 0.5, 0.15), sfx('swish', 0.4, 0.3), ...(e.down ? [sfx('bodyfall', 0.7, deep(mass))] : []), ...call(e.call, e.cp, 0.45), sfx('cheer', 0.4)];
+      case 'block':
+        return [sfx('clang', 0.5, 0.35), sfx('smack', 0.35, 0.4)];
+      case 'trait':
+        return [...call(e.call, e.cp, 0.55), sfx('cheer', 0.35)];
       case 'knockdown':
         return [sfx('bodyfall', e.swarm ? 0.4 : 0.75, deep(mass)), sfx('impact', 0.4, 0.1), ...call(e.call, Math.min(1, (e.cp as number) + 0.2), 0.4), ...(e.swarm ? [] : [sfx('gasp', 0.4)])];
       case 'injury':
@@ -919,13 +964,30 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
     return [];
   },
 
+  /** Who won (a duel), or how many it took (a horde): tallied over a seed search in the Playground. */
+  outcome(events) {
+    const win = events.find((e) => e.type === 'win');
+    if (!win) return null;
+    const a = creatureById(win.a as string);
+    const b = creatureById(win.b as string);
+    if (win.mode === 'duel') return `${(win.side === 0 ? a : b).label} wins`;
+    if (win.side === 0) return `${a.label} survives ${win.sent}`;
+    // (Bands of three, so the spread reads at a glance.)
+    const lo = Math.floor(((win.sent as number) - 1) / 3) * 3 + 1;
+    return `took ${lo}–${lo + 2} ${b.plural.toLowerCase()}`;
+  },
+
   /**
    * Duel: prefer fights that run to length, stay busy, end close (the winner nearly beaten too), with
    * a comeback or lead changes. Horde: the big one should take plenty down before it falls, and the
    * answer shouldn't be trivially small.
    */
   score(events, { durationS, targetS, timedOut }): DramaScore {
-    const durFit = gaussFit(durationS, targetS, targetS * 0.2);
+    // Length matters less than the fight: anything from a bit under the target to about twice it (or 45 s)
+    // is as good, so big fights can run long.
+    const lo = targetS * 0.75;
+    const hi = Math.max(targetS * 1.9, 45);
+    const durFit = durationS < lo ? gaussFit(durationS, lo, targetS * 0.2) : durationS > hi ? gaussFit(durationS, hi, targetS * 0.25) : 1;
     const win = events.find((e) => e.type === 'win');
     if (timedOut || !win) return { total: 0.02 * durFit, parts: { durFit }, notes: ['no winner'] };
     const fightAt = events.find((e) => e.type === 'fight')?.t ?? 0;
@@ -955,7 +1017,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
       }
       const swings = clamp01(leadChanges / 2);
       // Signature moments (grapples, shake-offs, roars) make a fight.
-      const moments = clamp01(events.filter((e) => e.type === 'grab' || e.type === 'shakeOff' || e.type === 'bluff' || e.type === 'knockdown' || e.type === 'injury').length / 3);
+      const moments = clamp01(events.filter((e) => ['grab', 'shakeOff', 'bluff', 'knockdown', 'injury', 'shove', 'trait', 'block'].includes(e.type)).length / 3);
       const drama = 0.27 * close + 0.18 * comeback + 0.1 * swings + 0.13 * lullFit + 0.13 * hitFit + 0.09 * clamp01(crits / 2) + 0.1 * moments;
       return {
         total: durFit * (0.2 + 0.8 * drama),

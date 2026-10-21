@@ -33,7 +33,30 @@ export function strikeParts(def: CreatureDef, m: MoveDef, k: number): StrikePart
       return [{ kind: 'snout' }];
     case 'headbutt':
     case 'charge':
+    case 'toss':
       return [{ kind: 'brow' }];
+    case 'swat':
+      // (The head swings, tusks and trunk with it.)
+      return [{ kind: 'brow' }];
+    case 'stomp':
+      return def.feet === 'foot' ? [{ kind: 'paw', limb: 'RL' }] : [
+        { kind: 'paw', limb: 'LF' },
+        { kind: 'paw', limb: 'RF' },
+      ];
+    case 'chop':
+    case 'club':
+      return [{ kind: 'sword' }];
+    case 'bash':
+    case 'backhand':
+      return [{ kind: 'paw', limb: 'LA' }];
+    case 'pummel':
+    case 'grapple':
+      return [
+        { kind: 'paw', limb: 'LA' },
+        { kind: 'paw', limb: 'RA' },
+      ];
+    case 'dive':
+      return [{ kind: 'paw', limb: 'LF' }, { kind: 'paw', limb: 'RF' }, { kind: 'snout' }];
     case 'swipe':
       return [{ kind: 'paw', limb: kind === 'bear' ? 'LF' : 'RF' }];
     case 'rear':
@@ -107,11 +130,13 @@ export interface Anatomy {
   blade: number;
   /** Where a spot is, model space at rest (close to where the view finds it on the mesh). */
   spot(a: Spot3): V3;
-  /** Where a striking part reaches from (model space, at rest: a hip or shoulder, the base of the neck), and how far. */
-  striker(p: StrikePart): { at: V3; span: number };
+  /** Where a striking part reaches from (model space, at rest: a hip or shoulder, the base of the neck), how
+   * far, and (a head) how high it can come up to. */
+  striker(p: StrikePart): { at: V3; span: number; top?: number };
 }
 
-const SPINE = ['pelvis', 'spine', 'chest', 'neck1'] as const;
+/** The body zone runs rump to throat: the neck is where predators go for. */
+const SPINE = ['pelvis', 'spine', 'chest', 'neck1', 'neck2'] as const;
 const cache = new Map<string, Anatomy>();
 
 export function anatomyOf(def: CreatureDef): Anatomy {
@@ -147,7 +172,7 @@ export function anatomyOf(def: CreatureDef): Anatomy {
   }
   const head = boxOf(hp);
   const blade = (() => {
-    const pr = spec.props?.[0];
+    const pr = spec.props?.find((x) => x.limb === 'RA');
     if (!pr) return 0;
     const b = new MeshBuilder();
     pr.build(b);
@@ -184,11 +209,12 @@ export function anatomyOf(def: CreatureDef): Anatomy {
       if (s.zone === 'wing' && spec.wings && wingBox) {
         const x = wingBox.min[0] + (wingBox.max[0] - wingBox.min[0]) * (0.25 + 0.55 * s.u);
         const z = wingBox.max[2] - (wingBox.max[2] - wingBox.min[2]) * (0.2 + 0.45 * s.v);
+        const bone = spec.bones[spec.wings.bone];
         const r = spec.wings.root;
-        return [s.side * (r[0] + x), r[1] + 0.05, r[2] + z];
+        return [s.side * (r[0] + x), bone[1] + r[1] + 0.05, bone[2] + r[2] + z];
       }
       // The body: along the torso from the rump to the shoulders, round from the top (or the front) to the side.
-      let d = (0.08 + 0.84 * s.u) * total;
+      let d = (0.08 + 0.86 * s.u) * total;
       let i = 0;
       while (i < lens.length - 1 && d > lens[i]) d -= lens[i++];
       const t = lens[i] ? d / lens[i] : 0;
@@ -208,7 +234,7 @@ export function anatomyOf(def: CreatureDef): Anatomy {
         const base = spec.bones.neck1;
         // (A spider has no neck: it rears up on its back legs to strike, fangs coming down from above.)
         const rear = def.proc.kind === 'spider' ? 0.45 : 0;
-        return { at: [base[0], base[1] + rear, base[2]], span: Math.hypot(tip[0] - base[0], tip[1] - base[1], tip[2] - base[2]) + LEAN + rear * 0.3 };
+        return { at: [base[0], base[1] + rear, base[2]], span: Math.hypot(tip[0] - base[0], tip[1] - base[1], tip[2] - base[2]) + LEAN + 0.12 + rear * 0.3, top: Math.max(tip[1], base[1]) + 0.45 + rear };
       }
       const l = spec.legs.find((x) => x.name === (p.kind === 'sword' ? 'RA' : p.limb));
       if (!l) return { at: this.snout, span: LEAN };
