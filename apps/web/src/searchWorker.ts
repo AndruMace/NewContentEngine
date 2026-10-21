@@ -22,6 +22,8 @@ export interface SearchResult {
   durationS: number;
   timedOut: boolean;
   notes: string[];
+  /** How it came out (template.outcome), for the tally across all seeds. */
+  outcome: string | null;
 }
 
 export type SearchMessage = { type: 'seed' } | { type: 'done'; results: SearchResult[] };
@@ -34,7 +36,7 @@ self.onmessage = async (e: MessageEvent<SearchRequest>) => {
     const seed = start + i;
     const r = makeRunner({ ...recipe, seed }, false).runToEnd();
     const score = r.score(targetS);
-    results.push({ seed, total: score.total, durationS: r.durationS, timedOut: r.timedOut, notes: score.notes ?? [] });
+    results.push({ seed, total: score.total, durationS: r.durationS, timedOut: r.timedOut, notes: score.notes ?? [], outcome: r.timedOut ? 'no winner (timed out)' : (r.template.outcome?.(r.events) ?? null) });
     // After every seed: heavy templates take a second or more each, so the bar should move.
     self.postMessage({ type: 'seed' } satisfies SearchMessage);
   }

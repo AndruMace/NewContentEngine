@@ -237,4 +237,9 @@ export interface Template<P = any, S = any> {
   renderTop?(rc: RenderCtx, s: S): void;
   audio(e: SimEvent, m: AudioMapCtx): AudioEventInput[];
   score(events: SimEvent[], info: { durationS: number; targetS: number; timedOut: boolean }): DramaScore;
+  /**
+   * How a run came out in a few words ("Grizzly wins", "took 12 wolves"), or null. The Playground's
+   * seed search tallies it over every seed it tries, to show how often each result comes up.
+   */
+  outcome?(events: SimEvent[]): string | null;
 }

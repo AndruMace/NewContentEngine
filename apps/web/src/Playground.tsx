@@ -44,7 +44,7 @@ export function Playground() {
     }
   });
   const [safeZones, setSafeZones] = useState(false);
-  const [search, setSearch] = useState<{ progress: number; results: SearchResult[]; running: boolean }>({
+  const [search, setSearch] = useState<{ progress: number; results: SearchResult[]; running: boolean; tally?: { label: string; n: number }[]; runs?: number; medianS?: number }>({
     progress: 0,
     results: [],
     running: false,
@@ -98,9 +98,14 @@ export function Playground() {
     const finish = () => {
       if (++finished < n) return;
       searchWorkers.current = [];
+      // How every run came out (not just the best ones): how often each result comes up.
+      const counts = new Map<string, number>();
+      for (const r of results) if (r.outcome) counts.set(r.outcome, (counts.get(r.outcome) ?? 0) + 1);
+      const tally = [...counts].map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n);
+      const lens = results.map((r) => r.durationS).sort((a, b) => a - b);
       results.sort((a, b) => b.total - a.total || a.seed - b.seed);
       const top = results.slice(0, 12);
-      setSearch({ progress: 1, results: top, running: false });
+      setSearch({ progress: 1, results: top, running: false, tally: tally.length ? tally : undefined, runs: results.length, medianS: lens[lens.length >> 1] });
       if (top[0]) update({ seed: top[0].seed });
     };
     for (let k = 0; k < n; k++) {
@@ -189,6 +194,20 @@ export function Playground() {
               {search.running ? `Searching ${Math.round(search.progress * 100)}%` : `Find best seed (${searchBudget})`}
             </button>
           </div>
+          {search.tally && (
+            <div className="tally">
+              <span className="hint">
+                Across {search.runs} runs (median {search.medianS?.toFixed(0)}s):
+              </span>
+              {search.tally.slice(0, 8).map((t) => (
+                <div key={t.label} className="tally-row">
+                  <span>{t.label}</span>
+                  <span className="tally-bar" style={{ width: `${(t.n / search.runs!) * 100}%` }} />
+                  <b>{Math.round((t.n / search.runs!) * 100)}%</b>
+                </div>
+              ))}
+            </div>
+          )}
           {search.results.length > 0 && (
             <ol className="results">
               {search.results.map((r) => (

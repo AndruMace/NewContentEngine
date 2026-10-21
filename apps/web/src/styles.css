@@ -40,6 +40,11 @@ button:disabled { opacity: 0.6; cursor: default; }
 .hint { color: var(--muted); margin: 4px 0 10px; line-height: 1.4; }
 .warn { color: var(--warn); }
 .results { list-style: none; margin: 0; padding: 0; }
+.tally { margin: 6px 0 10px; }
+.tally .hint { display: block; margin: 0 0 4px; }
+.tally-row { display: grid; grid-template-columns: 1fr 90px 40px; gap: 6px; align-items: center; padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.tally-bar { height: 8px; border-radius: 4px; background: var(--accent); min-width: 2px; }
+.tally-row b { text-align: right; }
 .results li { display: grid; grid-template-columns: 1fr 40px 70px; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .results li:hover { background: #1e212b; }
 .results li.active { background: #12382b; }

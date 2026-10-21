@@ -280,7 +280,8 @@ describe('learner', () => {
     expect(learner).toBeGreaterThan(0.55);
     expect(learner).toBeGreaterThan(uniform + 0.4);
     expect(learner).toBeGreaterThan(beta);
-  }, 180_000);
+    // (Its cost grows with the catalog of variants: every template's planned matchups and modes.)
+  }, 300_000);
 
   it('calibration rewards a model that ranks well', () => {
     const pts = Array.from({ length: 20 }, (_, i) => ({ predicted: i, actual: i + (i % 3), drama: 20 - i }));
