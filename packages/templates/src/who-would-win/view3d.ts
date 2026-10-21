@@ -2,16 +2,18 @@
  * 3D view: a low-poly colosseum and the fighters, posed from sim state (live, or a replay snapshot).
  * Rendering only: reads state, never changes it. Sim (x, y) on the arena floor maps to three.js (x, z).
  *
- * Each fighter's clips are set to the clip times the sim carries (never advanced by frame time), so any
- * frame (a replay, a restarted preview) poses exactly. The VS card shows each fighter alone on a
+ * Every fighter is modelled and animated in code (proc/): its pose is a pure function of its sim state,
+ * so any frame (a replay, a restarted preview) poses exactly. The VS card shows each fighter alone on a
  * pedestal far from the arena, through its own camera, inside its half of the card.
  */
 import { hexToRgb, lighten, rgbToCss, type Ctx2D, type Theme } from '@sim/engine';
-import { creature } from '../ambient/assets';
 import { THREE, canvasTexture, draw3D, sceneCache } from '../three-layer';
 import type { CreatureDef } from './roster';
 import { ARENA_R, GATES } from './sim';
 import { VS_STRIPS, vsSlide } from './vs';
+import { ProcRig, restPose } from './proc/rig';
+import { SPECIES } from './proc/species';
+import { PROC_POSES } from './proc/poses';
 import { REPLAY_S, fightersNow, replaying, type FighterView, type State } from './index';
 
 const VFOV = 32;
@@ -23,8 +25,6 @@ const WALL_H = 1.7;
 const PEDESTALS = [new THREE.Vector3(-14, 0, 110), new THREE.Vector3(14, 0, 110)];
 const FLAME_N = 70;
 const SUN = 1.9;
-/** The Hooded Adventurer's sword length in its hand bone's units (the King's sword matches it). */
-const HELD_SWORD_LEN = 0.0095;
 const BURST_N = 12;
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
@@ -33,142 +33,33 @@ const fract = (x: number) => x - Math.floor(x);
 const hash = (i: number) => fract(Math.sin(i * 12.9898 + 78.233) * 43758.5453);
 
 interface Inst {
+  rig: ProcRig;
   group: THREE.Group;
-  mixer: THREE.AnimationMixer;
-  actions: Map<string, THREE.AnimationAction>;
   mats: THREE.MeshStandardMaterial[];
-  head: THREE.Object3D | null;
+  head: THREE.Object3D;
   def: CreatureDef;
-  /** Nose to tail (metres). */
+  /** Nose to rump (metres; the tail doesn't count for framing). */
   length: number;
 }
 
-/** Per model: the scale that makes it its roster height, the lift that puts its feet on the floor, and its length. */
-const fits = new Map<string, { scale: number; lift: number; length: number }>();
-
 function makeInst(def: CreatureDef): Inst {
-  const { root, clips } = creature(def.model);
-  const mats: THREE.MeshStandardMaterial[] = [];
-  // Own materials, so each fighter can flash on its own.
-  root.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (!m.isMesh) return;
-    const own = (Array.isArray(m.material) ? m.material : [m.material]).map((x) => {
-      const c = (x as THREE.MeshStandardMaterial).clone();
-      c.emissive = new THREE.Color(0, 0, 0);
-      c.emissiveIntensity = 1;
-      c.emissiveMap = null;
-      mats.push(c);
-      return c;
-    });
-    m.material = Array.isArray(m.material) ? own : own[0];
-  });
-  let fit = fits.get(def.model + def.height);
-  if (!fit) {
-    root.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(root, true);
-    const scale = def.height / Math.max(1e-6, box.max.y - box.min.y);
-    fit = { scale, lift: -box.min.y * scale, length: (box.max.z - box.min.z) * scale };
-    fits.set(def.model + def.height, fit);
-  }
-  root.scale.multiplyScalar(fit.scale);
-  root.position.y = fit.lift;
-  const group = new THREE.Group();
-  group.add(root);
-  const mixer = new THREE.AnimationMixer(root);
-  const actions = new Map<string, THREE.AnimationAction>();
-  for (const [name, clip] of clips) {
-    const a = mixer.clipAction(clip);
-    a.play();
-    a.enabled = false;
-    actions.set(name, a);
-  }
-  let head: THREE.Object3D | null = null;
-  root.traverse((o) => {
-    if (!head && /^head$/i.test(o.name)) head = o;
-  });
-  if (!head)
-    root.traverse((o) => {
-      if (!head && /head/i.test(o.name) && (o as THREE.Bone).isBone) head = o;
-    });
-  for (const prop of def.props ?? []) attachProp(root, prop);
-  return { group, mixer, actions, mats, head, def, length: fit.length };
+  const rig = new ProcRig(SPECIES[def.proc.kind]);
+  const length = (def.front ?? def.radius) + (def.back ?? def.radius);
+  return { rig, group: rig.root, mats: [rig.material, ...(rig.wingMaterial ? [rig.wingMaterial] : [])], head: rig.head, def, length };
 }
 
-/** A sword in the right hand, or a unicorn's horn on the head. */
-function attachProp(root: THREE.Object3D, prop: 'gold-sword' | 'horn') {
-  root.updateMatrixWorld(true);
-  if (prop === 'horn') {
-    const head = root.getObjectByName('Head');
-    if (!head) return;
-    const mat = new THREE.MeshStandardMaterial({ color: 0xf6e7b0, metalness: 0.3, roughness: 0.35, emissive: new THREE.Color(0x4a3a10) });
-    const geo = new THREE.ConeGeometry(0.05, 0.5, 7);
-    geo.translate(0, 0.25, 0);
-    const horn = new THREE.Mesh(geo, mat);
-    horn.castShadow = true;
-    // In world units: undo the head bone's world scale so the horn is 0.5 m long.
-    const ws = new THREE.Vector3();
-    head.getWorldScale(ws);
-    horn.scale.setScalar(1 / ws.x);
-    // The head bone runs along +y down the face towards the muzzle, its +z points up out of the
-    // forehead: the horn stands on the forehead, leaning forward.
-    horn.rotation.x = 1.2;
-    horn.position.set(0, 0.08 / ws.y, 0.16 / ws.z);
-    head.add(horn);
-    return;
-  }
-  // Held exactly like the Hooded Adventurer's own sword: on the middle finger's first bone, turned the
-  // same way (its blade runs down the bone's -y; the gold sword's runs up its +y, so it's flipped).
-  // (GLTFLoader drops the dots from node names: Middle1.R loads as Middle1R.)
-  const hand = root.getObjectByName('Middle1R');
-  if (!hand) return;
-  const sword = creature('gold-sword').root;
-  sword.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(sword);
-  const len = box.max.y - box.min.y;
-  sword.scale.setScalar(HELD_SWORD_LEN / len);
-  sword.rotation.set(Math.PI, 0, 0);
-  sword.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true;
-  });
-  const grip = new THREE.Group();
-  grip.position.set(-0.0000042, 0.00091, -0.00025);
-  grip.quaternion.set(0.000648, 0, -0.71202, 0.70216);
-  grip.add(sword);
-  hand.add(grip);
-}
-
-function applyAnim(inst: Inst, f: FighterView) {
-  for (const a of inst.actions.values()) {
-    a.enabled = false;
-    a.setEffectiveWeight(0);
-  }
-  const set = (clip: string, t: number, loop: boolean, weight: number) => {
-    const a = inst.actions.get(clip);
-    if (!a || weight <= 0) return;
-    const d = a.getClip().duration;
-    a.enabled = true;
-    a.setEffectiveWeight(weight);
-    a.time = loop ? ((t % d) + d) % d : Math.max(0, Math.min(t, d - 1e-3));
-  };
-  const fade = f.prev && f.prev.clip !== f.anim.clip ? f.blend : 1;
-  set(f.anim.clip, f.anim.t, f.anim.loop, fade);
-  if (f.prev && fade < 1) set(f.prev.clip, f.prev.t, f.prev.loop, 1 - fade);
-  inst.mixer.update(0);
-}
-
-function pose(inst: Inst, f: FighterView, simT: number, horde: boolean) {
+function pose(inst: Inst, f: FighterView, simT: number, horde: boolean, all: FighterView[]) {
   const d = f.def;
   let y = d.hover ? d.hover + Math.sin(simT * 3.1 + f.idx) * 0.12 : 0;
   // Fallen dragons drop out of the air; in a horde the fallen sink away after a while.
   if (!f.alive && d.hover) y *= 1 - clamp01((simT - f.diedAt) / 0.6);
   if (!f.alive && horde && f.side === 1) y -= clamp01((simT - f.diedAt - 2.2) / 1.2) * d.height * 1.2;
   inst.group.position.set(f.x, y, f.y);
-  inst.group.rotation.y = Math.atan2(Math.cos(f.heading), Math.sin(f.heading));
+  inst.group.rotation.set(0, Math.atan2(Math.cos(f.heading), Math.sin(f.heading)), 0);
   inst.group.visible = f.alive || !horde || simT - f.diedAt < 3.6;
-  applyAnim(inst, f);
+  inst.rig.pose(PROC_POSES[d.proc.kind](f, simT, all));
   const fl = f.flash * 0.22;
-  for (const m of inst.mats) m.emissive.setRGB(fl + f.burn * 0.45, fl * 0.85 + f.burn * 0.12, fl * 0.7);
+  for (const m of inst.mats) m.emissive.setRGB(fl + f.burn * 0.45, fl * 0.5 + f.burn * 0.12, fl * 0.4);
 }
 
 /** Sandy floor with raked rings and scuffs. */
@@ -419,7 +310,7 @@ function drawBreath(v: ReturnType<typeof view>, insts: Map<number, Inst>, fighte
     if (el < from || el > to) continue;
     const inst = insts.get(f.idx);
     const mouth = new THREE.Vector3();
-    if (inst?.head) inst.head.getWorldPosition(mouth);
+    if (inst) inst.head.getWorldPosition(mouth);
     else mouth.set(f.x, f.def.height * 0.7, f.y);
     const dirX = Math.cos(f.heading);
     const dirZ = Math.sin(f.heading);
@@ -505,7 +396,8 @@ function drawVsCard(ctx: Ctx2D, s: State, v: ReturnType<typeof view>) {
     const def = inst.def;
     const p = PEDESTALS[k];
     const idleT = s.t;
-    applyAnim(inst, { ...SHOW, def, idx: k, anim: { clip: def.clips.idle, t: idleT + k * 0.7, rate: 1, loop: true } });
+    // Standing on the pedestal; the dragon hovers with its wings beating.
+    inst.rig.pose({ ...restPose(), time: idleT + k * 0.7, wingFlap: 0.6 + 0.6 * Math.sin(idleT * 6.5), wingFold: 0.25, legs: def.hover ? Object.fromEntries(SPECIES[def.proc.kind].legs.map((l) => [l.name, 'relax' as const])) : {}, gaitScale: def.hover ? 0 : 1 });
     // Face the camera, three-quarters on, the two looking towards each other.
     inst.group.rotation.y = Math.PI + (k === 0 ? 0.6 : -0.6);
     const tall = def.height + (def.hover ?? 0);
@@ -525,25 +417,6 @@ function drawVsCard(ctx: Ctx2D, s: State, v: ReturnType<typeof view>) {
   v.sun.intensity = SUN;
 }
 
-const SHOW: Omit<FighterView, 'def' | 'idx' | 'anim'> = {
-  side: 0,
-  x: 0,
-  y: 0,
-  heading: 0,
-  alive: true,
-  state: 'idle',
-  stateT: 0,
-  moveIdx: -1,
-  hp: 1,
-  maxHp: 1,
-  prev: null,
-  blend: 1,
-  flash: 0,
-  burn: 0,
-  diedAt: -1,
-  number: 0,
-  engaged: true,
-};
 
 export function drawScene(ctx: Ctx2D, s: State, theme: Theme) {
   const v = view(s, theme);
@@ -556,7 +429,7 @@ export function drawScene(ctx: Ctx2D, s: State, theme: Theme) {
       v.scene.add(inst.group);
       v.fighters.set(f.idx, inst);
     }
-    pose(inst, f, simT, horde);
+    pose(inst, f, simT, horde, fighters);
   }
   // Fighters not in this snapshot (a replay from before they came in) stay hidden.
   for (const [idx, inst] of v.fighters) if (!fighters.some((f) => f.idx === idx)) inst.group.visible = false;

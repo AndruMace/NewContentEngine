@@ -7,14 +7,12 @@
 import type { Rng } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { COOLDOWN_MUL, DAMAGE_MUL } from './balance';
-import type { CreatureDef, MoveDef } from './roster';
+import { strideFor, type CreatureDef, type MoveDef } from './roster';
 
 /** Arena floor radius (inside the wall). */
 export const ARENA_R = 10;
 /** Breath attacks hit everyone in their cone this often. */
 export const BREATH_TICK = 0.1;
-/** Crossfade between clips (sim seconds). */
-const FADE = 0.18;
 const CRIT_CHANCE = 0.15;
 const CRIT = 1.8;
 /** A small fighter behind its target while another one keeps it busy does extra damage. */
@@ -30,20 +28,27 @@ const MAX_ALIVE = 8;
 const MAX_ENGAGED = 4;
 /** Horde: the swarm's HP (each one alone is no match; together they are). */
 const SWARM_HP = 0.7;
+/** Grapples tick (damage, and a chance for the target to break free) this often. */
+const GRAB_TICK = 0.25;
+/** How long a stagger lasts. */
+const PROC_STAGGER_S = 0.45;
 /** Gate angles in the arena wall (at the back, as the camera sees it). */
 export const GATES = [-Math.PI / 2, -Math.PI / 2 + 0.9, -Math.PI / 2 - 0.9];
 
 export type Emit = (e: { type: string; [k: string]: unknown }) => void;
 
-export interface AnimState {
-  clip: string;
-  /** Clip time (seconds). */
-  t: number;
-  rate: number;
-  loop: boolean;
-}
+export type FighterState = 'idle' | 'move' | 'attack' | 'stagger' | 'dodge' | 'dead' | 'grab' | 'held';
 
-export type FighterState = 'idle' | 'move' | 'attack' | 'stagger' | 'dodge' | 'dead';
+export interface Grab {
+  kind: 'latch' | 'roll' | 'pin';
+  target: number;
+  t0: number;
+  until: number;
+  next: number;
+  dps: number;
+  /** Latch: which side of the target it rides (1 left, -1 right). */
+  side: 1 | -1;
+}
 
 export interface Fighter {
   idx: number;
@@ -90,11 +95,6 @@ export interface Fighter {
   orbit: 1 | -1;
   /** Horde: one of the swarm close enough to fight (the rest wait their turn). */
   engaged: boolean;
-  anim: AnimState;
-  prev: AnimState | null;
-  /** 0..1 fade-in of `anim` over `prev`. */
-  blend: number;
-  animKey: string;
   /** Visual: white flash on being hit (decays), and a burn glow from breath. */
   flash: number;
   burn: number;
@@ -102,6 +102,24 @@ export interface Fighter {
   dealt: number;
   /** Horde: the order it entered (1-based). */
   number: number;
+  /** Procedural creatures: gait cycles walked (feet), turn rate (rad/s), crouch (0..1) and its target. */
+  gait: number;
+  yawRate: number;
+  prevHeading: number;
+  crouch: number;
+  crouchWant: number;
+  /** A grapple it holds, and who holds it (-1: nobody). */
+  grab: Grab | null;
+  heldBy: number;
+  /** When and from which direction (rad) it was last hit (for flinches). */
+  lastHitT: number;
+  lastHitDir: number;
+  /** When it last started an attack (an ambusher creeps closer after waiting a while). */
+  lastActT: number;
+  /** The current charge will stop short. */
+  bluffing: boolean;
+  /** Footfalls so far (two per gait cycle), for footstep sounds. */
+  steps: number;
 }
 
 export interface World {
@@ -125,6 +143,9 @@ export interface World {
   koWho: number;
   koBy: number;
 }
+
+/** What the audio needs of a fighter (the sound mapping only sees events). */
+const voiceOf = (d: CreatureDef) => ({ call: d.voice?.call ?? '', cp: d.voice?.pitch ?? 0.5, feet: d.feet ?? 'paw', mass: d.mass });
 
 const wrap = (a: number) => a - 2 * Math.PI * Math.floor((a + Math.PI) / (2 * Math.PI));
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
@@ -165,15 +186,23 @@ function makeFighter(idx: number, side: 0 | 1, def: CreatureDef, x: number, y: n
     lastHitBy: -1,
     orbit: rng.chance(0.5) ? 1 : -1,
     engaged: true,
-    anim: { clip: def.clips.idle, t: rng.range(0, def.clips.lens[def.clips.idle] ?? 1), rate: 1, loop: true },
-    prev: null,
-    blend: 1,
-    animKey: 'idle',
     flash: 0,
     burn: 0,
     diedAt: -1,
     dealt: 0,
     number: 0,
+    gait: 0,
+    yawRate: 0,
+    prevHeading: heading,
+    crouch: 0,
+    crouchWant: 0,
+    grab: null,
+    heldBy: -1,
+    lastHitT: -10,
+    lastHitDir: 0,
+    lastActT: simT,
+    bluffing: false,
+    steps: 0,
   };
 }
 
@@ -181,9 +210,15 @@ export function makeWorld(opts: { mode: 'duel' | 'horde'; a: CreatureDef; b: Cre
   const { mode, a, b, hpScale, rng } = opts;
   const fighters: Fighter[] = [];
   if (mode === 'duel') {
-    const d = 2.4 + (a.radius + b.radius) * 0.5;
-    fighters.push(makeFighter(0, 0, a, -d, 0, 0, hpScale, rng, 0));
-    fighters.push(makeFighter(1, 1, b, d, 0, Math.PI, hpScale, rng, 0));
+    // Squared up across the arena (a little differently each time), and each sizes the other up for a
+    // moment before committing, so no two fights open the same way.
+    const d = 2.4 + ((a.front ?? a.radius) + (b.front ?? b.radius)) * 0.5;
+    const off = rng.range(-1, 1);
+    const fa = makeFighter(0, 0, a, -d + rng.range(-0.4, 0.4), off, rng.range(-0.25, 0.25), hpScale, rng, 0);
+    const fb = makeFighter(1, 1, b, d + rng.range(-0.4, 0.4), -off, Math.PI + rng.range(-0.25, 0.25), hpScale, rng, 0);
+    fa.commitAt = rng.range(0.2, 1.4);
+    fb.commitAt = rng.range(0.2, 1.4);
+    fighters.push(fa, fb);
   } else {
     // The big fighter starts in the middle, a little in front, facing the gates at the back.
     fighters.push(makeFighter(0, 0, a, 0, 1.5, -Math.PI / 2, hpScale, rng, 0));
@@ -214,67 +249,18 @@ function setState(f: Fighter, state: FighterState, simT: number, rng?: Rng) {
 }
 
 /** Choose the clip for the fighter's state and advance clip time (crossfading on a change). */
-function animate(f: Fighter, dt: number, simT: number) {
-  const d = f.def;
-  const el = simT - f.stateT;
-  let clip: string;
-  let rate = 1;
-  let loop = true;
-  let key: string = f.state;
-  let t: number | null = null;
-  switch (f.state) {
-    case 'attack':
-      clip = f.move!.clip;
-      loop = false;
-      t = el;
-      key = `attack@${f.stateT}`;
-      break;
-    case 'stagger':
-      clip = d.clips.hit.length ? d.clips.hit[Math.floor(f.stateT * 7.3) % d.clips.hit.length] : d.clips.idle;
-      loop = !d.clips.hit.length;
-      t = d.clips.hit.length ? el : null;
-      key = `stagger@${f.stateT}`;
-      break;
-    case 'dodge':
-      clip = f.dodgeDir > 0 ? d.dodge!.left : d.dodge!.right;
-      rate = 1.3;
-      key = `dodge@${f.stateT}`;
-      break;
-    case 'dead':
-      clip = d.clips.death;
-      loop = false;
-      t = Math.min(el, d.clips.lens[d.clips.death] - 0.001);
-      break;
-    default: {
-      const s = Math.abs(f.spd);
-      if (s < 0.25) clip = d.clips.idle;
-      else if (s <= d.walk * 1.4 || d.clips.run === d.clips.walk) {
-        clip = d.clips.walk;
-        rate = d.walkStride ? clamp(s / d.walkStride, 0.5, 2) : 1 + s / Math.max(1, d.run);
-      } else {
-        clip = d.clips.run;
-        rate = d.runStride ? clamp(s / d.runStride, 0.6, 1.6) : 1.4;
-      }
-      // Locomotion clips swap without restarting the cycle's crossfade every step.
-      key = clip;
-    }
-  }
-  if (key !== f.animKey) {
-    f.prev = { ...f.anim };
-    f.blend = 0;
-    f.animKey = key;
-    f.anim = { clip, t: t ?? 0, rate, loop };
-  } else {
-    f.anim.clip = clip;
-    f.anim.rate = rate;
-    f.anim.loop = loop;
-    f.anim.t = t ?? f.anim.t + dt * rate;
-  }
-  if (f.prev) {
-    f.prev.t += dt * f.prev.rate;
-    f.blend = Math.min(1, f.blend + dt / FADE);
-    if (f.blend >= 1) f.prev = null;
-  }
+/** Procedural creatures: feet (gait cycles from the distance walked), turn rate and crouch. */
+function procTick(f: Fighter, dt: number) {
+  const yaw = wrap(f.heading - f.prevHeading);
+  f.prevHeading = f.heading;
+  f.yawRate += (yaw / dt - f.yawRate) * (1 - dm.exp(-dt * 8));
+  const s = Math.abs(f.spd);
+  if (s > 0.15 && f.state !== 'grab' && f.state !== 'held' && f.state !== 'dead') f.gait += (dt * s) / strideFor(f.def.proc, s);
+  f.crouch += (f.crouchWant - f.crouch) * (1 - dm.exp(-dt * 4));
+}
+
+function animate(f: Fighter, dt: number) {
+  procTick(f, dt);
 }
 
 /** Animate only (before the fight starts and after it ends): idle, death clips, knockback settling. */
@@ -282,11 +268,12 @@ export function idleWorld(w: World, dt: number) {
   w.simT += dt;
   for (const f of w.fighters) {
     if (f.alive && f.state !== 'dead') {
+      if (f.grab) release(w, f, false, () => {});
       f.spd *= dm.exp(-dt * 6);
       if (f.state !== 'idle' && f.state !== 'move') setState(f, 'idle', w.simT);
     }
     settle(f, dt);
-    animate(f, dt, w.simT);
+    animate(f, dt);
   }
 }
 
@@ -326,12 +313,21 @@ function pickTarget(w: World, f: Fighter) {
   f.target = best.idx;
 }
 
-/** Where `o` sits from `f`: edge gap and angle off f's facing. */
+/** How far a fighter's body reaches from its centre towards a direction (world angle): long bodies are
+ * longer ahead and behind than to the sides. */
+export function extent(f: Fighter, ang: number) {
+  const d = f.def;
+  const c = dm.cos(wrap(ang - f.heading));
+  return d.radius + ((d.front ?? d.radius) - d.radius) * Math.max(0, c) * Math.max(0, c) + ((d.back ?? d.radius) - d.radius) * Math.max(0, -c) * Math.max(0, -c);
+}
+
+/** Where `o` sits from `f`: edge-to-edge gap and angle off f's facing. */
 function relation(f: Fighter, o: Fighter) {
   const dx = o.x - f.x;
   const dy = o.y - f.y;
   const dist = dm.hypot(dx, dy);
-  return { dx, dy, dist, gap: dist - f.def.radius - o.def.radius, rel: wrap(dm.atan2(dy, dx) - f.heading), ang: dm.atan2(dy, dx) };
+  const ang = dm.atan2(dy, dx);
+  return { dx, dy, dist, gap: dist - extent(f, ang) - extent(o, ang + Math.PI), rel: wrap(ang - f.heading), ang };
 }
 
 function startAttack(w: World, f: Fighter, i: number, emit: Emit) {
@@ -342,8 +338,9 @@ function startAttack(w: World, f: Fighter, i: number, emit: Emit) {
   f.breathNext = m.hits[0].at * m.len;
   f.chargeBonus = m.charge ? 1 + 0.6 * clamp(f.spd / f.def.run, 0, 1) : 1;
   f.ready[i] = w.simT + m.cooldown * COOLDOWN_MUL;
+  f.lastActT = w.simT;
   setState(f, 'attack', w.simT);
-  emit({ type: 'swing', who: f.idx, move: m.name, sound: m.sound, mass: f.def.mass, breath: m.breath ? 1 : 0, x: Math.round(f.x * 10) / 10 });
+  emit({ type: 'swing', who: f.idx, move: m.name, sound: m.sound, ...voiceOf(f.def), big: (m.weight ?? 1) >= 3 || m.charge || m.grab ? 1 : 0, breath: m.breath ? 1 : 0, weapon: f.def.weapon ?? '', x: Math.round(f.x * 10) / 10 });
   // Anyone it is swinging at may sidestep (if they are quick enough on their feet).
   for (const o of enemiesOf(w, f)) {
     const d = o.def.dodge;
@@ -365,9 +362,13 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     pickTarget(w, f);
     f.retargetAt = w.simT + 0.5;
   }
+  f.crouchWant = 0;
   if (f.target < 0) return { heading: f.heading, speed: 0 };
   const t = w.fighters[f.target];
   const r = relation(f, t);
+  // Down: staggered, held, or nearly finished.
+  const downed = t.state === 'stagger' || t.state === 'held' || t.hp < t.maxHp * 0.3;
+  const grabbable = !t.def.hover && t.heldBy < 0 && !t.grab;
 
   // Horde members not yet engaged wait their turn, circling at a distance.
   if (w.mode === 'horde' && f.side === 1 && !f.engaged) {
@@ -379,9 +380,16 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     return { heading: dm.atan2(gy, gx), speed: clamp(dm.hypot(gx, gy) * 1.2, 0, d.walk * 1.6) };
   }
 
-  // A charge in progress: straight at the target until close enough to land it.
+  // A charge in progress: straight at the target until close enough to land it (or, a bluff, stop short).
   if (f.charging >= 0) {
     const m = d.moves[f.charging];
+    if (f.bluffing && r.gap <= m.reach + 2.2) {
+      f.charging = -1;
+      f.bluffing = false;
+      f.commitAt = w.simT + 0.8;
+      emit({ type: 'bluff', who: f.idx, x: Math.round(f.x * 10) / 10 });
+      return { heading: r.ang, speed: 0 };
+    }
     if (r.gap <= m.reach + f.spd * m.hits[0].at * m.len * 0.6) {
       const i = f.charging;
       f.charging = -1;
@@ -392,12 +400,34 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     else return { heading: r.ang, speed: d.run };
   }
 
+  // A stalker crouches when its pounce is ready and the prey is in range, and leaps once coiled.
+  if (d.ai === 'stalker') {
+    const pi = d.moves.findIndex((m) => m.grab?.kind === 'latch');
+    const pm = d.moves[pi];
+    if (pi >= 0 && f.ready[pi] <= w.simT && grabbable && r.gap >= pm.minRange! && r.gap <= pm.reach + pm.lunge! + 2) {
+      f.crouchWant = 1;
+      if (f.crouch >= 0.6 && r.gap <= pm.reach + pm.lunge! && Math.abs(r.rel) < 0.35 && f.commitAt <= w.simT) {
+        startAttack(w, f, pi, emit);
+        return { heading: f.heading, speed: 0 };
+      }
+      return { heading: r.ang, speed: r.gap > pm.reach + pm.lunge! ? d.walk * 0.6 : 0.2 };
+    }
+  }
+
   // Moves it could start right now, weighted by preference and damage.
   let total = 0;
   const options: { i: number; w: number }[] = [];
+  const crowd = enemiesOf(w, f).filter((o) => relation(f, o).gap < 2.5).length;
   d.moves.forEach((m, i) => {
     if (f.ready[i] > w.simT || f.commitAt > w.simT) return;
     if (m.minRange !== undefined && r.gap < m.minRange) return;
+    if (m.needs === 'targetDown' && !downed) return;
+    if (m.grab && (!grabbable || (m.grab.kind === 'latch' && d.ai === 'stalker'))) return;
+    // Roars: when crowded, or to open a fight from a distance.
+    if (m.roar) {
+      if (crowd >= 2 || (w.fightT < 4 && r.gap > 2.5)) options.push({ i, w: (m.weight ?? 1) * 40 });
+      return;
+    }
     if (m.charge) {
       if (Math.abs(r.rel) < 0.5 && r.gap < ARENA_R) options.push({ i, w: (m.weight ?? 1) * m.damage });
       return;
@@ -413,12 +443,22 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     const chosen = options.find((o) => (pick -= o.w) < 0) ?? options[options.length - 1];
     if (d.moves[chosen.i].charge) {
       f.charging = chosen.i;
+      f.bluffing = w.rng.chance(d.moves[chosen.i].bluff ?? 0);
       f.ready[chosen.i] = w.simT + d.moves[chosen.i].cooldown * COOLDOWN_MUL;
-      emit({ type: 'charge', who: f.idx, x: Math.round(f.x * 10) / 10 });
+      emit({ type: 'charge', who: f.idx, ...voiceOf(d), x: Math.round(f.x * 10) / 10 });
       return { heading: r.ang, speed: d.run };
     }
     startAttack(w, f, chosen.i, emit);
     return { heading: f.heading, speed: 0 };
+  }
+
+  // An ambusher lies still facing its prey, creeping only when it has waited a while.
+  if (d.ai === 'ambusher') {
+    // (The same reach the move options above allow.)
+    const strike = Math.max(...d.moves.filter((m) => !m.hits.every((h) => h.back)).map((m) => m.reach + (m.lunge ?? 0) * (m.minRange !== undefined ? 1 : 0.5)));
+    if (w.simT - f.lastActT < 3.5) return { heading: r.ang, speed: r.gap > strike + 2.5 ? d.walk * 0.5 : 0 };
+    // Out of patience: go to it.
+    return { heading: r.ang, speed: r.gap > strike ? d.walk : 0 };
   }
 
   const soon = (m: MoveDef, i: number) => f.ready[i] - w.simT < 0.35 && !m.charge && (m.minRange === undefined || r.gap >= m.minRange);
@@ -445,9 +485,13 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, emit: Emit) {
   // Flanking: hitting from behind while one of its allies keeps the target's attention.
   const behind = Math.abs(wrap(dm.atan2(f.y - o.y, f.x - o.x) - o.heading)) > 2;
   const flank = w.mode === 'horde' && f.side === 1 && behind && o.target !== f.idx;
-  const dmg = m.damage * DAMAGE_MUL * w.rng.range(0.75, 1.25) * (crit ? CRIT : 1) * f.chargeBonus * (flank ? FLANK : 1) * (1 - o.def.armor) * dmgMul;
+  // Bracing in an armoured move (a bear reared up) takes the edge off.
+  const braced = o.state === 'attack' && o.move?.armor ? o.move.armor : 0;
+  const dmg = m.damage * DAMAGE_MUL * w.rng.range(0.75, 1.25) * (crit ? CRIT : 1) * f.chargeBonus * (flank ? FLANK : 1) * (1 - o.def.armor) * (1 - braced) * dmgMul;
   o.hp -= dmg;
   o.lastHitBy = f.idx;
+  o.lastHitT = w.simT;
+  o.lastHitDir = dm.atan2(o.y - f.y, o.x - f.x);
   f.dealt += dmg;
   o.flash = Math.min(1, o.flash + (m.breath ? 0.25 : 1));
   if (m.breath) o.burn = 1;
@@ -465,14 +509,20 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, emit: Emit) {
   }
   const power = dmg / Math.max(1, o.def.poise);
   if (!m.breath)
-    emit({ type: 'hit', a: f.idx, b: o.idx, move: m.name, sound: m.sound, dmg: Math.round(dmg), crit: crit ? 1 : 0, power: Math.round(power * 100) / 100, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000), mass: f.def.mass, x: Math.round(o.x * 10) / 10 });
+    emit({ type: 'hit', a: f.idx, b: o.idx, move: m.name, sound: m.sound, dmg: Math.round(dmg), crit: crit ? 1 : 0, power: Math.round(power * 100) / 100, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000), mass: f.def.mass, weapon: f.def.weapon ?? '', vcall: o.def.voice?.call ?? '', vcp: o.def.voice?.pitch ?? 0.5, vmass: o.def.mass, x: Math.round(o.x * 10) / 10 });
   else emit({ type: 'burn', a: f.idx, b: o.idx, dmg: Math.round(dmg * 10) / 10, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000) });
   // Falling is settled once every blow of the step has landed (see stepWorld).
   if (o.hp <= 0) return;
+  // Grapples: latch on, clamp and roll, or pin.
+  if (m.grab && f.alive && f.state === 'attack' && f.move === m && o.heldBy < 0 && !o.grab && !o.def.hover && w.rng.chance(m.grab.chance ?? 1)) {
+    startGrab(w, f, o, m.grab, emit);
+    return;
+  }
   // A hard enough hit staggers it, cancelling its own attack if that hasn't landed yet.
   const poise = o.def.poise * DAMAGE_MUL;
-  const stagger = !m.breath && (dmg >= poise * STAGGER_AT || (crit && dmg >= poise)) && o.staggerReady <= w.simT && (o.state !== 'attack' || o.hitIdx === 0) && o.state !== 'dodge';
+  const stagger = !m.breath && !braced && (dmg >= poise * STAGGER_AT || (crit && dmg >= poise)) && o.staggerReady <= w.simT && (o.state !== 'attack' || o.hitIdx === 0) && o.state !== 'dodge' && o.state !== 'held';
   if (stagger) {
+    if (o.grab) release(w, o, false, emit);
     o.charging = -1;
     o.staggerReady = w.simT + STAGGER_GUARD_S;
     setState(o, 'stagger', w.simT);
@@ -480,14 +530,95 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, emit: Emit) {
   }
 }
 
+function startGrab(w: World, f: Fighter, o: Fighter, g: NonNullable<MoveDef['grab']>, emit: Emit) {
+  f.grab = { kind: g.kind, target: o.idx, t0: w.simT, until: w.simT + g.seconds, next: w.simT + GRAB_TICK, dps: g.dps, side: w.rng.chance(0.5) ? 1 : -1 };
+  f.move = null;
+  f.charging = -1;
+  setState(f, 'grab', w.simT);
+  o.heldBy = f.idx;
+  o.charging = -1;
+  if (g.kind !== 'latch') {
+    if (o.grab) release(w, o, false, emit);
+    o.move = null;
+    setState(o, 'held', w.simT);
+  }
+  emit({ type: 'grab', a: f.idx, b: o.idx, kind: g.kind, ...voiceOf(f.def), vcall: o.def.voice?.call ?? '', vcp: o.def.voice?.pitch ?? 0.5, x: Math.round(o.x * 10) / 10 });
+}
+
+/** Let go (or be thrown off). */
+function release(w: World, f: Fighter, thrown: boolean, emit: Emit) {
+  const g = f.grab;
+  if (!g) return;
+  const o = w.fighters[g.target];
+  f.grab = null;
+  if (o.heldBy === f.idx) {
+    o.heldBy = -1;
+    if (o.alive && o.state === 'held') setState(o, 'idle', w.simT, w.rng);
+  }
+  if (!f.alive) return;
+  if (thrown) {
+    const a = dm.atan2(f.y - o.y, f.x - o.x);
+    const k = 5 * Math.min(2, Math.sqrt(o.def.mass / f.def.mass));
+    f.kx += dm.cos(a) * k;
+    f.ky += dm.sin(a) * k;
+    f.staggerReady = w.simT + STAGGER_GUARD_S;
+    setState(f, 'stagger', w.simT);
+    emit({ type: 'shakeOff', a: f.idx, b: o.idx, kind: g.kind, x: Math.round(f.x * 10) / 10 });
+  } else if (f.state === 'grab') setState(f, 'idle', w.simT, w.rng);
+}
+
+/** Hold on: ride or pin the target, maul it, and maybe get thrown off. */
+function runGrab(w: World, f: Fighter, emit: Emit) {
+  const g = f.grab!;
+  const o = w.fighters[g.target];
+  if (!o.alive || w.simT >= g.until) {
+    release(w, f, false, emit);
+    return;
+  }
+  if (g.kind === 'latch') {
+    // Riding its side, facing in: on the shoulders of a big target.
+    const ang = o.heading + g.side * 2.1;
+    const dist = o.def.radius * 0.9 + (f.def.front ?? f.def.radius) * 0.55;
+    f.x = o.x + dm.cos(ang) * dist;
+    f.y = o.y + dm.sin(ang) * dist;
+    f.heading = dm.atan2(o.y - f.y, o.x - f.x);
+  } else {
+    // Held in the jaws (or under the paws), just in front of the snout.
+    const reach = (f.def.front ?? f.def.radius) * 0.85 + extent(o, f.heading + Math.PI) * 0.6;
+    o.x = f.x + dm.cos(f.heading) * reach;
+    o.y = f.y + dm.sin(f.heading) * reach;
+    o.kx = o.ky = o.spd = 0;
+  }
+  f.spd = f.kx = f.ky = 0;
+  const dmgMul = w.fightT > w.capS ? 1 + (w.fightT - w.capS) * 0.5 : 1;
+  while (f.grab && w.simT >= g.next) {
+    g.next += GRAB_TICK;
+    const dmg = g.dps * GRAB_TICK * DAMAGE_MUL * (1 - o.def.armor) * dmgMul;
+    o.hp -= dmg;
+    o.lastHitBy = f.idx;
+    o.lastHitT = w.simT;
+    o.lastHitDir = dm.atan2(o.y - f.y, o.x - f.x);
+    o.flash = Math.min(1, o.flash + 0.3);
+    f.dealt += dmg;
+    emit({ type: 'maul', a: f.idx, b: o.idx, kind: g.kind, dmg: Math.round(dmg * 10) / 10, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000), x: Math.round(o.x * 10) / 10 });
+    if (o.hp <= 0) break;
+    // The heavier the target, the sooner it throws the grabber off.
+    const ratio = o.def.mass / f.def.mass;
+    const p = g.kind === 'latch' ? clamp(0.02 + 0.03 * ratio, 0.02, 0.4) : clamp(0.01 + 0.025 * ratio, 0.01, 0.3);
+    if (w.rng.chance(p)) release(w, f, true, emit);
+  }
+}
+
 function kill(w: World, o: Fighter, by: number, emit: Emit) {
+  if (o.grab) release(w, o, false, emit);
+  if (o.heldBy >= 0) release(w, w.fighters[o.heldBy], false, emit);
   o.alive = false;
   o.diedAt = w.simT;
   o.charging = -1;
   setState(o, 'dead', w.simT);
   w.koWho = o.idx;
   w.koBy = by;
-  emit({ type: 'ko', who: o.idx, by, side: o.side, number: o.number, x: Math.round(o.x * 10) / 10 });
+  emit({ type: 'ko', who: o.idx, by, side: o.side, number: o.number, ...voiceOf(o.def), x: Math.round(o.x * 10) / 10 });
 }
 
 /** Resolve the current move's hits and breath ticks that are due. */
@@ -497,6 +628,19 @@ function resolveAttack(w: World, f: Fighter, emit: Emit) {
   while (f.hitIdx < m.hits.length && el >= m.hits[f.hitIdx].at * m.len) {
     const h = m.hits[f.hitIdx++];
     if (m.breath) continue;
+    if (m.roar) {
+      // Smaller enemies nearby flinch.
+      emit({ type: 'roar', who: f.idx, ...voiceOf(f.def), x: Math.round(f.x * 10) / 10 });
+      for (const o of enemiesOf(w, f)) {
+        if (relation(f, o).gap > m.roar.radius || o.def.mass >= f.def.mass * 0.75 || o.staggerReady > w.simT || o.state === 'held') continue;
+        if (o.grab) release(w, o, false, emit);
+        o.charging = -1;
+        o.staggerReady = w.simT + STAGGER_GUARD_S;
+        setState(o, 'stagger', w.simT);
+        emit({ type: 'flinch', who: o.idx, x: Math.round(o.x * 10) / 10 });
+      }
+      continue;
+    }
     let landed = 0;
     for (const o of enemiesOf(w, f)) {
       const r = relation(f, o);
@@ -547,7 +691,7 @@ function runSwarm(w: World, emit: Emit) {
     // The first few come in together, then one at a time, ever faster.
     const gap = sw.sent < 3 ? 0.35 : clamp(2 * dm.pow(0.93, sw.sent - 3), 0.55, 2);
     sw.nextAt = w.fightT + gap;
-    emit({ type: 'spawn', who: f.idx, number: sw.sent, total: sw.total, x: Math.round(f.x * 10) / 10 });
+    emit({ type: 'spawn', who: f.idx, number: sw.sent, total: sw.total, ...voiceOf(sw.def), x: Math.round(f.x * 10) / 10 });
   }
   // Slots round the big fighter: as many as fit shoulder to shoulder, up to six.
   const r0 = big.def.radius + sw.def.radius + 0.4;
@@ -564,11 +708,14 @@ function separate(w: World) {
     const a = live[i];
     for (let j = i + 1; j < live.length; j++) {
       const b = live[j];
+      if (a.grab?.target === b.idx || b.grab?.target === a.idx) continue;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
-      const min = a.def.radius + b.def.radius;
-      if (Math.abs(dx) > min || Math.abs(dy) > min) continue;
+      const far = Math.max(a.def.radius, a.def.front ?? 0, a.def.back ?? 0) + Math.max(b.def.radius, b.def.front ?? 0, b.def.back ?? 0);
+      if (Math.abs(dx) > far || Math.abs(dy) > far) continue;
       const d = dm.hypot(dx, dy);
+      const ang = dm.atan2(dy, dx);
+      const min = extent(a, ang) + extent(b, ang + Math.PI);
       if (d >= min) continue;
       const nx = d > 1e-6 ? dx / d : 1;
       const ny = d > 1e-6 ? dy / d : 0;
@@ -580,7 +727,7 @@ function separate(w: World) {
       b.y += ny * push * (1 - share);
     }
     const r = dm.hypot(a.x, a.y);
-    const lim = ARENA_R - a.def.radius;
+    const lim = ARENA_R - extent(a, dm.atan2(a.y, a.x));
     if (r > lim) {
       a.x *= lim / r;
       a.y *= lim / r;
@@ -596,13 +743,15 @@ function separate(w: World) {
 
 /** One live fight step (sim time dt). */
 export function stepWorld(w: World, dt: number, emit: Emit) {
+  // The opening hesitations (commitAt) count from the bell, not from the start of the intro.
+  if (w.fightT === 0) for (const f of w.fighters) f.commitAt += w.simT;
   w.simT += dt;
   w.fightT += dt;
   if (w.swarm) runSwarm(w, emit);
   for (const f of w.fighters) {
     if (!f.alive) {
       settle(f, dt);
-      animate(f, dt, w.simT);
+      animate(f, dt);
       continue;
     }
     const d = f.def;
@@ -640,7 +789,13 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
       }
       case 'stagger':
         speed = 0;
-        if (w.simT - f.stateT >= (d.clips.hit.length ? d.clips.lens[d.clips.hit[0]] * 0.85 : 0.4)) setState(f, 'idle', w.simT, w.rng);
+        if (w.simT - f.stateT >= PROC_STAGGER_S) setState(f, 'idle', w.simT, w.rng);
+        break;
+      case 'grab':
+        runGrab(w, f, emit);
+        heading = f.heading;
+        break;
+      case 'held':
         break;
       case 'dodge': {
         const dd = d.dodge!;
@@ -651,6 +806,11 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
         if (w.simT - f.stateT >= dd.len * 0.7) setState(f, 'idle', w.simT, w.rng);
         break;
       }
+    }
+    // Carrying a lion on its back: slowed, turning stiffly.
+    if (f.heldBy >= 0) {
+      speed *= 0.5;
+      turn *= 0.6;
     }
     const dh = clamp(wrap(heading - f.heading), -turn * dt, turn * dt);
     f.heading = wrap(f.heading + dh);
@@ -674,7 +834,13 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
   }
   for (const f of w.fighters) {
     if (f.alive) settle(f, dt);
-    if (f.alive) animate(f, dt, w.simT);
+    if (f.alive) animate(f, dt);
+    // Footfalls of anything running (walking is quiet), the heavy ones loudest.
+    const fall = Math.floor(f.gait * 2);
+    if (fall > f.steps) {
+      f.steps = fall;
+      if (f.alive && Math.abs(f.spd) > f.def.walk * 1.8 && f.def.mass > 40) emit({ type: 'step', who: f.idx, feet: f.def.feet ?? 'paw', mass: f.def.mass, x: Math.round(f.x * 10) / 10 });
+    }
   }
   separate(w);
   decide(w, emit);

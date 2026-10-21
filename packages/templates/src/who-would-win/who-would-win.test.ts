@@ -1,37 +1,28 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { Rng } from '@sim/engine';
 import { hpScaleFor } from './balance';
-import { CREATURES, DUELS, HORDES, MODEL_FILES, creatureById, matchupId } from './roster';
+import { CREATURES, DUELS, HORDES, creatureById, matchupId } from './roster';
 import { makeWorld, stepWorld } from './sim';
 
-const MODELS = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../assets/ambient/models/creatures');
+/** The motions each kind of body has a pose for (proc/poses.ts). */
+const MOTIONS: Record<string, string[]> = {
+  lion: ['swipe', 'bite', 'pounce', 'roar'],
+  bear: ['swipe', 'rear', 'bite', 'charge', 'maul', 'roar'],
+  croc: ['lunge', 'snap', 'tail'],
+  mammal: ['headbutt', 'charge', 'bite', 'buck', 'combo'],
+  human: ['slash', 'kick', 'punch_l', 'punch_r'],
+  dragon: ['bite', 'breath'],
+  spider: ['bite', 'leap'],
+};
+const bodyOf = (kind: string) => (kind in MOTIONS ? kind : ['swordsman', 'king', 'brawler'].includes(kind) ? 'human' : 'mammal');
 
-/** Clip lengths by name, read from a GLB's JSON chunk. */
-function clipsOf(model: string): Map<string, number> {
-  const b = readFileSync(join(MODELS, `${model}.glb`));
-  const json = JSON.parse(b.subarray(20, 20 + b.readUInt32LE(12)).toString('utf8'));
-  const acc = json.accessors;
-  return new Map((json.animations ?? []).map((a: { name: string; samplers: { input: number }[] }) => [a.name, Math.max(...a.samplers.map((s) => acc[s.input].max[0]))]));
-}
-
-describe('roster matches the models', () => {
-  it.each(CREATURES.map((c) => [c.id, c] as const))('%s: every clip exists, at the length the sim assumes', (_id, c) => {
-    const clips = clipsOf(c.model);
-    const named = [c.clips.idle, c.clips.walk, c.clips.run, c.clips.death, ...c.clips.hit, ...(c.dodge ? [c.dodge.left, c.dodge.right] : [])];
-    for (const name of named) expect(clips.has(name), name).toBe(true);
-    for (const [name, len] of Object.entries(c.clips.lens)) expect(clips.get(name), name).toBeCloseTo(len, 2);
+describe('roster', () => {
+  it.each(CREATURES.map((c) => [c.id, c] as const))('%s: every move has a pose and lands within its length', (_id, c) => {
     for (const m of c.moves) {
-      expect(clips.get(m.clip), `${m.name} (${m.clip})`).toBeCloseTo(m.len, 2);
+      expect(MOTIONS[bodyOf(c.proc.kind)], `${m.name} (${m.clip})`).toContain(m.clip);
       for (const h of m.hits) expect(h.at).toBeGreaterThan(0);
+      for (const h of m.hits) expect(h.at).toBeLessThan(1);
     }
-    if (c.dodge) expect(clips.get(c.dodge.left)).toBeCloseTo(c.dodge.len, 2);
-  });
-
-  it('has every model file it loads', () => {
-    for (const m of MODEL_FILES) expect(() => readFileSync(join(MODELS, `${m}.glb`))).not.toThrow();
   });
 
   it('has unique matchups of known fighters', () => {

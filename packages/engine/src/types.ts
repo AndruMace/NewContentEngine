@@ -14,8 +14,17 @@ export interface SimEvent {
 
 /** Every synth voice (instrument) a note can use. */
 export const VOICES = ['marimba', 'bell', 'pluck', 'glass', 'softsine', 'kalimba', 'musicbox', 'handpan'] as const;
-export type VoiceId = (typeof VOICES)[number];
-export type SfxId = 'shatter' | 'pop' | 'boom' | 'tick' | 'whoosh' | 'chime' | 'sand' | 'bubble' | 'clack' | 'clang' | 'grind' | 'rip' | 'knock' | 'clink' | 'ding' | 'ambience';
+/** Voices for backing music (a bass line, a brassy lead): not offered as melody instruments. */
+export const MUSIC_VOICES = ['bass', 'brass'] as const;
+export type VoiceId = (typeof VOICES)[number] | (typeof MUSIC_VOICES)[number];
+export type SfxId =
+  | 'shatter' | 'pop' | 'boom' | 'tick' | 'whoosh' | 'chime' | 'sand' | 'bubble' | 'clack' | 'clang' | 'grind' | 'rip' | 'knock' | 'clink' | 'ding' | 'ambience'
+  // Drums.
+  | 'kick' | 'snare' | 'hat' | 'tom'
+  // Combat: blows, movement, voices, crowd.
+  | 'impact' | 'smack' | 'crunch' | 'slash' | 'swish' | 'whip' | 'hoof' | 'step' | 'bodyfall' | 'flame'
+  | 'roar' | 'growl' | 'snarl' | 'hiss' | 'whinny' | 'bellow' | 'screech' | 'grunt'
+  | 'cheer' | 'gasp';
 
 export type AudioEvent =
   | { t: number; kind: 'note'; midi: number; vel: number; voice?: VoiceId; dur?: number; pan?: number }

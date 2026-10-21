@@ -1,11 +1,10 @@
 import { z } from 'zod';
-import { FONT_FAMILY, type Ctx2D, type DramaScore, type Rng, type SimEvent, type Template, type Theme } from '@sim/engine';
+import { FONT_FAMILY, type Ctx2D, type DramaScore, type Melody, type Rng, type SimEvent, type Template, type Theme } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { clamp01, gaussFit } from '../scoring';
-import { loadCreature } from '../ambient/assets';
 import { MAX_SWARM_DEFAULT, hpScaleFor } from './balance';
-import { CREATURES, CREATURE_IDS, DUELS, DUEL_IDS, HORDES, HORDE_IDS, MODEL_FILES, creatureById, matchupId, statBars, type CreatureDef } from './roster';
-import { ARENA_R, finisherIncoming, idleWorld, makeWorld, stepWorld, type AnimState, type Fighter, type FighterState, type World } from './sim';
+import { CREATURES, CREATURE_IDS, DUELS, DUEL_IDS, HORDES, HORDE_IDS, creatureById, matchupId, statBars, type CreatureDef } from './roster';
+import { ARENA_R, finisherIncoming, idleWorld, makeWorld, stepWorld, type Fighter, type FighterState, type Grab, type World } from './sim';
 import { drawScene, projectToScreen } from './view3d';
 import { BEAT_S, VS_S, VS_SLAM, VS_SLAM_Y, VS_STRIPS, vsSlide } from './vs';
 
@@ -20,6 +19,8 @@ export const whoWouldWinSchema = z.object({
   slowMotion: z.boolean().default(true).meta({ title: 'Slow motion for the finishing blow' }),
   replay: z.boolean().default(true).meta({ title: 'Instant replay of the knockout' }),
   damageNumbers: z.boolean().default(true).meta({ title: 'Damage numbers' }),
+  music: z.enum(['background', 'hits', 'off']).default('background').meta({ title: 'Music (background: the melody as a soundtrack at its own tempo; hits: a note on each blow)' }),
+  drums: z.boolean().default(true).meta({ title: 'Battle drums and bass under the background music' }),
 });
 
 export type WhoWouldWinParams = z.infer<typeof whoWouldWinSchema>;
@@ -50,14 +51,22 @@ export interface FighterView {
   moveIdx: number;
   hp: number;
   maxHp: number;
-  anim: AnimState;
-  prev: AnimState | null;
-  blend: number;
   flash: number;
   burn: number;
   diedAt: number;
   number: number;
   engaged: boolean;
+  target: number;
+  /** Procedural creatures: speed, gait cycles, turn rate, crouch, grapples, the last blow. */
+  spd: number;
+  gait: number;
+  yawRate: number;
+  crouch: number;
+  grab: Grab | null;
+  heldBy: number;
+  lastHitT: number;
+  lastHitDir: number;
+  dodgeDir: 1 | -1;
 }
 
 interface Snapshot {
@@ -102,6 +111,11 @@ export interface State {
   cam: { x: number; y: number; span: number };
   shake: number;
   popups: Popup[];
+  /** The melody (transposed) and where the background music has got to. */
+  melody: Melody;
+  mus: { stepAt: number; idx: number; eighthAt: number; e8: number; root: number };
+  /** Signature moments called out over the fighter ("DEATH ROLL!"), visual only. */
+  callouts: { t: number; who: number; text: string; color: string }[];
   /** Recent hits (where they landed, for the impact flashes and the replay's sounds). */
   hits: { simT: number; sound: string; power: number; mass: number; x: number; y: number; h: number; crit: boolean }[];
   track: Snapshot[];
@@ -133,15 +147,33 @@ export const viewOf = (f: Fighter | FighterView): FighterView => ({
   moveIdx: f.moveIdx,
   hp: f.hp,
   maxHp: f.maxHp,
-  anim: { ...f.anim },
-  prev: f.prev ? { ...f.prev } : null,
-  blend: f.blend,
   flash: f.flash,
   burn: f.burn,
   diedAt: f.diedAt,
   number: f.number,
   engaged: f.engaged,
+  target: f.target,
+  spd: f.spd,
+  gait: f.gait,
+  yawRate: f.yawRate,
+  crouch: f.crouch,
+  grab: f.grab ? { ...f.grab } : null,
+  heldBy: f.heldBy,
+  lastHitT: f.lastHitT,
+  lastHitDir: f.lastHitDir,
+  dodgeDir: f.dodgeDir,
 });
+
+const CALLOUTS: Record<string, { text: string; color: string }> = {
+  'grab:latch': { text: 'LATCHED ON!', color: '#ffd23b' },
+  'grab:roll': { text: 'DEATH ROLL!', color: '#ff5a64' },
+  'grab:pin': { text: 'MAULED!', color: '#ff5a64' },
+  'shakeOff:latch': { text: 'SHAKEN OFF!', color: '#ffffff' },
+  'shakeOff:roll': { text: 'BROKE FREE!', color: '#ffffff' },
+  'shakeOff:pin': { text: 'BROKE FREE!', color: '#ffffff' },
+  bluff: { text: 'BLUFF!', color: '#ffffff' },
+  roar: { text: 'ROAR!', color: '#ffb03b' },
+};
 
 export const replaying = (s: State) => s.replayAt !== null && s.endAt !== null && s.t >= s.replayAt && s.t < s.endAt;
 /** Replay sim time at video time t. */
@@ -179,6 +211,38 @@ function resolveFighters(p: WhoWouldWinParams, rng: Rng): [CreatureDef, Creature
   return [creatureById(a), creatureById(b)];
 }
 
+/**
+ * Background music: the melody at its own tempo (held to a lively 96-144 bpm), looping, with a bass line
+ * on the beat (the root of the latest chord in the tune) and a battle drum pattern, a tom fill every
+ * fourth bar. Independent of the fight.
+ */
+function runMusic(s: State, t: number, dt: number, emit: (e: Omit<SimEvent, 't'>) => void) {
+  const m = s.melody;
+  const bpm = Math.max(96, Math.min(144, m.bpm ?? 112));
+  const beat = 60 / bpm;
+  const unit = beat * (m.unit ?? 1);
+  const mu = s.mus;
+  while (mu.stepAt < t + dt) {
+    const i = mu.idx % m.steps.length;
+    const notes = m.steps[i];
+    const dur = (m.beats?.[i] ?? 1) * unit;
+    emit({ type: 'mnote', notes, dur: Math.round(dur * 0.92 * 1000) / 1000 });
+    if (notes.length > 1) mu.root = Math.min(...notes);
+    mu.stepAt += dur;
+    mu.idx++;
+  }
+  while (mu.eighthAt < t + dt) {
+    const inBar = mu.e8 % 8;
+    const fill = Math.floor(mu.e8 / 8) % 4 === 3 && inBar >= 6;
+    if (s.p.drums) {
+      if (inBar % 2 === 0) emit({ type: 'mbass', midi: 36 + (((mu.root % 12) + 12) % 12), dur: Math.round(beat * 0.85 * 1000) / 1000 });
+      emit({ type: 'mdrum', kick: inBar === 0 || inBar === 3 || inBar === 4 ? 1 : 0, snare: !fill && (inBar === 2 || inBar === 6) ? 1 : 0, hat: fill ? 0 : 1, open: inBar === 7 && !fill ? 1 : 0, tom: fill ? 1 : 0, tp: inBar === 6 ? 0.6 : 0.3 });
+    }
+    mu.e8++;
+    mu.eighthAt += beat / 2;
+  }
+}
+
 function endMatch(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => void) {
   const { p, w } = s;
   s.phase = 'over';
@@ -202,7 +266,8 @@ function endMatch(s: State, t: number, emit: (e: Omit<SimEvent, 't'>) => void) {
   } else s.endAt = t + (p.slowMotion ? 1.4 : 0.6);
   const champs = lastStanding(s, w.winner);
   const hpLeft = champs.length ? Math.max(...champs.map((f) => f.hp / f.maxHp)) : 0;
-  emit({ type: 'win', side: w.winner, mode: s.mode, sent: s.sent, hpLeft: Math.round(hpLeft * 1000) / 1000, a: s.a.id, b: s.b.id, max: p.maxSwarm });
+  const champ = champs[0]?.def;
+  emit({ type: 'win', side: w.winner, mode: s.mode, sent: s.sent, hpLeft: Math.round(hpLeft * 1000) / 1000, a: s.a.id, b: s.b.id, max: p.maxSwarm, call: champ?.voice?.call ?? '', cp: champ?.voice?.pitch ?? 0.5, bells: p.music === 'background' ? 0 : 1 });
 }
 
 function textOutlined(ctx: Ctx2D, text: string, x: number, y: number, size: number, color = '#ffffff', align: CanvasTextAlign = 'center', alpha = 1) {
@@ -376,7 +441,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
   name: 'Who Would Win',
   family: 'race',
   description:
-    'Rendered in 3D low-poly: real animals, mythical creatures and fighters battle in a colosseum. Two modes. Duel: one on one (e.g. Bull vs Dragon, Horse vs King, Wolf vs Deer), each fighter with an HP bar, from a VS card with stat bars (size, power, speed, toughness) to a knockout, an instant replay of the knockout blow and the winner. Horde: "how many X does it take to beat a Y?": one big fighter (e.g. a Bull) against a stream of a smaller kind (e.g. Wolves) let in through the gates one after another, a few fighting at a time while the rest circle and wait; the counter shows how many were sent, and the answer is how many it took (or the big one survives them all). Fighters are a Bull, Horse, Unicorn, Stag, Deer, Donkey, Alpaca, Wolf, Husky, Fox, Swordsman, King, Brawler, Dragon (flies low, bites and breathes fire) and Giant Spider (venom bite, leaps). Each has its own moves (gores, charges, bucking kicks, bites, sword slashes, punches) with hit freezes, knockbacks, staggers, sidesteps and damage numbers; outcomes are decided by the fight itself (favourites usually but not always win). No blood: knockouts, not deaths. Length: fightLength sets how long a typical fight lasts; the video runs about fightLength + 12 s.',
+    'Rendered in 3D low-poly: real animals, mythical creatures and fighters battle in a colosseum. Two modes. Duel: one on one (e.g. Bull vs Dragon, Horse vs King, Wolf vs Deer), each fighter with an HP bar, from a VS card with stat bars (size, power, speed, toughness) to a knockout, an instant replay of the knockout blow and the winner. Horde: "how many X does it take to beat a Y?": one big fighter (e.g. a Bull) against a stream of a smaller kind (e.g. Wolves) let in through the gates one after another, a few fighting at a time while the rest circle and wait; the counter shows how many were sent, and the answer is how many it took (or the big one survives them all). Fighters are a Bull, Horse, Unicorn, Stag, Deer, Donkey, Alpaca, Wolf, Husky, Fox, Swordsman, King, Brawler, Dragon (flies low, bites and breathes fire), Giant Spider (venom bite, leaps), and three with signature moves and their own fighting styles: a Lion (stalks and crouches, pounces and latches onto the back of its prey until shaken off), a Grizzly (rears up for a double swipe, bluff-charges, roars to make smaller foes flinch, pins and mauls a downed foe) and a Crocodile (lies still and ambushes, lunges and clamps on in a death roll that spins both over, whips its tail at anything behind it); these moments are called out on screen ("DEATH ROLL!", "LATCHED ON!"). Each has its own moves (gores, charges, bucking kicks, bites, sword slashes, punches) with hit freezes, knockbacks, staggers, sidesteps and damage numbers; outcomes are decided by the fight itself (favourites usually but not always win). No blood: knockouts, not deaths. Length: fightLength sets how long a typical fight lasts; the video runs about fightLength + 12 s.',
   schema: whoWouldWinSchema,
   substeps: 2,
   glowScale: 0.12,
@@ -388,9 +453,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
   },
   nudges: ['Who wins? 👇', 'Pick a side 👇', 'Call it before the bell 👇', 'Guess the number 👇', 'Who are you backing? 👇', 'Lock in your pick 👇'],
 
-  preload: () => Promise.all(MODEL_FILES.map((m) => loadCreature(m))).then(() => undefined),
-
-  init({ params: p, rng, fxRng, visual }) {
+  init({ params: p, rng, fxRng, visual, melody }) {
     const [a, b] = resolveFighters(p, rng);
     const w = makeWorld({ mode: p.mode, a, b, hpScale: hpScaleFor(p.fightLength), capS: p.fightLength * 2, maxSwarm: p.maxSwarm, rng });
     return {
@@ -418,6 +481,9 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
       cam: { x: 0, y: 0, span: 9 },
       shake: 0,
       popups: [],
+      callouts: [],
+      melody,
+      mus: { stepAt: 0, idx: 0, eighthAt: 0, e8: 0, root: Math.min(...melody.steps[0]) },
       hits: [],
       track: [],
       winner: -1,
@@ -436,6 +502,9 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
   step(s, { dt, t, emit }) {
     s.t = t + dt;
     const { p, w } = s;
+    // The arena's room tone: a bed re-struck every 4 s (each one overlaps the next).
+    if (t === 0 || Math.floor((t + dt) / 4) > Math.floor(t / 4)) emit({ type: 'crowd' });
+    if (p.music === 'background') runMusic(s, t, dt, emit);
     if (s.phase === 'vs') {
       if (s.vsStage === 0) {
         s.vsStage = 1;
@@ -484,7 +553,22 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
     if (sdt > 0) {
       if (live) {
         stepWorld(w, sdt, (e) => {
+          // Old-style music: a melody note on each blow.
+          if (p.music === 'hits') e.mm = 1;
           emit(e);
+          const call = CALLOUTS[e.type === 'grab' || e.type === 'shakeOff' ? `${e.type}:${e.kind}` : e.type];
+          if (call && s.visual) {
+            s.callouts.push({ t, who: (e.a ?? e.who) as number, text: call.text, color: call.color });
+            if (s.callouts.length > 6) s.callouts.shift();
+          }
+          // A grapple taking hold: a beat of slow motion on it.
+          if (e.type === 'grab' && p.slowMotion && t >= s.threatCooldownUntil) {
+            const o = w.fighters[e.b as number];
+            s.threatUntil = t + 0.55;
+            s.threatCooldownUntil = t + 2;
+            s.focusX = o.x;
+            s.focusY = o.y;
+          }
           if (e.type === 'hit') {
             const power = e.power as number;
             if (power > 1.2 || e.crit) s.freezeUntil = Math.max(s.freezeUntil, t + p.hitFreeze * Math.min(1.5, 0.5 + power / 3));
@@ -548,6 +632,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
     if (s.visual) {
       s.shake *= dm.exp(-9 * dt);
       if (s.popups.length && s.t - s.popups[0].t > 1.2) s.popups = s.popups.filter((q) => s.t - q.t <= 1.2);
+      if (s.callouts.length && s.t - s.callouts[0].t > 1.4) s.callouts = s.callouts.filter((q) => s.t - q.t <= 1.4);
       // Recent history for the replay (only while the fight can still be decided, then just past it).
       const record = sdt > 0 && p.replay && (live || (s.phase === 'over' && w.simT < s.finishSimT + REPLAY_POST_S + 0.1));
       if (record) {
@@ -617,6 +702,21 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
       const fade = s.phase === 'count' ? 1 : Math.max(0, 1 - local / 0.6);
       textOutlined(ctx, beat < 3 ? String(3 - beat) : 'FIGHT!', 540, cy, (beat < 3 ? 200 : 180) * (0.6 + 0.4 * pop), beat < 3 ? '#ffffff' : theme.accent, 'center', fade);
     }
+    // Signature moments, called out big over whoever made them.
+    if (!rep) {
+      for (const c of s.callouts) {
+        const f = fighters.find((x) => x.idx === c.who);
+        if (!f) continue;
+        const pt = projectToScreen(s, f.x, f.y, f.def.height + (f.def.hover ?? 0) + 0.6);
+        if (!pt) continue;
+        const age = s.t - c.t;
+        const pop = Math.min(1, age / 0.12);
+        const size = fitText(ctx, c.text, 70, 640);
+        // Kept whole on screen (measured at full size).
+        const half = ctx.measureText(c.text).width / 2 + 40;
+        textOutlined(ctx, c.text, Math.max(half, Math.min(1080 - half, pt.x)), pt.y - 40 - 30 * Math.min(1, age / 1.4), size * (0.7 + 0.3 * pop), c.color, 'center', clamp01((1.4 - age) / 0.3));
+      }
+    }
     // Damage numbers float up off each hit.
     if (s.p.damageNumbers && !rep) {
       for (const q of s.popups) {
@@ -646,74 +746,111 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
   },
 
   audio(e, { melody, theme, lastNoteT }) {
+    type Out = ReturnType<Template['audio']>;
     const pan = typeof e.x === 'number' ? Math.max(-0.7, Math.min(0.7, (e.x as number) / ARENA_R)) : 0;
-    const note = (vel: number) => melody.next().map((midi, i) => ({ kind: 'note' as const, midi, vel: i ? vel * 0.45 : vel, voice: theme.voice, pan }));
-    const heavy = (e.mass as number) > 300;
+    // Old-style music: melody notes on blows (only when the music setting asks for it).
+    const note = (vel: number): Out => (e.mm ? melody.next().map((midi, i) => ({ kind: 'note' as const, midi, vel: i ? vel * 0.45 : vel, voice: theme.voice, pan })) : []);
+    // Size → pitch: the heavier, the deeper (0 huge .. 1 tiny).
+    const deep = (mass: number) => 1 - clamp01(Math.log(Math.max(5, mass) / 5) / Math.log(260));
+    const sfx = (name: string, vel: number, pitch?: number): Out[number] => ({ kind: 'sfx', name: name as never, vel, pitch, pan });
+    const call = (name: unknown, pitch: unknown, vel: number): Out => (name ? [sfx(name as string, vel, pitch as number)] : []);
+    // A repeatable coin flip per event (calls aren't on every swing).
+    const chance = (k: number) => {
+      const x = Math.sin((e.t as number) * 12.9898 + ((e.who ?? e.a ?? 0) as number) * 78.233) * 43758.5453;
+      return x - Math.floor(x) < k;
+    };
+    const mass = (e.mass as number) ?? 100;
     switch (e.type) {
+      case 'mnote':
+        return (e.notes as number[]).map((midi, i) => ({ kind: 'note' as const, midi, vel: i ? 0.13 : 0.3, voice: 'brass' as const, dur: e.dur as number }));
+      case 'mbass':
+        return [{ kind: 'note', midi: e.midi as number, vel: 0.42, voice: 'bass', dur: e.dur as number }];
+      case 'mdrum':
+        return [
+          ...(e.kick ? [sfx('kick', 0.55)] : []),
+          ...(e.snare ? [sfx('snare', 0.38)] : []),
+          ...(e.hat ? [sfx('hat', e.open ? 0.16 : 0.12, e.open ? 1 : 0)] : []),
+          ...(e.tom ? [sfx('tom', 0.5, e.tp as number)] : []),
+        ].map((x) => ({ ...x, pan: 0 }));
       case 'vs':
-        return [
-          { kind: 'sfx', name: 'whoosh', vel: 0.55, pitch: 1.1, pan: -0.5 },
-          { kind: 'sfx', name: 'whoosh', vel: 0.55, pitch: 1.3, pan: 0.5 },
-        ];
+        return [sfx('swish', 0.55, 0.15), sfx('whoosh', 0.35, 1)].map((x, i) => ({ ...x, pan: i ? 0.5 : -0.5 }));
       case 'vsSlam':
-        return [
-          { kind: 'sfx', name: 'boom', vel: 0.9 },
-          { kind: 'sfx', name: 'clang', vel: 0.55, pitch: 0.2 },
-          { kind: 'sfx', name: 'chime', vel: 0.4, pitch: 0.5 },
-        ];
+        return [sfx('impact', 0.7, 0.05), sfx('clang', 0.3, 0.2), sfx('cheer', 0.35)].map((x) => ({ ...x, pan: 0 }));
       case 'count':
-        return [{ kind: 'sfx', name: 'tick', vel: 0.8, pitch: 0.5 }, { kind: 'note', midi: 72, vel: 0.35, voice: 'bell', dur: 0.4 }];
+        return [{ kind: 'sfx', name: 'tom', vel: 0.7, pitch: 0.25 + (3 - (e.n as number)) * 0.15 }];
       case 'fight':
-        return [{ kind: 'sfx', name: 'boom', vel: 0.8 }, { kind: 'sfx', name: 'clang', vel: 0.5, pitch: 0.4 }, { kind: 'note', midi: 84, vel: 0.5, voice: 'bell', dur: 0.8 }];
-      case 'swing':
-        if (e.breath) return [{ kind: 'sfx', name: 'whoosh', vel: 0.85, pitch: 0.25, pan }, { kind: 'sfx', name: 'rip', vel: 0.6, pitch: 0.15, pan }];
-        return [{ kind: 'sfx', name: 'whoosh', vel: heavy ? 0.5 : 0.3, pitch: heavy ? 0.35 : 0.8, pan }];
+        return [{ kind: 'sfx', name: 'kick', vel: 0.6 }, { kind: 'sfx', name: 'clang', vel: 0.4, pitch: 0.4 }, { kind: 'sfx', name: 'cheer', vel: 0.55 }];
+      case 'swing': {
+        if (e.breath) return [sfx('flame', 0.8), ...call(e.call, e.cp, 0.55)];
+        const sword = e.weapon === 'sword';
+        return [sfx('swish', sword ? 0.5 : 0.3 + 0.2 * (1 - deep(mass)), sword ? 0.8 : deep(mass)), ...(e.big || chance(0.3) ? call(e.call, e.cp, e.big ? 0.6 : 0.4) : [])];
+      }
       case 'charge':
-        return [{ kind: 'sfx', name: 'grind', vel: 0.45, pitch: 0.2, pan }];
+        return [...call(e.call, e.cp, 0.65), sfx(e.feet === 'hoof' ? 'hoof' : 'step', 0.4, deep(mass))];
+      case 'step':
+        return e.feet === 'hoof' ? [sfx('hoof', 0.12 + 0.18 * (1 - deep(mass)), deep(mass))] : [sfx('step', 0.15 + 0.25 * (1 - deep(mass)), e.feet === 'foot' ? 0.7 : deep(mass))];
       case 'dodge':
-        return [{ kind: 'sfx', name: 'whoosh', vel: 0.4, pitch: 1.2, pan }];
+        return [sfx('swish', 0.4, 0.9), sfx('step', 0.25, 0.7)];
       case 'miss':
-        return e.dodged ? [{ kind: 'sfx', name: 'whoosh', vel: 0.3, pitch: 1.4, pan }] : [];
+        return e.dodged ? [sfx('swish', 0.3, 0.95)] : [];
       case 'hit': {
         const v = clamp01((e.power as number) / 2.5);
         const sound = e.sound as string;
-        const base =
-          sound === 'slash'
-            ? [{ kind: 'sfx' as const, name: 'clang' as const, vel: 0.4 + 0.4 * v, pitch: 0.8, pan }, { kind: 'sfx' as const, name: 'rip' as const, vel: 0.3, pitch: 1.2, pan }]
-            : sound === 'bite'
-              ? [{ kind: 'sfx' as const, name: 'clack' as const, vel: 0.5 + 0.3 * v, pitch: 0.35, pan }, { kind: 'sfx' as const, name: 'knock' as const, vel: 0.4 + 0.3 * v, pitch: 0.6, pan }]
-              : [{ kind: 'sfx' as const, name: 'knock' as const, vel: 0.55 + 0.4 * v, pitch: heavy ? 0.25 : 0.55, pan }, { kind: 'sfx' as const, name: sound === 'hoof' ? ('clack' as const) : ('boom' as const), vel: 0.3 + 0.4 * v, pitch: heavy ? 0.3 : 0.6, pan }];
-        return [
-          ...base,
-          ...(e.crit ? [{ kind: 'sfx' as const, name: 'boom' as const, vel: 0.6, pan }, { kind: 'sfx' as const, name: 'shatter' as const, vel: 0.2, pitch: 0.8, pan }] : []),
-          ...(e.t - lastNoteT >= 0.08 ? note(0.45 + 0.35 * v) : []),
-        ];
+        const out: Out = [sfx('impact', 0.3 + 0.45 * v * (1 - deep(mass) * 0.5), deep(mass) * 0.8)];
+        if (sound === 'bite') out.push(sfx('crunch', 0.45 + 0.3 * v, deep(mass)));
+        else if (sound === 'slash') out.push(...(e.weapon === 'sword' ? [sfx('slash', 0.4, 0.7), sfx('clang', 0.3 + 0.2 * v, 0.75)] : [sfx('slash', 0.5 + 0.2 * v, 0.4)]));
+        else if (sound === 'hoof') out.push(sfx('hoof', 0.45, 0.2), sfx('smack', 0.35, 0.4));
+        else out.push(sfx('smack', 0.35 + 0.2 * v, 0.4));
+        if (e.crit) out.push(sfx('impact', 0.45, 0.05), sfx('gasp', 0.4));
+        // The one hit cries out now and then (always on a big blow).
+        if ((e.power as number) > 1.5 || chance(0.25)) out.push(...call(e.vcall, Math.min(1, (e.vcp as number) + 0.15), 0.35));
+        return [...out, ...(e.t - lastNoteT >= 0.08 ? note(0.45 + 0.35 * v) : [])];
       }
       case 'burn':
-        return e.t - lastNoteT >= 0.25 ? [{ kind: 'sfx', name: 'sand', vel: 0.25, pitch: 0.4 }] : [];
+        return [];
       case 'spawn':
-        return [{ kind: 'sfx', name: 'pop', vel: 0.35, pitch: 0.5, pan }, { kind: 'sfx', name: 'tick', vel: 0.3, pitch: 0.7, pan }];
+        return [sfx('step', 0.3, 0.6), ...(chance(0.5) ? call(e.call, e.cp, 0.3) : [])];
       case 'ko':
         return e.side === 1 && e.number
-          ? [{ kind: 'sfx', name: 'pop', vel: 0.5, pitch: 0.4, pan }, { kind: 'note', midi: 60 + Math.min(24, e.number as number), vel: 0.45, voice: 'bell', dur: 0.8 }]
-          : [{ kind: 'sfx', name: 'boom', vel: 0.9, pan }, { kind: 'sfx', name: 'clang', vel: 0.6, pitch: 0.12, pan }];
+          ? [sfx('bodyfall', 0.45, deep(mass)), ...call(e.call, Math.min(1, (e.cp as number) + 0.25), 0.3), ...(e.mm ? [{ kind: 'note' as const, midi: 60 + Math.min(24, e.number as number), vel: 0.45, voice: 'bell' as const, dur: 0.8 }] : [])]
+          : [sfx('bodyfall', 0.9, deep(mass)), sfx('impact', 0.55, 0.05), ...call(e.call, e.cp, 0.45), sfx('gasp', 0.5)];
+      case 'crowd':
+        return [{ kind: 'sfx', name: 'ambience', vel: 0.55, pitch: 0.4 }];
+      case 'roar':
+        return [...call(e.call || 'roar', e.cp, 0.9), sfx('cheer', 0.2)];
+      case 'grab':
+        return [sfx('crunch', 0.7, 0.2), sfx('impact', 0.55, 0.15), ...call(e.call, e.cp, 0.6), ...call(e.vcall, Math.min(1, (e.vcp as number) + 0.15), 0.35), sfx('gasp', 0.45)];
+      case 'maul': {
+        if (e.kind === 'roll') return [sfx('swish', 0.3, 0.15), sfx('step', 0.35, 0.3), ...note(0.35)];
+        const beat = Math.floor((e.t as number) * 4) % 3;
+        return [beat === 0 ? sfx('crunch', 0.35, 0.3) : sfx('smack', 0.3, 0.3), ...(beat === 2 ? [sfx('growl', 0.35, 0.3)] : []), ...note(0.4)];
+      }
+      case 'shakeOff':
+        return [sfx('swish', 0.5, 0.3), sfx('impact', 0.4, 0.3), sfx('bodyfall', 0.35, 0.5), sfx('cheer', 0.35)];
+      case 'bluff':
+        return [sfx('step', 0.45, 0.2), sfx('step', 0.4, 0.25), ...call(e.call, e.cp, 0.6)];
+      case 'flinch':
+        return [];
       case 'threat':
-        return [{ kind: 'sfx', name: 'whoosh', vel: 0.5, pitch: 0.4 }];
+        return [sfx('gasp', 0.3)];
       case 'win':
         return [
-          { kind: 'sfx', name: 'boom', vel: 1 },
-          { kind: 'sfx', name: 'whoosh', vel: 0.7 },
-          ...melody.peek().flatMap((midi) => [
-            { kind: 'note' as const, midi, vel: 0.8, voice: 'bell' as const, dur: 2.5 },
-            { kind: 'note' as const, midi: midi + 12, vel: 0.5, voice: 'bell' as const, dur: 2.5 },
-          ]),
+          { kind: 'sfx', name: 'cheer', vel: 0.85 },
+          { kind: 'sfx', name: 'tom', vel: 0.6, pitch: 0.2 },
+          ...call(e.call, e.cp, 0.55),
+          ...(e.bells
+            ? melody.peek().flatMap((midi) => [
+                { kind: 'note' as const, midi, vel: 0.8, voice: 'bell' as const, dur: 2.5 },
+                { kind: 'note' as const, midi: midi + 12, vel: 0.5, voice: 'bell' as const, dur: 2.5 },
+              ])
+            : []),
         ];
       case 'replay':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.6, pitch: 0.5 }, { kind: 'sfx', name: 'tick', vel: 0.6, pitch: 0.8 }];
       case 'replayHit':
-        return [{ kind: 'sfx', name: 'knock', vel: 0.5 + 0.3 * clamp01((e.power as number) / 2.5), pitch: 0.15, pan }, ...((e.power as number) > 1.2 ? [{ kind: 'sfx' as const, name: 'boom' as const, vel: 0.5, pan }] : [])];
+        return [sfx('impact', 0.5 + 0.3 * clamp01((e.power as number) / 2.5), 0.1), ...((e.power as number) > 1.2 ? [sfx('crunch', 0.3, 0.2)] : [])];
       case 'replayKo':
-        return [{ kind: 'sfx', name: 'boom', vel: 0.9, pan }, { kind: 'sfx', name: 'clang', vel: 0.6, pitch: 0.05, pan }];
+        return [sfx('bodyfall', 0.9, 0.1), sfx('impact', 0.6, 0.05)];
     }
     return [];
   },
@@ -753,7 +890,9 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
         lead = now;
       }
       const swings = clamp01(leadChanges / 2);
-      const drama = 0.3 * close + 0.2 * comeback + 0.1 * swings + 0.15 * lullFit + 0.15 * hitFit + 0.1 * clamp01(crits / 2);
+      // Signature moments (grapples, shake-offs, roars) make a fight.
+      const moments = clamp01(events.filter((e) => e.type === 'grab' || e.type === 'shakeOff' || e.type === 'bluff').length / 2);
+      const drama = 0.27 * close + 0.18 * comeback + 0.1 * swings + 0.13 * lullFit + 0.13 * hitFit + 0.09 * clamp01(crits / 2) + 0.1 * moments;
       return {
         total: durFit * (0.2 + 0.8 * drama),
         parts: { durFit, close, comeback, swings, lullFit, hitFit },

@@ -201,7 +201,118 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
       osc(bus, 'sine', f * 3, when, when + d * 0.4, dest, a * 0.12, 0.004, d * 0.35);
       break;
     }
+    case 'bass': {
+      // Synth bass: a sawtooth and a sub sine through a low-pass that closes after the attack, held
+      // for the note's length.
+      const d = Math.max(0.12, dur);
+      const lp = bus.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.Q.value = 3;
+      lp.frequency.setValueAtTime(f * 7, when);
+      lp.frequency.exponentialRampToValueAtTime(f * 2.2, when + 0.12);
+      const g = bus.ctx.createGain();
+      g.gain.setValueAtTime(0, when);
+      g.gain.linearRampToValueAtTime(a * 0.75, when + 0.008);
+      g.gain.setValueAtTime(a * 0.6, when + d * 0.85);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + d);
+      lp.connect(g).connect(dest);
+      for (const [type, mult, k] of [['sawtooth', 1, 0.6], ['sine', 0.5, 0.8]] as const) {
+        const o = bus.ctx.createOscillator();
+        o.type = type;
+        o.frequency.value = f * mult;
+        const og = bus.ctx.createGain();
+        og.gain.value = k;
+        o.connect(og).connect(lp);
+        o.start(when);
+        o.stop(when + d + 0.05);
+      }
+      break;
+    }
+    case 'brass': {
+      // Synth brass: two slightly detuned sawtooths, the filter opening over the attack ("bwah").
+      const d = Math.max(0.15, dur * 0.95);
+      const lp = bus.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.Q.value = 1.2;
+      lp.frequency.setValueAtTime(f * 1.2, when);
+      lp.frequency.linearRampToValueAtTime(Math.min(9000, f * 5), when + 0.06);
+      lp.frequency.exponentialRampToValueAtTime(Math.min(9000, f * 2.8), when + d);
+      const g = bus.ctx.createGain();
+      g.gain.setValueAtTime(0, when);
+      g.gain.linearRampToValueAtTime(a * 0.55, when + 0.035);
+      g.gain.setValueAtTime(a * 0.45, when + d * 0.8);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + d + 0.08);
+      lp.connect(g).connect(dest);
+      for (const det of [-6, 6]) {
+        const o = bus.ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = f;
+        o.detune.value = det;
+        o.connect(lp);
+        o.start(when);
+        o.stop(when + d + 0.12);
+      }
+      break;
+    }
   }
+}
+
+/** A vocal: a buzzing source (sawtooth with vibrato) through formant band-passes that move over its length. */
+function vocal(
+  bus: SynthBus,
+  when: number,
+  dest: AudioNode,
+  o: { f0: number; f1: number; dur: number; peak: number; formants: [number, number][]; formantsEnd?: [number, number][]; vibrato?: number; rattle?: number; breath?: number },
+) {
+  const src = bus.ctx.createOscillator();
+  src.type = 'sawtooth';
+  src.frequency.setValueAtTime(o.f0, when);
+  src.frequency.exponentialRampToValueAtTime(o.f1, when + o.dur);
+  if (o.vibrato) {
+    const lfo = bus.ctx.createOscillator();
+    lfo.frequency.value = 6.5;
+    const lg = bus.ctx.createGain();
+    lg.gain.value = o.f0 * o.vibrato;
+    lfo.connect(lg).connect(src.frequency);
+    lfo.start(when);
+    lfo.stop(when + o.dur + 0.05);
+  }
+  const g = bus.ctx.createGain();
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(o.peak, when + Math.min(0.08, o.dur * 0.2));
+  g.gain.setValueAtTime(o.peak * 0.85, when + o.dur * 0.6);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + o.dur);
+  // A growl's rattle: the voice chopped by a fast tremolo.
+  let into: AudioNode = g;
+  if (o.rattle) {
+    const trem = bus.ctx.createGain();
+    trem.gain.value = 1 - o.rattle;
+    const lfo = bus.ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 22;
+    const depth = bus.ctx.createGain();
+    depth.gain.value = o.rattle;
+    lfo.connect(depth).connect(trem.gain);
+    lfo.start(when);
+    lfo.stop(when + o.dur + 0.05);
+    trem.connect(g);
+    into = trem;
+  }
+  g.connect(dest);
+  o.formants.forEach(([freq, q], k) => {
+    const bp = bus.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = q;
+    bp.frequency.setValueAtTime(freq, when);
+    const end = o.formantsEnd?.[k]?.[0];
+    if (end) bp.frequency.exponentialRampToValueAtTime(end, when + o.dur);
+    const fg = bus.ctx.createGain();
+    fg.gain.value = 1.6 / (k + 1);
+    src.connect(bp).connect(fg).connect(into);
+  });
+  src.start(when);
+  src.stop(when + o.dur + 0.05);
+  if (o.breath) noiseBurst(bus, when, o.dur, dest, o.peak * o.breath, 'bandpass', o.formants[0][0] * 1.5, 0.8);
 }
 
 export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
@@ -385,6 +496,245 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
         layer('bandpass', up ? 320 : 760, 1.4, v * 0.55, up ? 760 : 320);
         layer('lowpass', 180, 0.7, v * 0.4);
       }
+      break;
+    }
+    case 'kick': {
+      const o = osc(bus, 'sine', 140, when, when + 0.45, dest, v * 1.1, 0.001, 0.38);
+      o.frequency.exponentialRampToValueAtTime(42, when + 0.12);
+      noiseBurst(bus, when, 0.012, dest, v * 0.35, 'highpass', 3000);
+      break;
+    }
+    case 'snare': {
+      noiseBurst(bus, when, 0.18, dest, v * 0.55, 'bandpass', 2600, 0.7);
+      noiseBurst(bus, when, 0.1, dest, v * 0.3, 'highpass', 6000);
+      const o = osc(bus, 'triangle', 220, when, when + 0.12, dest, v * 0.45, 0.001, 0.09);
+      o.frequency.exponentialRampToValueAtTime(160, when + 0.08);
+      break;
+    }
+    case 'hat': {
+      // pitch > 0.5: open.
+      const open = (ev.pitch ?? 0) > 0.5;
+      noiseBurst(bus, when, open ? 0.22 : 0.035, dest, v * 0.32, 'highpass', 8000);
+      break;
+    }
+    case 'tom': {
+      // A big war drum: deep pitched thump with a skin slap.
+      const p = ev.pitch ?? 0.5;
+      const o = osc(bus, 'sine', 120 + p * 90, when, when + 0.7, dest, v * 1.0, 0.002, 0.55);
+      o.frequency.exponentialRampToValueAtTime(55 + p * 40, when + 0.3);
+      noiseBurst(bus, when, 0.08, dest, v * 0.3, 'bandpass', 900 + p * 500, 1);
+      noiseBurst(bus, when, 0.35, dest, v * 0.25, 'lowpass', 400, 0.7, 90);
+      break;
+    }
+    case 'impact': {
+      // A heavy body blow: sub thump, a lowpassed punch of noise and a mid smack. pitch: lower = bigger.
+      const p = ev.pitch ?? 0.5;
+      const o = osc(bus, 'sine', 90 + p * 70, when, when + 0.4, dest, v * 1.0, 0.002, 0.28);
+      o.frequency.exponentialRampToValueAtTime(34 + p * 20, when + 0.18);
+      noiseBurst(bus, when, 0.12, dest, v * 0.6, 'lowpass', 700 + p * 900, 0.8, 150);
+      noiseBurst(bus, when, 0.04, dest, v * 0.4, 'bandpass', 900 + p * 900, 1.2);
+      break;
+    }
+    case 'smack': {
+      // A slap of flesh and fur: bright short noise and a little tone.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.045, dest, v * 0.6, 'bandpass', 1300 + p * 1400, 1.1);
+      osc(bus, 'triangle', 260 + p * 180, when, when + 0.08, dest, v * 0.35, 0.001, 0.05);
+      break;
+    }
+    case 'crunch': {
+      // A bite: jaws snapping shut (a hard click) then a crackle of short grinding bursts.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.015, dest, v * 0.8, 'bandpass', 3200 + p * 1500, 2);
+      osc(bus, 'triangle', 300 + p * 200, when, when + 0.05, dest, v * 0.4, 0.0005, 0.03);
+      let at = when + 0.02;
+      for (let k = 0; k < 7; k++) {
+        noiseBurst(bus, at, 0.012, dest, v * (0.5 - k * 0.05), 'bandpass', 1400 + ((k * 739) % 1900) + p * 800, 3);
+        at += 0.014 + ((k * 13) % 5) * 0.004;
+      }
+      break;
+    }
+    case 'slash': {
+      // Claws or a blade raking through: a very fast bright sweep and a tearing rasp.
+      const p = ev.pitch ?? 0.5;
+      noiseBurst(bus, when, 0.11, dest, v * 0.6, 'bandpass', 1800 + p * 1500, 2.2, 7500 + p * 2500);
+      noiseBurst(bus, when + 0.03, 0.08, dest, v * 0.35, 'highpass', 5000);
+      for (let k = 0; k < 3; k++) noiseBurst(bus, when + 0.02 + k * 0.025, 0.01, dest, v * 0.35, 'bandpass', 4200 + k * 900, 4);
+      break;
+    }
+    case 'swish': {
+      // A swing through the air: a band of noise rising and falling fast. pitch: higher = smaller, faster.
+      const p = ev.pitch ?? 0.5;
+      const d = 0.28 - p * 0.12;
+      const src = bus.ctx.createBufferSource();
+      src.buffer = bus.noise;
+      const f = bus.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.Q.value = 1.6;
+      f.frequency.setValueAtTime(500 + p * 800, when);
+      f.frequency.exponentialRampToValueAtTime(2200 + p * 3500, when + d * 0.6);
+      f.frequency.exponentialRampToValueAtTime(900 + p * 900, when + d);
+      const g = bus.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(v * 0.55, when + d * 0.55);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + d);
+      src.connect(f).connect(g).connect(dest);
+      src.start(when, noiseOffset(bus, when));
+      src.stop(when + d + 0.05);
+      break;
+    }
+    case 'whip': {
+      // A tail cracking round: a swish into a sharp crack.
+      noiseBurst(bus, when, 0.18, dest, v * 0.35, 'bandpass', 700, 1.4, 3200);
+      noiseBurst(bus, when + 0.17, 0.02, dest, v * 0.9, 'highpass', 2500);
+      osc(bus, 'triangle', 1400, when + 0.17, when + 0.24, dest, v * 0.2, 0.0005, 0.04);
+      break;
+    }
+    case 'hoof': {
+      // A hoof clop (two, a beat apart): a hollow woody knock with a hard edge.
+      const p = ev.pitch ?? 0.5;
+      for (const [dt, k] of [[0, 1], [0.065, 0.7]] as const) {
+        noiseBurst(bus, when + dt, 0.012, dest, v * 0.6 * k, 'bandpass', 2600 + p * 900, 1.5);
+        osc(bus, 'sine', 420 + p * 180, when + dt, when + dt + 0.08, dest, v * 0.5 * k, 0.0006, 0.05);
+        osc(bus, 'triangle', 980 + p * 300, when + dt, when + dt + 0.04, dest, v * 0.2 * k, 0.0005, 0.02);
+      }
+      break;
+    }
+    case 'step': {
+      // A paw or foot landing on sand: a soft low thump and a scatter of grains.
+      const p = ev.pitch ?? 0.5;
+      osc(bus, 'sine', 80 + p * 70, when, when + 0.12, dest, v * 0.5, 0.002, 0.08);
+      noiseBurst(bus, when, 0.06, dest, v * 0.25, 'bandpass', 1800 + p * 1500, 1.2);
+      break;
+    }
+    case 'bodyfall': {
+      // A body hitting the ground: a deep thud, a slump of low noise and sand spraying.
+      const o = osc(bus, 'sine', 75, when, when + 0.6, dest, v * 1.0, 0.003, 0.45);
+      o.frequency.exponentialRampToValueAtTime(32, when + 0.3);
+      noiseBurst(bus, when, 0.35, dest, v * 0.5, 'lowpass', 500, 0.7, 120);
+      noiseBurst(bus, when + 0.04, 0.4, dest, v * 0.2, 'bandpass', 3500, 0.9, 6000);
+      break;
+    }
+    case 'flame': {
+      // Fire breath: a roaring band of noise with crackles riding on it.
+      noiseBurst(bus, when, 1.1, dest, v * 0.55, 'lowpass', 1400, 0.6, 600);
+      noiseBurst(bus, when, 1.0, dest, v * 0.25, 'bandpass', 2500, 0.7, 1200);
+      for (let k = 0; k < 10; k++) noiseBurst(bus, when + 0.05 + k * 0.09 + ((k * 37) % 7) * 0.008, 0.01, dest, v * 0.3, 'highpass', 4000 + ((k * 911) % 3000));
+      break;
+    }
+    case 'roar': {
+      // A big cat or bear roar (pitch: 0 huge, 1 smaller): an open, falling vowel with breath.
+      const p = ev.pitch ?? 0.5;
+      const f0 = 75 + p * 90;
+      vocal(bus, when, dest, { f0: f0 * 1.15, f1: f0 * 0.7, dur: 1.1 - p * 0.3, peak: v * 0.6, formants: [[380 + p * 250, 3], [900 + p * 400, 5], [2300, 6]], formantsEnd: [[300 + p * 200, 3], [700 + p * 300, 5], [2000, 6]], vibrato: 0.04, rattle: 0.25, breath: 0.35 });
+      break;
+    }
+    case 'growl': {
+      // A low rumbling growl with a rattle.
+      const p = ev.pitch ?? 0.5;
+      const f0 = 60 + p * 60;
+      vocal(bus, when, dest, { f0, f1: f0 * 0.92, dur: 0.6, peak: v * 0.5, formants: [[300 + p * 200, 3], [800, 5]], rattle: 0.55, breath: 0.2 });
+      break;
+    }
+    case 'snarl': {
+      // A dog's snarl: higher, harsher and short.
+      const p = ev.pitch ?? 0.5;
+      const f0 = 140 + p * 120;
+      vocal(bus, when, dest, { f0, f1: f0 * 1.1, dur: 0.35, peak: v * 0.45, formants: [[700 + p * 300, 2.5], [1800 + p * 500, 4]], rattle: 0.4, breath: 0.45 });
+      break;
+    }
+    case 'hiss': {
+      // A reptile's hiss: breathy high noise swelling and fading.
+      const src = bus.ctx.createBufferSource();
+      src.buffer = bus.noise;
+      const f = bus.ctx.createBiquadFilter();
+      f.type = 'highpass';
+      f.frequency.value = 2600 + (ev.pitch ?? 0.5) * 1500;
+      const g = bus.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(v * 0.45, when + 0.12);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + 0.7);
+      src.connect(f).connect(g).connect(dest);
+      src.start(when, noiseOffset(bus, when));
+      src.stop(when + 0.75);
+      break;
+    }
+    case 'whinny': {
+      // A horse's whinny: a high voice shaking down in pitch.
+      const p = ev.pitch ?? 0.5;
+      const f0 = 520 + p * 250;
+      vocal(bus, when, dest, { f0: f0 * 1.25, f1: f0 * 0.6, dur: 0.85, peak: v * 0.4, formants: [[1100 + p * 300, 4], [2400, 6]], formantsEnd: [[800, 4], [2000, 6]], vibrato: 0.12, breath: 0.25 });
+      break;
+    }
+    case 'bellow': {
+      // A bull's or a donkey's bellow: a low, nasal, rising-then-falling call.
+      const p = ev.pitch ?? 0.5;
+      const f0 = 85 + p * 120;
+      vocal(bus, when, dest, { f0, f1: f0 * 1.35, dur: 0.9, peak: v * 0.5, formants: [[520 + p * 300, 4], [1300 + p * 400, 6]], formantsEnd: [[420, 4], [1100, 6]], vibrato: 0.03, breath: 0.15 });
+      break;
+    }
+    case 'screech': {
+      // A shrill screech (dragon, spider): a high sawtooth bending upward with a shaking vibrato.
+      const p = ev.pitch ?? 0.5;
+      const f0 = 520 + p * 600;
+      vocal(bus, when, dest, { f0, f1: f0 * 1.5, dur: 0.6, peak: v * 0.35, formants: [[1600 + p * 800, 3], [3200, 5]], vibrato: 0.08, rattle: 0.2, breath: 0.4 });
+      break;
+    }
+    case 'grunt': {
+      // A fighter's effort grunt: a short, low "huh".
+      const p = ev.pitch ?? 0.5;
+      const f0 = 105 + p * 50;
+      vocal(bus, when, dest, { f0, f1: f0 * 0.85, dur: 0.22, peak: v * 0.45, formants: [[650, 4], [1100, 6]], breath: 0.3 });
+      break;
+    }
+    case 'cheer': {
+      // The crowd roars: many voices (bands of noise) swelling with a ragged wobble.
+      const d = 1.8;
+      [[600, 1.5], [1100, 2], [1800, 2.5], [2800, 3]].forEach(([freq, q], k) => {
+        const src = bus.ctx.createBufferSource();
+        src.buffer = bus.noise;
+        src.loop = true;
+        const f = bus.ctx.createBiquadFilter();
+        f.type = 'bandpass';
+        f.Q.value = q;
+        f.frequency.value = freq;
+        const g = bus.ctx.createGain();
+        g.gain.setValueAtTime(0.0001, when);
+        g.gain.exponentialRampToValueAtTime(v * (0.55 - k * 0.08), when + 0.35);
+        g.gain.exponentialRampToValueAtTime(0.0001, when + d);
+        const wob = bus.ctx.createOscillator();
+        wob.frequency.value = 5 + k * 1.7;
+        const wg = bus.ctx.createGain();
+        wg.gain.value = v * 0.08;
+        wob.connect(wg).connect(g.gain);
+        wob.start(when);
+        wob.stop(when + d + 0.05);
+        src.connect(f).connect(g).connect(dest);
+        src.start(when, noiseOffset(bus, when + k));
+        src.stop(when + d + 0.05);
+      });
+      break;
+    }
+    case 'gasp': {
+      // The crowd's "ooh": a vowel of noise rising in pitch and swelling.
+      const src = bus.ctx.createBufferSource();
+      src.buffer = bus.noise;
+      src.loop = true;
+      const g = bus.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(v * 1.1, when + 0.25);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + 1.0);
+      for (const [f0, f1, q] of [[420, 640, 4], [850, 1100, 5]] as const) {
+        const bp = bus.ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.Q.value = q;
+        bp.frequency.setValueAtTime(f0, when);
+        bp.frequency.exponentialRampToValueAtTime(f1, when + 0.6);
+        src.connect(bp).connect(g);
+      }
+      g.connect(dest);
+      src.start(when, noiseOffset(bus, when));
+      src.stop(when + 1.05);
       break;
     }
     case 'ding': {
