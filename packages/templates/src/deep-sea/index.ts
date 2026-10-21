@@ -7,9 +7,9 @@ import { SOUNDS, seaSchedule, type SeaSchedule } from './schedule';
 /**
  * Long-form ambient: the pilot's seat of a small submarine cruising forward through the ocean, a big
  * acrylic dome in front, the console's green instruments glowing in the dark. Three depths: the
- * twilight zone (lanternfish, comb jellies, squid, a siphonophore, now and then a manta, a blue shark,
- * a whale far off, singing), the abyss (anglerfish, a gulper eel, a vampire squid, glowing comb
- * jellies and siphonophores, bioluminescent sparkles, all lit by the headlights), or a sunlit reef
+ * twilight zone (lanternfish, squid, a red octopus, a swordfish, now and then a manta, a blue shark,
+ * a whale far off, singing), the abyss (anglerfish, a gulper eel, a vampire squid, dumbo octopuses,
+ * a sixgill shark, bioluminescent sparkles, all lit by the headlights), or a sunlit reef
  * (shoals of reef fish, sea turtles, rays, a reef shark, light rippling over coral and sand). A few
  * jellyfish everywhere, swimming properly.
  *
@@ -86,9 +86,9 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
       [
         `From the pilot's seat of a small submarine cruising slowly forward through ${NAME[p.depth]}, looking out through a big glass dome.`,
         p.depth === 'twilight'
-          ? `Dim blue water and marine snow streaming past; shoals of lanternfish, shimmering comb jellies, squid jetting by, a long glowing siphonophore, the odd manta ray or blue shark${p.whalesPerHour > 0 ? ', and now and then a whale far off in the gloom, singing' : ''}.`
+          ? `Dim blue water and marine snow streaming past; shoals of lanternfish, squid and a red octopus jetting by, a swordfish on the hunt, the odd manta ray or blue shark${p.whalesPerHour > 0 ? ', and now and then a whale far off in the gloom, singing' : ''}.`
           : p.depth === 'abyss'
-            ? `Near-black water lit only by the submarine's headlights: anglerfish, a gulper eel, a vampire squid, glowing comb jellies and siphonophores, tiny flashes of bioluminescence.`
+            ? `Near-black water lit only by the submarine's headlights: anglerfish, a gulper eel, a vampire squid, dumbo octopuses flapping their ear fins, a sixgill shark cruising through the beams, its eyes shining, tiny flashes of bioluminescence.`
             : `Sunlight rippling over sand and coral, shafts of light from the surface, shoals of reef fish, sea turtles, rays gliding past, a reef shark.`,
         `A few jellyfish pulse by. Inside it is almost dark: green-lit dials and meters, a glowing sonar screen.`,
         `Sound: deep underwater ambience and the submarine's low hum${p.creaks > 0 ? ', the hull creaking now and then' : ''}, bubbles venting${p.depth !== 'abyss' && p.whalesPerHour > 0 ? ', humpback whale song' : ''}${p.sonarPerHour > 0 ? ', a soft sonar ping' : ''}.`,

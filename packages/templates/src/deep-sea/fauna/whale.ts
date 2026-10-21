@@ -41,7 +41,7 @@ function whaleGeometry() {
     const r = Math.sin(Math.PI * Math.pow(u, 0.7)) * 1.6 * (1 - 0.6 * u * u * u);
     prof.push(new THREE.Vector2(Math.max(0.02, r), 7 - u * 14));
   }
-  const body = new THREE.LatheGeometry(prof, 20);
+  const body = new THREE.LatheGeometry(prof.reverse(), 20);
   body.rotateX(Math.PI / 2);
   body.scale(1, 0.8, 1);
   const fin = new THREE.BoxGeometry(4.5, 0.12, 1.1);

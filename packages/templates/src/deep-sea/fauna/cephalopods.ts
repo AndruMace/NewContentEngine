@@ -61,7 +61,7 @@ function mantleGeometry() {
     const u = i / 14;
     prof.push(new THREE.Vector2(Math.max(0.002, 0.035 * Math.sin(Math.PI * (0.15 + 0.85 * Math.pow(u, 0.7))) * (1 - 0.35 * u)), 0.3 * (1 - u)));
   }
-  const body = new THREE.LatheGeometry(prof, 12);
+  const body = new THREE.LatheGeometry(prof.reverse(), 12);
   body.rotateX(Math.PI / 2);
   const fins = new THREE.BufferGeometry();
   fins.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0.3, 0.07, 0, 0.22, 0, 0, 0.14, 0, 0, 0.3, -0.07, 0, 0.22, 0, 0, 0.14], 3));
@@ -96,12 +96,17 @@ function armsGeometry(short: number, long: number) {
   return g;
 }
 
-/** Jetting: bursts of speed with a glide between (distance along the heading, m, after tau seconds). */
-function jet(tau: number, hz: number, step: number, ph: number) {
+/**
+ * Jetting: bursts of speed with a glide between. `surge` is how far ahead of (or behind) its steady
+ * cruise the animal is after tau seconds (m, along its heading): the steady part, step·hz m/s, is in
+ * its pass's own speed, so its closest approach stays where the pass put it.
+ */
+export function jet(tau: number, hz: number, step: number, ph: number) {
   const n = hz * tau + ph;
   const f = n - Math.floor(n);
   const push = f < 0.3 ? Math.sin((f / 0.3) * (Math.PI / 2)) : 1;
-  return { dist: step * (Math.floor(n) + push * 0.8 + Math.min(1, (f - 0.3) / 0.7) * 0.2 * (f > 0.3 ? 1 : 0)), squeeze: f < 0.3 ? Math.sin((f / 0.3) * Math.PI) : 0 };
+  const glide = f < 0.3 ? 0 : (f - 0.3) / 0.7;
+  return { surge: step * (push * 0.8 + glide * 0.2 - f), squeeze: f < 0.3 ? Math.sin((f / 0.3) * Math.PI) : 0, glide };
 }
 
 export function buildSquid(U: WaterUniforms, depth: Depth, pop: Population, D: number, v: number): Fauna {
@@ -136,12 +141,12 @@ export function buildSquid(U: WaterUniforms, depth: Depth, pop: Population, D: n
     group,
     update(t, L, s) {
       for (const { slot, members } of groups) {
-        const ps = passState(pop, slot, s, D, v, { clear: 2.3, spread: 2.5, yMin: -2.5, yMax: 2.5, speed: vampire ? [0.02, 0.08] : [0.05, 0.15] });
+        const ps = passState(pop, slot, s, D, v, { clear: 2.3, spread: 2.5, yMin: -2.5, yMax: 2.5, speed: vampire ? [0.04, 0.1] : [0.2, 0.3] });
         members.forEach((m, i) => {
           m.g.visible = ps.visible;
           if (!ps.visible) return;
           const j = jet(ps.tau, vampire ? 0.12 : 0.45 + 0.1 * i, vampire ? 0.15 : 0.35, ps.h(20 + i));
-          const p = ps.pos.clone().addScaledVector(ps.heading, j.dist);
+          const p = ps.pos.clone().addScaledVector(ps.heading, j.surge);
           m.g.position.set(p.x + m.off[0], p.y + m.off[1], p.z + m.off[2]);
           face(m.g, ps.heading);
           m.g.scale.setScalar(vampire ? 1.6 + ps.h(10) : 0.9 + 0.5 * ps.h(10 + i));

@@ -164,6 +164,12 @@ export interface SwimStyle {
   yMax: number;
   /** Own swimming speed (m/s) across (any heading) and along the travel. */
   speed: [number, number];
+  /**
+   * Cross our path this far ahead instead (m, min and max), swimming across it: for fast swimmers,
+   * which would otherwise only be in view far off in the fog. `spread` is then how far off the centre
+   * line it crosses.
+   */
+  crossAt?: [number, number];
 }
 
 const EYE_Y = CAMERA.pos[1];
@@ -179,7 +185,7 @@ export function passState(pop: Population, slot: { phase: number; seed: number }
   const tau = (u * W) / v;
   const h = (salt: number) => hash2(slot.seed + salt * 7919, pass);
   // Its own swimming: a heading in the water (mostly across our path), at a cruising speed.
-  const ang = h(1) * Math.PI * 2;
+  const ang = style.crossAt ? (h(1) < 0.5 ? 0 : Math.PI) + (h(8) - 0.5) * 0.8 : h(1) * Math.PI * 2;
   const sp = style.speed[0] + h(2) * (style.speed[1] - style.speed[0]);
   const climb = (h(3) - 0.5) * 0.25;
   // Along the travel it may drift towards us, but hardly away: an animal swimming away would still be
@@ -190,15 +196,17 @@ export function passState(pop: Population, slot: { phase: number; seed: number }
     heading.z = vzMin / sp;
     heading.normalize();
   }
-  // When it comes level with us (z = 0), and where it is then: clear of the dome.
+  // When it comes level with us (z = 0), or reaches its crossing ahead, and where it is then: clear of
+  // the dome.
   const zt = slotZ(slot.phase, W, s);
   const vz = Math.max(vzMin, heading.z * sp);
-  const tauC = Math.max(0, (W - Z_NEAR) / Math.max(0.05, v + vz));
+  const zc = style.crossAt ? -(style.crossAt[0] + h(9) * (style.crossAt[1] - style.crossAt[0])) : 0;
+  const tauC = Math.max(0, (W - Z_NEAR + zc) / Math.max(0.05, v + vz));
   const side = h(4) < 0.5 ? -1 : 1;
   const r = style.clear + h(5) * style.spread;
   const yc = EYE_Y + style.yMin + h(6) * (style.yMax - style.yMin);
   // Above or below the dome is clear too; otherwise go round the side.
-  const xc = Math.abs(yc - EYE_Y) > style.clear ? (h(7) - 0.5) * 2 * r : side * r;
+  const xc = style.crossAt ? (h(7) - 0.5) * 2 * style.spread : Math.abs(yc - EYE_Y) > style.clear ? (h(7) - 0.5) * 2 * r : side * r;
   const dt = tau - tauC;
   const pos = new THREE.Vector3(xc + heading.x * sp * dt, yc + heading.y * sp * dt, zt + vz * tau);
   return { pass, u, tau, pos, heading, h, visible: pos.z < 6 && pos.z > -75 && Math.abs(pos.x) < 60 };

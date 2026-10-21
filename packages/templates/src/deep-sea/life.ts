@@ -7,10 +7,11 @@ import type { WaterUniforms } from './water';
 import type { Depth, Population, SeaSchedule, Species } from './schedule';
 import type { Fauna } from './fauna/kit';
 import { buildJellies } from './fauna/jelly';
-import { buildAnglers, buildSharks, buildShoals } from './fauna/fish';
+import { buildAnglers, buildSharks, buildShoals, buildSwordfish } from './fauna/fish';
 import { buildRays, buildTurtles } from './fauna/rays';
 import { buildSquid } from './fauna/cephalopods';
-import { buildCombs, buildEels, buildSiphonophores, buildSparkles } from './fauna/glowing';
+import { buildEels, buildSparkles } from './fauna/glowing';
+import { buildOctopuses } from './fauna/octopus';
 import { buildWhales } from './fauna/whale';
 
 type Builder = (U: WaterUniforms, depth: Depth, pop: Population, D: number, v: number) => Fauna;
@@ -19,10 +20,12 @@ const BUILDERS: Record<Species, Builder> = {
   jelly: buildJellies,
   lanternfish: buildShoals,
   reefSchool: buildShoals,
-  comb: buildCombs,
   squid: buildSquid,
   vampire: buildSquid,
-  siphonophore: buildSiphonophores,
+  octopus: buildOctopuses,
+  dumbo: buildOctopuses,
+  swordfish: buildSwordfish,
+  sixgill: buildSharks,
   manta: buildRays,
   eagleRay: buildRays,
   shark: buildSharks,

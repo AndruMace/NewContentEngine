@@ -79,9 +79,11 @@ export type Species =
   | 'jelly'
   | 'lanternfish'
   | 'reefSchool'
-  | 'comb'
   | 'squid'
-  | 'siphonophore'
+  | 'octopus'
+  | 'dumbo'
+  | 'swordfish'
+  | 'sixgill'
   | 'manta'
   | 'eagleRay'
   | 'shark'
@@ -104,9 +106,9 @@ const FAUNA: Record<Depth, (life: number) => [Species, number, number][]> = {
   twilight: (l) => [
     ['jelly', 60, Math.round(1 + 1.5 * l)],
     ['lanternfish', 60, Math.round(2 + 2 * l)],
-    ['comb', 40, Math.round(2 + 2 * l)],
     ['squid', 60, Math.round(2 + l)],
-    ['siphonophore', 120, Math.round(1 + l)],
+    ['octopus', 60, Math.round(1 + l)],
+    ['swordfish', 120, 1],
     ['manta', 120, 1],
     ['shark', 120, l > 0.3 ? 1 : 0],
   ],
@@ -115,8 +117,8 @@ const FAUNA: Record<Depth, (life: number) => [Species, number, number][]> = {
     ['angler', 60, Math.round(2 + l)],
     ['eel', 120, Math.round(1 + l)],
     ['vampire', 60, Math.round(1 + l)],
-    ['siphonophore', 120, Math.round(1 + l)],
-    ['comb', 40, Math.round(2 + 2 * l)],
+    ['dumbo', 60, Math.round(1 + l)],
+    ['sixgill', 120, 1],
     ['lanternfish', 60, Math.round(1 + l)],
   ],
   reef: (l) => [
