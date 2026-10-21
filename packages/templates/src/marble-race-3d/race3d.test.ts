@@ -52,6 +52,14 @@ describe('marble race 3d', () => {
     }
   });
 
+  it('never builds a join through track already there (seed 972661: a helix through an elevator jammed it)', () => {
+    for (const [mode, marbleCount] of [['race', 4], ['elimination', 5]] as const) {
+      const s = run({ mode, marbleCount }, 972661).state;
+      expect(s.winner).toBeGreaterThanOrEqual(0);
+      expect(s.steps / 240).toBeGreaterThan(12);
+    }
+  });
+
   it('plays the background tune or none, as set', () => {
     const music = (sound: string) => run({ marbleCount: 5, sound }, 2).runToEnd().events.filter((e) => e.type === 'music').length;
     expect(music('background')).toBeGreaterThan(10);

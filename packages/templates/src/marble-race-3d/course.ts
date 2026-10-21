@@ -657,8 +657,9 @@ function chooseJoin(b: Builder, conn: Connector, from: V3, end: V3, dir: 1 | -1,
   for (const extra of extras)
     for (const side of sideways ? [prefer, -prefer as 1 | -1] : [prefer])
       if (!sideways || Math.abs(end.z + side * step) <= Z_LIMIT) tries.push({ conn, side, extra, jitter });
-  // A hairpin that can't be seen becomes a drop; a contraption that can't, too.
-  if (conn === 'hairpin' || SPECIALS.includes(conn)) for (const extra of [0, 0.025, 0.05]) tries.push({ conn: 'drop', side: prefer, extra: extra + deep, jitter });
+  // A hairpin that can't be seen becomes a drop; a contraption that can't, too. So does a helix or
+  // funnel with no room (its only way round would sweep through track already built).
+  if (conn !== 'drop') for (const extra of [0, 0.025, 0.05]) tries.push({ conn: 'drop', side: prefer, extra: extra + deep, jitter });
   let best = { i: 0, hidden: Infinity };
   for (let i = 0; i < tries.length; i++) {
     const mark = b.sim.mark();
@@ -675,8 +676,9 @@ function chooseJoin(b: Builder, conn: Connector, from: V3, end: V3, dir: 1 | -1,
     const turns = t.conn === 'helix' || t.conn === 'hairpin' ? b.turns.slice(0, -1) : b.turns;
     const nextEnd = v3(ex, floorAt(next.at, ex), next.at.z);
     // A next lane that would run into track already built (or into what a moving part sweeps) is
-    // out, however visible.
-    const hidden = runsInto(b, mark.statics, saved, next.at, nextEnd) || joinCollides(b, mark.statics, saved) ? 1 : hiddenShare(occluders(b.sim.statics, turns, funnels), next.at, nextEnd);
+    // out, however visible: worse even than a clear one wholly hidden (a helix through an elevator
+    // jams it for good).
+    const hidden = runsInto(b, mark.statics, saved, next.at, nextEnd) || joinCollides(b, mark.statics, saved) ? 2 : hiddenShare(occluders(b.sim.statics, turns, funnels), next.at, nextEnd);
     b.sim.rollback(mark);
     b.restore(saved);
     if (hidden <= HIDDEN_OK) return t;
