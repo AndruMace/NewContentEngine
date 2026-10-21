@@ -4,7 +4,7 @@ import * as dm from '@sim/physics/math';
 import { clamp01, gaussFit } from '../scoring';
 import { MAX_SWARM_DEFAULT, hpScaleFor } from './balance';
 import { CREATURES, CREATURE_IDS, DUELS, DUEL_IDS, HORDES, HORDE_IDS, creatureById, matchupId, statBars, type CreatureDef } from './roster';
-import { ARENA_R, finisherIncoming, idleWorld, makeWorld, stepWorld, type Fighter, type FighterState, type Grab, type World } from './sim';
+import { ARENA_R, condition, finisherIncoming, idleWorld, makeWorld, stepWorld, type Aim, type Fighter, type FighterState, type Grab, type Hurt, type World, type Wound } from './sim';
 import { drawScene, projectToScreen } from './view3d';
 import { BEAT_S, VS_S, VS_SLAM, VS_SLAM_Y, VS_STRIPS, vsSlide } from './vs';
 
@@ -66,7 +66,17 @@ export interface FighterView {
   heldBy: number;
   lastHitT: number;
   lastHitDir: number;
+  lastHitPow: number;
   dodgeDir: 1 | -1;
+  /** Injuries: damage per part, the wounds (append-only, shared: those made after simT aren't shown yet),
+   * where its current blow is going, a blow it slipped, knockdowns, flying height. */
+  hurt: Hurt;
+  wounds: Wound[];
+  aim: Aim | null;
+  evadeT: number;
+  downLen: number;
+  fallDir: 1 | -1;
+  hover: number;
 }
 
 interface Snapshot {
@@ -117,7 +127,9 @@ export interface State {
   /** Signature moments called out over the fighter ("DEATH ROLL!"), visual only. */
   callouts: { t: number; who: number; text: string; color: string }[];
   /** Recent hits (where they landed, for the impact flashes and the replay's sounds). */
-  hits: { simT: number; sound: string; power: number; mass: number; x: number; y: number; h: number; crit: boolean }[];
+  hits: { simT: number; sound: string; power: number; mass: number; x: number; y: number; h: number; crit: boolean; who: number; wound: number }[];
+  /** Dust thrown up where something hits the ground (knockdowns, falls, landings). */
+  dust: { simT: number; x: number; y: number; size: number }[];
   track: Snapshot[];
   winner: number;
   /** Horde: how many were sent when it was decided. */
@@ -161,7 +173,15 @@ export const viewOf = (f: Fighter | FighterView): FighterView => ({
   heldBy: f.heldBy,
   lastHitT: f.lastHitT,
   lastHitDir: f.lastHitDir,
+  lastHitPow: f.lastHitPow,
   dodgeDir: f.dodgeDir,
+  hurt: { ...f.hurt },
+  wounds: f.wounds,
+  aim: f.aim,
+  evadeT: f.evadeT,
+  downLen: f.downLen,
+  fallDir: f.fallDir,
+  hover: f.hover,
 });
 
 const CALLOUTS: Record<string, { text: string; color: string }> = {
@@ -173,7 +193,26 @@ const CALLOUTS: Record<string, { text: string; color: string }> = {
   'shakeOff:pin': { text: 'BROKE FREE!', color: '#ffffff' },
   bluff: { text: 'BLUFF!', color: '#ffffff' },
   roar: { text: 'ROAR!', color: '#ffb03b' },
+  knockdown: { text: 'KNOCKED DOWN!', color: '#ffd23b' },
+  'injury:leg': { text: 'LIMPING!', color: '#ff8a5a' },
+  'injury:arm': { text: 'ARM HURT!', color: '#ff8a5a' },
+  'injury:head': { text: 'DAZED!', color: '#ff8a5a' },
+  'injury:body': { text: 'WINDED!', color: '#ff8a5a' },
+  'injury:wing': { text: 'WING TORN!', color: '#ff5a64' },
 };
+
+/** What its injuries show as, under its name (worst first). */
+function statusOf(f: FighterView): string[] {
+  if (!f.alive) return [];
+  const c = condition(f);
+  const out: [number, string][] = [];
+  if (c.wing >= 0.5) out.push([c.wing + 0.2, f.hover < 0.3 ? 'GROUNDED' : 'WING TORN']);
+  if (c.leg >= 0.5) out.push([c.leg, 'LIMPING']);
+  if (c.arm >= 0.5) out.push([c.arm, 'ARM HURT']);
+  if (c.head >= 0.5) out.push([c.head, 'DAZED']);
+  if (c.body >= 0.5 || c.spent >= 0.6) out.push([Math.max(c.body, c.spent), 'WINDED']);
+  return out.sort((a, b) => b[0] - a[0]).slice(0, 2).map((x) => x[1]);
+}
 
 export const replaying = (s: State) => s.replayAt !== null && s.endAt !== null && s.t >= s.replayAt && s.t < s.endAt;
 /** Replay sim time at video time t. */
@@ -328,6 +367,8 @@ function drawPanel(ctx: Ctx2D, s: State, theme: Theme, fighters: FighterView[]) 
       hpBar(ctx, x0, y, barW, barH, f.hp / f.maxHp, k === 0 ? '#4fc3ff' : '#ffb03b', f.flash, k === 0);
       const name = `${f.def.icon} ${nameOf(f.def).toUpperCase()}`;
       textOutlined(ctx, name, k === 0 ? x0 : x0 + barW, y + barH + 34, fitText(ctx, name, 40, barW), '#ffffff', k === 0 ? 'left' : 'right');
+      const st = statusOf(f).join(' · ');
+      if (st) textOutlined(ctx, st, k === 0 ? x0 : x0 + barW, y + barH + 78, fitText(ctx, st, 28, barW), '#ff8a5a', k === 0 ? 'left' : 'right');
       textOutlined(ctx, `${Math.max(0, Math.ceil(f.hp / s.w.hpScale))} HP`, k === 0 ? x0 + barW - 14 : x0 + 14, y + barH / 2, 22, '#ffffff', k === 0 ? 'right' : 'left', 0.95);
     });
     textOutlined(ctx, 'VS', 540, y + barH / 2, 34, theme.accent);
@@ -337,6 +378,8 @@ function drawPanel(ctx: Ctx2D, s: State, theme: Theme, fighters: FighterView[]) 
     const x0 = 540 - barW / 2;
     hpBar(ctx, x0, PANEL_Y, barW, 34, big.hp / big.maxHp, '#ff8a3b', big.flash, false);
     textOutlined(ctx, `${big.def.icon} ${nameOf(big.def).toUpperCase()}`, x0, PANEL_Y + 34 + 34, 38, '#ffffff', 'left');
+    const st = statusOf(big).join(' · ');
+    if (st) textOutlined(ctx, st, x0, PANEL_Y + 34 + 78, 28, '#ff8a5a', 'left');
     textOutlined(ctx, `${Math.max(0, Math.ceil(big.hp / s.w.hpScale))} HP`, x0 + barW - 14, PANEL_Y + 17, 22, '#ffffff', 'right');
     const sent = s.w.swarm?.sent ?? 0;
     const down = fighters.filter((f) => f.side === 1 && !f.alive).length;
@@ -441,7 +484,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
   name: 'Who Would Win',
   family: 'race',
   description:
-    'Rendered in 3D low-poly: real animals, mythical creatures and fighters battle in a colosseum. Two modes. Duel: one on one (e.g. Bull vs Dragon, Horse vs King, Wolf vs Deer), each fighter with an HP bar, from a VS card with stat bars (size, power, speed, toughness) to a knockout, an instant replay of the knockout blow and the winner. Horde: "how many X does it take to beat a Y?": one big fighter (e.g. a Bull) against a stream of a smaller kind (e.g. Wolves) let in through the gates one after another, a few fighting at a time while the rest circle and wait; the counter shows how many were sent, and the answer is how many it took (or the big one survives them all). Fighters are a Bull, Horse, Unicorn, Stag, Deer, Donkey, Alpaca, Wolf, Husky, Fox, Swordsman, King, Brawler, Dragon (flies low, bites and breathes fire), Giant Spider (venom bite, leaps), and three with signature moves and their own fighting styles: a Lion (stalks and crouches, pounces and latches onto the back of its prey until shaken off), a Grizzly (rears up for a double swipe, bluff-charges, roars to make smaller foes flinch, pins and mauls a downed foe) and a Crocodile (lies still and ambushes, lunges and clamps on in a death roll that spins both over, whips its tail at anything behind it); these moments are called out on screen ("DEATH ROLL!", "LATCHED ON!"). Each has its own moves (gores, charges, bucking kicks, bites, sword slashes, punches) with hit freezes, knockbacks, staggers, sidesteps and damage numbers; outcomes are decided by the fight itself (favourites usually but not always win). No blood: knockouts, not deaths. Length: fightLength sets how long a typical fight lasts; the video runs about fightLength + 12 s.',
+    'Rendered in 3D low-poly: real animals, mythical creatures and fighters battle in a colosseum. Two modes. Duel: one on one (e.g. Bull vs Dragon, Horse vs King, Wolf vs Deer), each fighter with an HP bar, from a VS card with stat bars (size, power, speed, toughness) to a knockout, an instant replay of the knockout blow and the winner. Horde: "how many X does it take to beat a Y?": one big fighter (e.g. a Bull) against a stream of a smaller kind (e.g. Wolves) let in through the gates one after another, a few fighting at a time while the rest circle and wait; the counter shows how many were sent, and the answer is how many it took (or the big one survives them all). Fighters are a Bull, Horse, Unicorn, Stag, Deer, Donkey, Alpaca, Wolf, Husky, Fox, Swordsman, King, Brawler, Dragon (flies low, bites and breathes fire), Giant Spider (venom bite, leaps), and three with signature moves and their own fighting styles: a Lion (stalks and crouches, pounces and latches onto the back of its prey until shaken off), a Grizzly (rears up for a double swipe, bluff-charges, roars to make smaller foes flinch, pins and mauls a downed foe) and a Crocodile (lies still and ambushes, lunges and clamps on in a death roll that spins both over, whips its tail at anything behind it); these moments are called out on screen ("DEATH ROLL!", "LATCHED ON!"). Each has its own moves (gores, charges, bucking kicks, bites, sword slashes, punches), and blows physically connect: the attacker lunges in and its jaws, horns, claws, hooves, fists or blade land on the exact spot they hit (head, neck, shoulder, flank, a leg, a wing), or whiff when the target slips back. Every blow leaves a stylized wound there (claw rakes, bite marks, sword cuts, gores, bruises, scorches; no gore or blood spray), and wounds add up to injuries that change the fight: a hurt leg limps and slows it (no more charges or pounces), a blow to the head leaves it dazed and slow to react, a battered body has it winded and panting, a torn wing brings the dragon down to the ground; injuries are called out (LIMPING!, DAZED!, WINDED!, WING TORN!) and shown under the HP bars. Big blows knock fighters off their feet (KNOCKED DOWN!) and every hit rocks the body the way it was struck, with hit freezes, knockbacks, staggers, sidesteps and damage numbers; a fighter that is losing gets wary, one nearly beaten fights desperately, and a hurt foe gets pressed. Outcomes are decided by the fight itself (favourites usually but not always win). Knockouts, not deaths. Length: fightLength sets how long a typical fight lasts; the video runs about fightLength + 12 s.',
   schema: whoWouldWinSchema,
   substeps: 2,
   glowScale: 0.12,
@@ -485,6 +528,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
       melody,
       mus: { stepAt: 0, idx: 0, eighthAt: 0, e8: 0, root: Math.min(...melody.steps[0]) },
       hits: [],
+      dust: [],
       track: [],
       winner: -1,
       sent: 0,
@@ -556,8 +600,9 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
           // Old-style music: a melody note on each blow.
           if (p.music === 'hits') e.mm = 1;
           emit(e);
-          const call = CALLOUTS[e.type === 'grab' || e.type === 'shakeOff' ? `${e.type}:${e.kind}` : e.type];
-          if (call && s.visual) {
+          const call = CALLOUTS[e.type === 'grab' || e.type === 'shakeOff' ? `${e.type}:${e.kind}` : e.type === 'injury' ? `injury:${e.part}` : e.type];
+          // (The swarm's injuries and falls aren't called out: there are too many of them.)
+          if (call && s.visual && !e.swarm) {
             s.callouts.push({ t, who: (e.a ?? e.who) as number, text: call.text, color: call.color });
             if (s.callouts.length > 6) s.callouts.shift();
           }
@@ -569,16 +614,23 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
             s.focusX = o.x;
             s.focusY = o.y;
           }
+          if ((e.type === 'knockdown' || e.type === 'ko') && s.visual) {
+            const o = w.fighters[(e.who as number) ?? -1];
+            if (o) {
+              s.dust.push({ simT: w.simT + (e.type === 'ko' ? 0.35 : 0.2), x: o.x, y: o.y, size: Math.sqrt(o.def.height * (o.def.front ?? o.def.radius)) * 1.6 });
+              if (s.dust.length > 16) s.dust.shift();
+            }
+          }
           if (e.type === 'hit') {
             const power = e.power as number;
             if (power > 1.2 || e.crit) s.freezeUntil = Math.max(s.freezeUntil, t + p.hitFreeze * Math.min(1.5, 0.5 + power / 3));
             const o = w.fighters[e.b as number];
-            s.hits.push({ simT: w.simT, sound: e.sound as string, power, mass: e.mass as number, x: o.x, y: o.y, h: o.def.height * 0.6 + (o.def.hover ?? 0), crit: e.crit === 1 });
+            s.hits.push({ simT: w.simT, sound: e.sound as string, power, mass: e.mass as number, x: o.x, y: o.y, h: o.def.height * 0.6 + o.hover, crit: e.crit === 1, who: o.idx, wound: e.wound as number });
             if (s.hits.length > 40) s.hits.shift();
             if (s.visual) {
               s.shake = Math.min(30, s.shake + Math.min(18, power * 6) * ((e.mass as number) > 300 ? 1.4 : 0.8));
               if (p.damageNumbers) {
-                s.popups.push({ t, x: o.x, y: o.y, h: o.def.height * (o.def.hover ? 1.4 : 1.1), text: `${Math.max(1, Math.round((e.dmg as number) / w.hpScale))}`, crit: e.crit === 1 });
+                s.popups.push({ t, x: o.x, y: o.y, h: o.def.height * 1.1 + o.hover * 0.6, text: `${Math.max(1, Math.round((e.dmg as number) / w.hpScale))}`, crit: e.crit === 1 });
                 if (s.popups.length > 24) s.popups.shift();
               }
             }
@@ -633,6 +685,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
       s.shake *= dm.exp(-9 * dt);
       if (s.popups.length && s.t - s.popups[0].t > 1.2) s.popups = s.popups.filter((q) => s.t - q.t <= 1.2);
       if (s.callouts.length && s.t - s.callouts[0].t > 1.4) s.callouts = s.callouts.filter((q) => s.t - q.t <= 1.4);
+      if (s.dust.length && w.simT - s.dust[0].simT > 4) s.dust = s.dust.filter((q) => w.simT - q.simT <= 4);
       // Recent history for the replay (only while the fight can still be decided, then just past it).
       const record = sdt > 0 && p.replay && (live || (s.phase === 'over' && w.simT < s.finishSimT + REPLAY_POST_S + 0.1));
       if (record) {
@@ -686,7 +739,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
     if (s.mode === 'horde' && !rep && s.phase !== 'vs') {
       for (const f of fighters) {
         if (f.side !== 1 || !f.alive) continue;
-        const q = projectToScreen(s, f.x, f.y, f.def.height + (f.def.hover ?? 0) + 0.25);
+        const q = projectToScreen(s, f.x, f.y, f.def.height + f.hover + 0.25);
         if (!q) continue;
         hpBar(ctx, q.x - 36, q.y - 6, 72, 10, f.hp / f.maxHp, '#ffb03b', f.flash, false);
       }
@@ -702,13 +755,17 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
       const fade = s.phase === 'count' ? 1 : Math.max(0, 1 - local / 0.6);
       textOutlined(ctx, beat < 3 ? String(3 - beat) : 'FIGHT!', 540, cy, (beat < 3 ? 200 : 180) * (0.6 + 0.4 * pop), beat < 3 ? '#ffffff' : theme.accent, 'center', fade);
     }
-    // Signature moments, called out big over whoever made them.
+    // Signature moments, called out big over whoever made them (several at once stack up).
     if (!rep) {
+      const stack = new Map<number, number>();
       for (const c of s.callouts) {
         const f = fighters.find((x) => x.idx === c.who);
         if (!f) continue;
-        const pt = projectToScreen(s, f.x, f.y, f.def.height + (f.def.hover ?? 0) + 0.6);
+        const k = stack.get(c.who) ?? 0;
+        stack.set(c.who, k + 1);
+        const pt = projectToScreen(s, f.x, f.y, f.def.height + f.hover + 0.6);
         if (!pt) continue;
+        pt.y -= k * 82;
         const age = s.t - c.t;
         const pop = Math.min(1, age / 0.12);
         const size = fitText(ctx, c.text, 70, 640);
@@ -831,6 +888,13 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
         return [sfx('step', 0.45, 0.2), sfx('step', 0.4, 0.25), ...call(e.call, e.cp, 0.6)];
       case 'flinch':
         return [];
+      case 'evade':
+        return [sfx('swish', 0.25, 0.85)];
+      case 'knockdown':
+        return [sfx('bodyfall', e.swarm ? 0.4 : 0.75, deep(mass)), sfx('impact', 0.4, 0.1), ...call(e.call, Math.min(1, (e.cp as number) + 0.2), 0.4), ...(e.swarm ? [] : [sfx('gasp', 0.4)])];
+      case 'injury':
+        // A yelp (higher than its usual call), and the crowd feels it.
+        return [...call(e.call, Math.min(1, (e.cp as number) + 0.3), e.swarm ? 0.25 : 0.5), ...(e.swarm ? [] : [sfx('gasp', 0.35)])];
       case 'threat':
         return [sfx('gasp', 0.3)];
       case 'win':
@@ -891,7 +955,7 @@ export const whoWouldWin: Template<WhoWouldWinParams, State> = {
       }
       const swings = clamp01(leadChanges / 2);
       // Signature moments (grapples, shake-offs, roars) make a fight.
-      const moments = clamp01(events.filter((e) => e.type === 'grab' || e.type === 'shakeOff' || e.type === 'bluff').length / 2);
+      const moments = clamp01(events.filter((e) => e.type === 'grab' || e.type === 'shakeOff' || e.type === 'bluff' || e.type === 'knockdown' || e.type === 'injury').length / 3);
       const drama = 0.27 * close + 0.18 * comeback + 0.1 * swings + 0.13 * lullFit + 0.13 * hitFit + 0.09 * clamp01(crits / 2) + 0.1 * moments;
       return {
         total: durFit * (0.2 + 0.8 * drama),

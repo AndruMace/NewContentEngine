@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from '@sim/engine';
 import { hpScaleFor } from './balance';
 import { CREATURES, DUELS, HORDES, creatureById, matchupId } from './roster';
-import { makeWorld, stepWorld } from './sim';
+import { condition, makeWorld, stepWorld } from './sim';
 
 /** The motions each kind of body has a pose for (proc/poses.ts). */
 const MOTIONS: Record<string, string[]> = {
@@ -59,5 +59,34 @@ describe('fights', () => {
       expect(w.swarm!.sent).toBeGreaterThanOrEqual(1);
       expect(w.swarm!.sent).toBeLessThanOrEqual(30);
     }
+  });
+});
+
+describe('injuries', () => {
+  it('blows leave wounds where they land, and add up to injuries', () => {
+    const w = fight('duel', 'bear', 'lion', 3);
+    const loser = w.fighters.find((f) => !f.alive)!;
+    expect(loser.wounds.length).toBeGreaterThan(3);
+    for (const wd of loser.wounds) {
+      expect(['head', 'body', 'fore', 'hind', 'wing']).toContain(wd.zone);
+      expect(wd.t).toBeGreaterThan(0);
+    }
+    const c = condition(loser);
+    expect(Math.max(c.leg, c.head, c.body, c.arm)).toBeGreaterThan(0.3);
+  });
+
+  it('a crippled leg slows a fighter down', () => {
+    const run = (hurt: number) => {
+      const w = makeWorld({ mode: 'duel', a: creatureById('horse'), b: creatureById('wolf'), hpScale: 2, capS: 32, maxSwarm: 30, rng: new Rng(5) });
+      const f = w.fighters[0];
+      f.hurt.LF = hurt;
+      // (Far apart: it closes in at a run.)
+      f.x = -9;
+      w.fighters[1].x = 9;
+      const x0 = f.x;
+      for (let i = 0; i < 180; i++) stepWorld(w, 1 / 120, () => {});
+      return f.x - x0;
+    };
+    expect(run(0.4)).toBeLessThan(run(0) * 0.8);
   });
 });

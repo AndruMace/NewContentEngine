@@ -18,7 +18,7 @@ export interface MoveDef {
   /** Clip length in seconds (played at rate 1). */
   len: number;
   hits: MoveHit[];
-  /** Edge-to-edge distance it reaches. */
+  /** Edge-to-edge gap (body to body) across which its striking part can still touch the target. */
   reach: number;
   /** Half-angle (radians) of the cone it hits in, around the facing (or behind it for `back`). */
   arc: number;
@@ -29,7 +29,9 @@ export interface MoveDef {
   cooldown: number;
   /** How the hit sounds. */
   sound: 'bite' | 'blunt' | 'slash' | 'hoof';
-  /** Distance moved forward from the start of the move to its (first) hit: a lunge or a leap. */
+  /** The wound it leaves (default from the sound: bites, claw rakes or sword cuts, bruises). */
+  mark?: 'claw' | 'bite' | 'cut' | 'blunt' | 'gore';
+  /** How much further it can lunge forward to its (first) hit (beyond a short step in): a lunge or a leap. */
   lunge?: number;
   /** Only used from at least this far (edge to edge): leaps and charges. */
   minRange?: number;
@@ -124,7 +126,7 @@ const buck = (len: number, damage: number, knock: number, at = 0.6): MoveDef => 
   clip: 'buck',
   len,
   hits: [{ at, back: true }],
-  reach: 1.1,
+  reach: 0.55,
   arc: 0.8,
   damage,
   knock,
@@ -153,9 +155,9 @@ export const CREATURES: CreatureDef[] = [
     poise: 70,
     proc: { kind: 'bull', stride: [1.5, 3.5] },
     moves: [
-      { name: 'Gore', clip: 'headbutt', len: 1, hits: [{ at: 0.35 }], reach: 1.2, arc: 0.7, damage: 62, knock: 7, cooldown: 1.4, sound: 'blunt', lunge: 0.6, weight: 2 },
-      { name: 'Charge', clip: 'charge', len: 1, hits: [{ at: 0.35 }], reach: 1.2, arc: 0.6, damage: 70, knock: 10, cooldown: 5, sound: 'blunt', minRange: 3.5, charge: true, weight: 3 },
-      buck(1, 50, 7),
+      { name: 'Gore', clip: 'headbutt', len: 1, hits: [{ at: 0.35 }], reach: 0.75, mark: 'gore', arc: 0.7, damage: 38, knock: 7, cooldown: 1.4, sound: 'blunt', lunge: 0.6, weight: 2 },
+      { name: 'Charge', clip: 'charge', len: 1, hits: [{ at: 0.35 }], reach: 0.75, mark: 'gore', arc: 0.6, damage: 43, knock: 10, cooldown: 5, sound: 'blunt', minRange: 3.5, charge: true, weight: 3 },
+      buck(1, 30, 7),
     ],
     color: '#2b2b30',
   },
@@ -179,8 +181,8 @@ export const CREATURES: CreatureDef[] = [
     poise: 45,
     proc: { kind: 'horse', stride: [1.6, 4.0] },
     moves: [
-      { name: 'Bite', clip: 'bite', len: 1, hits: [{ at: 0.35 }], reach: 0.9, arc: 0.6, damage: 24, knock: 2, cooldown: 1.1, sound: 'bite', lunge: 0.3 },
-      { ...buck(1, 70, 8), weight: 2.5 },
+      { name: 'Bite', clip: 'bite', len: 1, hits: [{ at: 0.35 }], reach: 0.5, arc: 0.6, damage: 29, knock: 2, cooldown: 1.1, sound: 'bite', lunge: 0.3 },
+      { ...buck(1, 85, 8), weight: 2.5 },
     ],
     color: '#7a4a2a',
   },
@@ -204,9 +206,9 @@ export const CREATURES: CreatureDef[] = [
     poise: 45,
     proc: { kind: 'unicorn', stride: [1.6, 4.0] },
     moves: [
-      { name: 'Horn', clip: 'headbutt', len: 1, hits: [{ at: 0.35 }], reach: 1.4, arc: 0.45, damage: 52, knock: 5, cooldown: 1.3, sound: 'slash', lunge: 0.5, weight: 2 },
-      { name: 'Horn charge', clip: 'charge', len: 1, hits: [{ at: 0.35 }], reach: 1.4, arc: 0.4, damage: 58, knock: 8, cooldown: 5, sound: 'slash', minRange: 3.5, charge: true, weight: 3 },
-      buck(1, 52, 7),
+      { name: 'Horn', clip: 'headbutt', len: 1, hits: [{ at: 0.35 }], reach: 0.8, mark: 'gore', arc: 0.45, damage: 42, knock: 5, cooldown: 1.3, sound: 'slash', lunge: 0.5, weight: 2 },
+      { name: 'Horn charge', clip: 'charge', len: 1, hits: [{ at: 0.35 }], reach: 0.8, mark: 'gore', arc: 0.4, damage: 47, knock: 8, cooldown: 5, sound: 'slash', minRange: 3.5, charge: true, weight: 3 },
+      buck(1, 42, 7),
     ],
     color: '#e8e4f0',
   },
@@ -230,9 +232,9 @@ export const CREATURES: CreatureDef[] = [
     poise: 30,
     proc: { kind: 'stag', stride: [1.5, 3.8] },
     moves: [
-      { name: 'Antlers', clip: 'headbutt', len: 0.792, hits: [{ at: 0.35 }], reach: 1.3, arc: 0.7, damage: 46, knock: 5, cooldown: 1.1, sound: 'blunt', lunge: 0.5, weight: 2 },
-      { name: 'Antler charge', clip: 'charge', len: 0.792, hits: [{ at: 0.35 }], reach: 1.3, arc: 0.6, damage: 44, knock: 7, cooldown: 4.5, sound: 'blunt', minRange: 3.5, charge: true, weight: 3 },
-      buck(0.792, 30, 5),
+      { name: 'Antlers', clip: 'headbutt', len: 0.792, hits: [{ at: 0.35 }], reach: 0.7, mark: 'gore', arc: 0.7, damage: 59, knock: 5, cooldown: 1.1, sound: 'blunt', lunge: 0.5, weight: 2 },
+      { name: 'Antler charge', clip: 'charge', len: 0.792, hits: [{ at: 0.35 }], reach: 0.7, mark: 'gore', arc: 0.6, damage: 57, knock: 7, cooldown: 4.5, sound: 'blunt', minRange: 3.5, charge: true, weight: 3 },
+      buck(0.792, 39, 5),
     ],
     color: '#8a6440',
   },
@@ -256,8 +258,8 @@ export const CREATURES: CreatureDef[] = [
     poise: 14,
     proc: { kind: 'deer', stride: [1.3, 3.5] },
     moves: [
-      { name: 'Headbutt', clip: 'headbutt', len: 0.792, hits: [{ at: 0.35 }], reach: 0.9, arc: 0.7, damage: 14, knock: 2, cooldown: 1, sound: 'blunt', lunge: 0.3 },
-      buck(0.792, 22, 4),
+      { name: 'Headbutt', clip: 'headbutt', len: 0.792, hits: [{ at: 0.35 }], reach: 0.45, arc: 0.7, damage: 13, knock: 2, cooldown: 1, sound: 'blunt', lunge: 0.3 },
+      buck(0.792, 20, 4),
     ],
     color: '#a8703c',
   },
@@ -282,8 +284,8 @@ export const CREATURES: CreatureDef[] = [
     proc: { kind: 'donkey', stride: [1.3, 3.2] },
     moves: [
       // The donkey's headbutt clip is a headbutt and then a buck, in one.
-      { name: 'Headbutt and buck', clip: 'combo', len: 1.583, hits: [{ at: 0.15 }, { at: 0.75, back: true }], reach: 1, arc: 0.8, damage: 26, knock: 4, cooldown: 2.2, sound: 'hoof', weight: 1.5 },
-      { ...buck(0.792, 48, 7, 0.55), weight: 2 },
+      { name: 'Headbutt and buck', clip: 'combo', len: 1.583, hits: [{ at: 0.15 }, { at: 0.75, back: true }], reach: 0.55, arc: 0.8, damage: 37, knock: 4, cooldown: 2.2, sound: 'hoof', weight: 1.5 },
+      { ...buck(0.792, 68, 7, 0.55), weight: 2 },
     ],
     color: '#8d8d92',
   },
@@ -307,8 +309,8 @@ export const CREATURES: CreatureDef[] = [
     poise: 15,
     proc: { kind: 'alpaca', stride: [1.2, 3.0] },
     moves: [
-      { name: 'Headbutt', clip: 'headbutt', len: 1, hits: [{ at: 0.35 }], reach: 0.9, arc: 0.7, damage: 13, knock: 2, cooldown: 1.1, sound: 'blunt', lunge: 0.3 },
-      buck(1, 20, 4),
+      { name: 'Headbutt', clip: 'headbutt', len: 1, hits: [{ at: 0.35 }], reach: 0.45, arc: 0.7, damage: 16, knock: 2, cooldown: 1.1, sound: 'blunt', lunge: 0.3 },
+      buck(1, 24, 4),
     ],
     color: '#8a6440',
   },
@@ -331,7 +333,7 @@ export const CREATURES: CreatureDef[] = [
     turn: 4.5,
     poise: 14,
     proc: { kind: 'wolf', stride: [1.1, 2.8] },
-    moves: [{ name: 'Bite', clip: 'bite', len: 1.333, hits: [{ at: 0.5 }], reach: 0.8, arc: 0.6, damage: 27, knock: 1, cooldown: 1.2, sound: 'bite', lunge: 0.9 }],
+    moves: [{ name: 'Bite', clip: 'bite', len: 1.333, hits: [{ at: 0.5 }], reach: 0.45, arc: 0.6, damage: 38, knock: 1, cooldown: 1.2, sound: 'bite', lunge: 0.9 }],
     color: '#8b8f96',
   },
   {
@@ -353,7 +355,7 @@ export const CREATURES: CreatureDef[] = [
     turn: 4.5,
     poise: 10,
     proc: { kind: 'husky', stride: [1.0, 2.5] },
-    moves: [{ name: 'Bite', clip: 'bite', len: 1.167, hits: [{ at: 0.5 }], reach: 0.7, arc: 0.6, damage: 15, knock: 1, cooldown: 1.1, sound: 'bite', lunge: 0.7 }],
+    moves: [{ name: 'Bite', clip: 'bite', len: 1.167, hits: [{ at: 0.5 }], reach: 0.4, arc: 0.6, damage: 18, knock: 1, cooldown: 1.1, sound: 'bite', lunge: 0.7 }],
     color: '#4d5560',
   },
   {
@@ -375,7 +377,7 @@ export const CREATURES: CreatureDef[] = [
     turn: 5,
     poise: 6,
     proc: { kind: 'fox', stride: [0.7, 1.9] },
-    moves: [{ name: 'Bite', clip: 'bite', len: 1.333, hits: [{ at: 0.5 }], reach: 0.6, arc: 0.6, damage: 9, knock: 0.5, cooldown: 1, sound: 'bite', lunge: 0.6 }],
+    moves: [{ name: 'Bite', clip: 'bite', len: 1.333, hits: [{ at: 0.5 }], reach: 0.3, arc: 0.6, damage: 11, knock: 0.5, cooldown: 1, sound: 'bite', lunge: 0.6 }],
     color: '#d0612a',
   },
   {
@@ -398,8 +400,8 @@ export const CREATURES: CreatureDef[] = [
     proc: { kind: 'swordsman', stride: [1.3, 2.6] },
     dodge: { len: 1, chance: 0.35, cooldown: 2.5, distance: 1.6 },
     moves: [
-      { name: 'Slash', clip: 'slash', len: 1.292, hits: [{ at: 0.4 }], reach: 1.2, arc: 1.2, damage: 44, knock: 2.5, cooldown: 1.1, sound: 'slash', lunge: 0.4, weight: 3 },
-      { name: 'Kick', clip: 'kick', len: 1.167, hits: [{ at: 0.5 }], reach: 0.8, arc: 0.6, damage: 14, knock: 4, cooldown: 2, sound: 'blunt' },
+      { name: 'Slash', clip: 'slash', len: 1.292, hits: [{ at: 0.4 }], reach: 0.95, arc: 1.2, damage: 67, knock: 2.5, cooldown: 1.1, sound: 'slash', lunge: 0.4, weight: 3 },
+      { name: 'Kick', clip: 'kick', len: 1.167, hits: [{ at: 0.5 }], reach: 0.45, arc: 0.6, damage: 21, knock: 4, cooldown: 2, sound: 'blunt' },
     ],
     color: '#5a3a28',
   },
@@ -423,8 +425,8 @@ export const CREATURES: CreatureDef[] = [
     proc: { kind: 'king', stride: [1.3, 2.6] },
     dodge: { len: 0.792, chance: 0.2, cooldown: 3, distance: 1.3 },
     moves: [
-      { name: 'Royal slash', clip: 'slash', len: 1, hits: [{ at: 0.4 }], reach: 1.2, arc: 1.2, damage: 42, knock: 2.5, cooldown: 1.1, sound: 'slash', lunge: 0.3, weight: 3 },
-      { name: 'Punch', clip: 'punch_r', len: 0.833, hits: [{ at: 0.5 }], reach: 0.6, arc: 0.6, damage: 12, knock: 2, cooldown: 1.5, sound: 'blunt' },
+      { name: 'Royal slash', clip: 'slash', len: 1, hits: [{ at: 0.4 }], reach: 0.9, arc: 1.2, damage: 60, knock: 2.5, cooldown: 1.1, sound: 'slash', lunge: 0.3, weight: 3 },
+      { name: 'Punch', clip: 'punch_r', len: 0.833, hits: [{ at: 0.5 }], reach: 0.35, arc: 0.6, damage: 17, knock: 2, cooldown: 1.5, sound: 'blunt' },
     ],
     color: '#3c4a78',
   },
@@ -447,9 +449,9 @@ export const CREATURES: CreatureDef[] = [
     proc: { kind: 'brawler', stride: [1.3, 2.6] },
     dodge: { len: 0.792, chance: 0.45, cooldown: 2, distance: 1.5 },
     moves: [
-      { name: 'Jab', clip: 'punch_l', len: 0.833, hits: [{ at: 0.4 }], reach: 0.6, arc: 0.6, damage: 14, knock: 1.5, cooldown: 0.7, sound: 'blunt', weight: 2 },
-      { name: 'Cross', clip: 'punch_r', len: 0.833, hits: [{ at: 0.5 }], reach: 0.6, arc: 0.6, damage: 18, knock: 2, cooldown: 1, sound: 'blunt', weight: 2 },
-      { name: 'Kick', clip: 'kick', len: 0.917, hits: [{ at: 0.5 }], reach: 0.85, arc: 0.6, damage: 24, knock: 5, cooldown: 1.6, sound: 'blunt', weight: 1.5 },
+      { name: 'Jab', clip: 'punch_l', len: 0.833, hits: [{ at: 0.4 }], reach: 0.35, arc: 0.6, damage: 24, knock: 1.5, cooldown: 0.7, sound: 'blunt', weight: 2 },
+      { name: 'Cross', clip: 'punch_r', len: 0.833, hits: [{ at: 0.5 }], reach: 0.35, arc: 0.6, damage: 32, knock: 2, cooldown: 1, sound: 'blunt', weight: 2 },
+      { name: 'Kick', clip: 'kick', len: 0.917, hits: [{ at: 0.5 }], reach: 0.5, arc: 0.6, damage: 42, knock: 5, cooldown: 1.6, sound: 'blunt', weight: 1.5 },
     ],
     color: '#4a5a32',
   },
@@ -466,7 +468,7 @@ export const CREATURES: CreatureDef[] = [
     back: 1.0,
     hover: 0.9,
     mass: 1200,
-    hp: 560,
+    hp: 360,
     armor: 0.2,
     walk: 2,
     run: 6.5,
@@ -474,8 +476,8 @@ export const CREATURES: CreatureDef[] = [
     poise: 110,
     proc: { kind: 'dragon', stride: [1.4, 3.0] },
     moves: [
-      { name: 'Bite', clip: 'bite', len: 0.875, hits: [{ at: 0.3 }], reach: 1.3, arc: 0.7, damage: 70, knock: 7, cooldown: 1.6, sound: 'bite', lunge: 0.5, weight: 2 },
-      { name: 'Fire breath', clip: 'breath', len: 1.667, hits: [{ at: 0.3 }], breath: { until: 0.75 }, reach: 5, arc: 0.4, damage: 5, knock: 0.6, cooldown: 4, sound: 'blunt', minRange: 0.5, weight: 3 },
+      { name: 'Bite', clip: 'bite', len: 0.875, hits: [{ at: 0.3 }], reach: 0.6, arc: 0.7, damage: 68, knock: 7, cooldown: 1.6, sound: 'bite', lunge: 0.5, weight: 2 },
+      { name: 'Fire breath', clip: 'breath', len: 1.667, hits: [{ at: 0.3 }], breath: { until: 0.75 }, reach: 5, arc: 0.4, damage: 4.9, knock: 0.6, cooldown: 4, sound: 'blunt', minRange: 0.5, weight: 3 },
     ],
     color: '#7a1a22',
   },
@@ -487,11 +489,11 @@ export const CREATURES: CreatureDef[] = [
     voice: { call: 'hiss', pitch: 0.8 },
     feet: 'paw',
     height: 1.1,
-    radius: 0.9,
-    front: 1.1,
+    radius: 0.75,
+    front: 0.75,
     back: 1.15,
     mass: 160,
-    hp: 335,
+    hp: 370,
     armor: 0.25,
     walk: 1.8,
     run: 8,
@@ -499,8 +501,8 @@ export const CREATURES: CreatureDef[] = [
     poise: 40,
     proc: { kind: 'spider', stride: [1.0, 2.0] },
     moves: [
-      { name: 'Venom bite', clip: 'bite', len: 0.75, hits: [{ at: 0.55 }], reach: 0.8, arc: 0.7, damage: 26, knock: 2, cooldown: 1.2, sound: 'bite', lunge: 0.4, poison: 5, weight: 2 },
-      { name: 'Leap', clip: 'leap', len: 0.708, hits: [{ at: 0.75 }], reach: 0.9, arc: 0.8, damage: 34, knock: 5, cooldown: 4, sound: 'blunt', lunge: 4, minRange: 2.2, weight: 3 },
+      { name: 'Venom bite', clip: 'bite', len: 0.75, hits: [{ at: 0.55 }], reach: 0.35, arc: 0.7, damage: 42, knock: 2, cooldown: 1.2, sound: 'bite', lunge: 0.4, poison: 5, weight: 2 },
+      { name: 'Leap', clip: 'leap', len: 0.708, hits: [{ at: 0.75 }], reach: 0.4, arc: 0.8, damage: 52, knock: 5, cooldown: 4, sound: 'blunt', lunge: 4, minRange: 2.2, weight: 3 },
     ],
     color: '#25252b',
   },
@@ -525,9 +527,9 @@ export const CREATURES: CreatureDef[] = [
     proc: { kind: 'lion', stride: [1.1, 3.2] },
     ai: 'stalker',
     moves: [
-      { name: 'Claw swipe', clip: 'swipe', len: 0.7, hits: [{ at: 0.45 }], reach: 0.95, arc: 0.9, damage: 32, knock: 3, cooldown: 1, sound: 'slash', weight: 2 },
-      { name: 'Bite', clip: 'bite', len: 0.8, hits: [{ at: 0.5 }], reach: 0.8, arc: 0.6, damage: 42, knock: 1.5, cooldown: 1.4, sound: 'bite', lunge: 0.4, weight: 2 },
-      { name: 'Pounce', clip: 'pounce', len: 1.1, hits: [{ at: 0.62 }], reach: 0.9, arc: 0.7, damage: 28, knock: 1, cooldown: 5, sound: 'bite', lunge: 4.2, minRange: 2.2, grab: { kind: 'latch', seconds: 2.6, dps: 22 }, weight: 4 },
+      { name: 'Claw swipe', clip: 'swipe', len: 0.7, hits: [{ at: 0.45 }], reach: 0.3, arc: 0.9, damage: 43, knock: 3, cooldown: 1, sound: 'slash', weight: 2 },
+      { name: 'Bite', clip: 'bite', len: 0.8, hits: [{ at: 0.5 }], reach: 0.4, arc: 0.6, damage: 57, knock: 1.5, cooldown: 1.4, sound: 'bite', lunge: 0.4, weight: 2 },
+      { name: 'Pounce', clip: 'pounce', len: 1.1, hits: [{ at: 0.62 }], reach: 0.45, arc: 0.7, damage: 38, knock: 1, cooldown: 5, sound: 'bite', lunge: 4.2, minRange: 2.2, grab: { kind: 'latch', seconds: 2.6, dps: 22 }, weight: 4 },
       { name: 'Roar', clip: 'roar', len: 1.2, hits: [{ at: 0.35 }], reach: 4.5, arc: Math.PI, damage: 0, knock: 0, cooldown: 14, sound: 'blunt', roar: { radius: 4.5 }, weight: 1 },
     ],
     color: '#c49a5c',
@@ -553,11 +555,11 @@ export const CREATURES: CreatureDef[] = [
     proc: { kind: 'bear', stride: [1.0, 2.8] },
     ai: 'brute',
     moves: [
-      { name: 'Swipe', clip: 'swipe', len: 0.8, hits: [{ at: 0.5 }], reach: 1, arc: 1, damage: 36, knock: 5, cooldown: 1.3, sound: 'slash', weight: 2 },
-      { name: 'Rear up', clip: 'rear', len: 1.7, hits: [{ at: 0.45 }, { at: 0.68 }], reach: 1.15, arc: 1.3, damage: 46, knock: 8, cooldown: 4.5, sound: 'blunt', armor: 0.5, weight: 3 },
-      { name: 'Bite', clip: 'bite', len: 0.9, hits: [{ at: 0.55 }], reach: 0.8, arc: 0.6, damage: 30, knock: 2, cooldown: 1.6, sound: 'bite', lunge: 0.3, weight: 1.5 },
-      { name: 'Charge', clip: 'charge', len: 0.8, hits: [{ at: 0.35 }], reach: 1.1, arc: 0.7, damage: 48, knock: 9, cooldown: 7, sound: 'blunt', minRange: 3.5, charge: true, bluff: 0.35, weight: 3 },
-      { name: 'Maul', clip: 'maul', len: 1.3, hits: [{ at: 0.3 }], reach: 0.8, arc: 0.9, damage: 18, knock: 0, cooldown: 6, sound: 'bite', needs: 'targetDown', grab: { kind: 'pin', seconds: 1.4, dps: 22 }, weight: 5 },
+      { name: 'Swipe', clip: 'swipe', len: 0.8, hits: [{ at: 0.5 }], reach: 0.35, arc: 1, damage: 43, knock: 5, cooldown: 1.3, sound: 'slash', weight: 2 },
+      { name: 'Rear up', clip: 'rear', len: 1.7, hits: [{ at: 0.45 }, { at: 0.68 }], reach: 0.4, arc: 1.3, damage: 55, knock: 8, cooldown: 4.5, sound: 'blunt', armor: 0.5, weight: 3 },
+      { name: 'Bite', clip: 'bite', len: 0.9, hits: [{ at: 0.55 }], reach: 0.4, arc: 0.6, damage: 36, knock: 2, cooldown: 1.6, sound: 'bite', lunge: 0.3, weight: 1.5 },
+      { name: 'Charge', clip: 'charge', len: 0.8, hits: [{ at: 0.35 }], reach: 0.5, arc: 0.7, damage: 57, knock: 9, cooldown: 7, sound: 'blunt', minRange: 3.5, charge: true, bluff: 0.35, weight: 3 },
+      { name: 'Maul', clip: 'maul', len: 1.3, hits: [{ at: 0.3 }], reach: 0.4, arc: 0.9, damage: 21, knock: 0, cooldown: 6, sound: 'bite', needs: 'targetDown', grab: { kind: 'pin', seconds: 1.4, dps: 22 }, weight: 5 },
       { name: 'Roar', clip: 'roar', len: 1.4, hits: [{ at: 0.4 }], reach: 4.5, arc: Math.PI, damage: 0, knock: 0, cooldown: 14, sound: 'blunt', roar: { radius: 4.5 }, weight: 1 },
     ],
     color: '#6b4a2c',
@@ -571,7 +573,8 @@ export const CREATURES: CreatureDef[] = [
     feet: 'paw',
     height: 0.6,
     radius: 0.42,
-    front: 1.45,
+    // (Its long, low snout: others can stand over it.)
+    front: 1.1,
     back: 0.85,
     mass: 450,
     hp: 440,
@@ -583,9 +586,9 @@ export const CREATURES: CreatureDef[] = [
     proc: { kind: 'croc', stride: [0.7, 0.9] },
     ai: 'ambusher',
     moves: [
-      { name: 'Lunge bite', clip: 'lunge', len: 0.9, hits: [{ at: 0.4 }], reach: 1, arc: 0.45, damage: 50, knock: 2, cooldown: 2.2, sound: 'bite', lunge: 1.8, grab: { kind: 'roll', seconds: 1.6, dps: 16, chance: 0.4 }, weight: 3 },
-      { name: 'Snap', clip: 'snap', len: 0.6, hits: [{ at: 0.45 }], reach: 0.85, arc: 0.5, damage: 28, knock: 1, cooldown: 1.2, sound: 'bite', lunge: 0.2, weight: 2 },
-      { name: 'Tail whip', clip: 'tail', len: 0.9, hits: [{ at: 0.45, back: true }], reach: 1.7, arc: 1.4, damage: 30, knock: 7, cooldown: 2.5, sound: 'blunt', weight: 2 },
+      { name: 'Lunge bite', clip: 'lunge', len: 0.9, hits: [{ at: 0.4 }], reach: 0.35, arc: 0.45, damage: 50, knock: 2, cooldown: 2.2, sound: 'bite', lunge: 1.8, grab: { kind: 'roll', seconds: 1.6, dps: 16, chance: 0.4 }, weight: 3 },
+      { name: 'Snap', clip: 'snap', len: 0.6, hits: [{ at: 0.45 }], reach: 0.3, arc: 0.5, damage: 28, knock: 1, cooldown: 1.2, sound: 'bite', lunge: 0.2, weight: 2 },
+      { name: 'Tail whip', clip: 'tail', len: 0.9, hits: [{ at: 0.45, back: true }], reach: 1.5, arc: 1.4, damage: 30, knock: 7, cooldown: 2.5, sound: 'blunt', weight: 2 },
     ],
     color: '#4a5a2c',
   },

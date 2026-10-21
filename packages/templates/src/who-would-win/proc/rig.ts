@@ -131,6 +131,16 @@ export interface PoseIn {
   wingFold: number;
   /** How much of the gait's stride and lift to use (0 freezes the feet at home). */
   gaitScale: number;
+  /** The body shifted over its planted feet (model space, metres): leaning into a blow, or away from one. */
+  lean: V3;
+  /** Legs it favours (0..1): a shorter, higher, quicker step on each, the body lifting off it, held up when standing. */
+  limp: Partial<Record<LegName, number>>;
+  /** Breathing depth (1 at rest; panting when winded). */
+  breath: number;
+  /** Injured wings (left, right; 0..1): they beat weaker and droop. */
+  wingHurt: [number, number];
+  /** Limbs striking at their placed point: straight through to the end (a kick, not a step). */
+  reach: Partial<Record<LegName, boolean>>;
 }
 
 export const restPose = (): PoseIn => ({
@@ -156,6 +166,11 @@ export const restPose = (): PoseIn => ({
   wingFlap: 0,
   wingFold: 0,
   gaitScale: 1,
+  lean: [0, 0, 0],
+  limp: {},
+  breath: 1,
+  wingHurt: [0, 0],
+  reach: {},
 });
 
 interface Built {
@@ -274,7 +289,7 @@ function build(spec: ProcSpec): Built {
 
 export const triangleCount = (spec: ProcSpec) => build(spec).triangles;
 
-interface LegRig {
+export interface LegRig {
   spec: LegSpec;
   pivot: THREE.Object3D;
   upper: THREE.Mesh;
@@ -296,9 +311,15 @@ export class ProcRig {
   readonly tail: THREE.Bone[] = [];
   readonly head = new THREE.Group();
   readonly jaw = new THREE.Group();
-  private readonly legs: LegRig[] = [];
-  private readonly props: { spec: PropSpec; mesh: THREE.Mesh }[] = [];
-  private readonly wings: { inner: THREE.Group; outer: THREE.Group; side: 1 | -1 }[] = [];
+  readonly legs: LegRig[] = [];
+  readonly props: { spec: PropSpec; mesh: THREE.Mesh; tip: number }[] = [];
+  readonly wings: { inner: THREE.Group; outer: THREE.Group; side: 1 | -1; mesh: THREE.Mesh }[] = [];
+  /** The skinned body, the head's mesh, and points on the head (head-mesh space): the tip of the snout
+   * (what bites), and the brow, horn or antler front (what butts and gores). */
+  readonly bodyMesh: THREE.SkinnedMesh;
+  readonly headMesh: THREE.Mesh;
+  readonly snout: THREE.Vector3;
+  readonly brow: THREE.Vector3;
   readonly material: THREE.MeshStandardMaterial;
   /** The wings' material (both faces drawn: one wing is a mirror image). */
   readonly wingMaterial: THREE.MeshStandardMaterial | null = null;
@@ -343,6 +364,7 @@ export class ProcRig {
       list.push(bone);
     }
     const mesh = new THREE.SkinnedMesh(built.body, mat);
+    this.bodyMesh = mesh;
     mesh.castShadow = true;
     mesh.frustumCulled = false;
     mesh.add(this.bones.pelvis);
@@ -353,6 +375,23 @@ export class ProcRig {
     // Head and jaw ride neck2.
     const headMesh = new THREE.Mesh(built.head, mat);
     headMesh.castShadow = true;
+    this.headMesh = headMesh;
+    // Snout tip: the furthest point forward on the midline; brow: furthest forward and up on it.
+    const hp = built.head.getAttribute('position');
+    this.snout = new THREE.Vector3(0, 0, -Infinity);
+    this.brow = new THREE.Vector3(0, 0, -Infinity);
+    let browScore = -Infinity;
+    for (let i = 0; i < hp.count; i++) {
+      const x = hp.getX(i);
+      const y = hp.getY(i);
+      const z = hp.getZ(i);
+      if (Math.abs(x) > 0.12) continue;
+      if (z > this.snout.z) this.snout.set(0, y, z);
+      if (z + 0.6 * y > browScore) {
+        browScore = z + 0.6 * y;
+        this.brow.set(0, y, z);
+      }
+    }
     this.head.add(headMesh);
     this.jaw.position.set(...spec.jawPivot);
     const jawMesh = new THREE.Mesh(built.jaw, mat);
@@ -387,7 +426,8 @@ export class ProcRig {
       const m = new THREE.Mesh(pr.geo, mat);
       m.castShadow = true;
       this.root.add(m);
-      this.props.push({ spec: pr.spec, mesh: m });
+      pr.geo.computeBoundingBox();
+      this.props.push({ spec: pr.spec, mesh: m, tip: pr.geo.boundingBox!.max.y });
     }
     if (spec.wings && built.wings) {
       const wm = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.8, metalness: 0, side: THREE.DoubleSide });
@@ -407,7 +447,7 @@ export class ProcRig {
         outer.add(om);
         inner.add(outer);
         this.bones[spec.wings.bone].add(inner);
-        this.wings.push({ inner, outer, side });
+        this.wings.push({ inner, outer, side, mesh: im });
       }
     }
   }
@@ -422,18 +462,37 @@ export class ProcRig {
     const cyc = p.gait * Math.PI * 2;
     const flex = g.flex * Math.sin(cyc) * m;
     const bob = g.bob * (0.5 - 0.5 * Math.cos(cyc * 2)) * m;
-    const breathe = Math.sin(p.time * 1.7) * 0.012;
+    const breathe = Math.sin(p.time * (1.7 + 2.2 * (p.breath - 1))) * 0.012 * p.breath;
     this.rollPivot.position.y -= bob;
-    b.pelvis.rotation.set(p.pitch + flex * 0.5, p.spineYaw * 0.15, 0);
+    this.rollPivot.position.x = p.lean[0];
+    this.rollPivot.position.y += p.lean[1];
+    this.rollPivot.position.z = p.lean[2];
+    // A limp: the body lifts off a sore leg while it is on the ground (the head bobs up for a front leg).
+    let limpLift = 0;
+    let limpPitch = 0;
+    for (const s of this.spec.legs) {
+      const a = p.limp[s.name] ?? 0;
+      if (!a || s.arm) continue;
+      const ph = (((p.gait + (g.offsets[s.name] ?? 0)) % 1) + 1) % 1;
+      const on = ph < g.duty ? Math.sin((Math.PI * ph) / g.duty) * m : 0;
+      limpLift += 0.05 * a * on;
+      limpPitch += (s.home[2] > 0 ? -0.09 : 0.06) * a * on;
+    }
+    this.rollPivot.position.y += limpLift;
+    b.pelvis.rotation.set(p.pitch + flex * 0.5 + limpPitch, p.spineYaw * 0.15, 0);
     b.spine.rotation.set(-flex + breathe, p.spineYaw * 0.3, 0);
     b.chest.rotation.set(p.chestPitch + flex * 0.5 - breathe, p.spineYaw * 0.3, 0);
     b.neck1.rotation.set(p.neckPitch * 0.5, p.spineYaw * 0.15 + p.neckYaw * 0.5, 0);
     b.neck2.rotation.set(p.neckPitch * 0.5 + p.headPitch, p.neckYaw * 0.5 + p.headYaw, 0);
     this.jaw.rotation.x = p.jaw * 0.75;
     // (The right wing is a mirror image: its rotations about y and z flip with it.)
+    // (A hurt wing beats weaker, hangs lower and half folds.)
     for (const w of this.wings) {
-      w.inner.rotation.set(0, w.side * -0.15 * p.wingFold, w.side * (p.wingFlap - 0.2 * p.wingFold));
-      w.outer.rotation.set(0, w.side * -1.9 * p.wingFold, w.side * (p.wingFlap * 0.5 - 0.3 * p.wingFold));
+      const h = p.wingHurt[w.side > 0 ? 0 : 1];
+      const flap = p.wingFlap * (1 - 0.6 * h) - 0.55 * h;
+      const fold = Math.min(1, p.wingFold + 0.35 * h);
+      w.inner.rotation.set(0, w.side * -0.15 * fold, w.side * (flap - 0.2 * fold));
+      w.outer.rotation.set(0, w.side * -1.9 * fold, w.side * (flap * 0.5 - 0.3 * fold - 0.4 * h));
     }
     const n = this.tail.length;
     this.tail.forEach((t, i) => {
@@ -468,7 +527,9 @@ export class ProcRig {
         foot = new THREE.Vector3(s.home[0], s.home[1], s.home[2] + Math.sin(ph * Math.PI * 2) * s.arm.swing * m);
       } else {
         const ph = (((p.gait + (g.offsets[s.name] ?? 0)) % 1) + 1) % 1;
-        const stride = p.stride * g.duty * m;
+        const a = p.limp[s.name] ?? 0;
+        // (A sore leg takes a shorter step and is lifted higher.)
+        const stride = p.stride * g.duty * m * (1 - 0.45 * a);
         let dz: number;
         if (ph < g.duty) dz = stride * (0.5 - ph / g.duty);
         else {
@@ -477,7 +538,9 @@ export class ProcRig {
           dz = stride * (-0.5 + e);
           lifted = Math.sin(Math.PI * u) * m;
         }
-        foot = new THREE.Vector3(s.home[0], g.lift * lifted, s.home[2] + dz);
+        // Standing, it holds a badly hurt leg off the ground, toe down.
+        const held = a > 0.35 ? (a - 0.35) * (1 - m) : 0;
+        foot = new THREE.Vector3(s.home[0], g.lift * lifted * (1 + 0.8 * a) + 0.12 * held, s.home[2] + dz - 0.06 * held);
       }
       // The last joint sits above and behind the foot (in the body's frame when limp).
       const up = new THREE.Vector3(0, 1, 0);
@@ -485,6 +548,12 @@ export class ProcRig {
       if (relax) {
         up.applyQuaternion(rel);
         fwd.applyQuaternion(rel);
+      }
+      if (p.reach[s.name] && !relax) {
+        // Struck out at a point: the last joint lines up behind the end, along the limb.
+        const along = foot.clone().sub(hip).normalize();
+        up.copy(along).negate().multiplyScalar(Math.hypot(s.end.up, s.end.back) / Math.max(1e-6, s.end.up || 1));
+        fwd.set(0, 0, 0);
       }
       const ankle = foot.clone().addScaledVector(up, s.end.up).addScaledVector(fwd, -s.end.back);
       const pole = new THREE.Vector3(...s.pole).applyQuaternion(rel);
@@ -504,6 +573,29 @@ export class ProcRig {
         pr.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       }
     }
+  }
+
+  /** A limb by name. */
+  limb(name: LegName): LegRig | undefined {
+    return this.legs.find((l) => l.spec.name === name);
+  }
+
+  /** World position of a limb's end (the paw, hoof, foot or fist), as last posed. */
+  pawWorld(name: LegName, out = new THREE.Vector3()) {
+    const l = this.limb(name);
+    return l ? l.paw.getWorldPosition(out) : this.root.getWorldPosition(out);
+  }
+
+  /** World position of the snout tip or the brow (as last posed). */
+  headPoint(which: 'snout' | 'brow', out = new THREE.Vector3()) {
+    return this.headMesh.localToWorld(out.copy(which === 'snout' ? this.snout : this.brow));
+  }
+
+  /** World position of a held prop's tip (a sword's point). */
+  propTip(name: string, out = new THREE.Vector3()) {
+    const pr = this.props.find((x) => x.spec.name === name);
+    if (!pr) return this.headPoint('snout', out);
+    return pr.mesh.localToWorld(out.set(0, pr.tip, 0));
   }
 
   private gaitAt(speed: number): Gait {

@@ -50,6 +50,11 @@ export class MeshBuilder {
     return this.pos.length / 9;
   }
 
+  /** Every vertex so far (x, y, z flattened), for measuring a shape without building it. */
+  get points(): readonly number[] {
+    return this.pos;
+  }
+
   build(skinned = false): THREE.BufferGeometry {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));

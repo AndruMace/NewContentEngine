@@ -13,7 +13,8 @@ import { ARENA_R, GATES } from './sim';
 import { VS_STRIPS, vsSlide } from './vs';
 import { ProcRig, restPose } from './proc/rig';
 import { SPECIES } from './proc/species';
-import { PROC_POSES } from './proc/poses';
+import { spotOf, spotWorld, woundMesh } from './proc/contact';
+import { stage } from './proc/stage';
 import { REPLAY_S, fightersNow, replaying, type FighterView, type State } from './index';
 
 const VFOV = 32;
@@ -26,6 +27,7 @@ const PEDESTALS = [new THREE.Vector3(-14, 0, 110), new THREE.Vector3(14, 0, 110)
 const FLAME_N = 70;
 const SUN = 1.9;
 const BURST_N = 12;
+const DUST_N = 40;
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const wrapAngle = (a: number) => a - 2 * Math.PI * Math.floor((a + Math.PI) / (2 * Math.PI));
@@ -40,26 +42,33 @@ interface Inst {
   def: CreatureDef;
   /** Nose to rump (metres; the tail doesn't count for framing). */
   length: number;
+  /** Wounds drawn so far (by index in the fighter's list). */
+  wounds: Map<number, THREE.Mesh>;
 }
 
 function makeInst(def: CreatureDef): Inst {
   const rig = new ProcRig(SPECIES[def.proc.kind]);
   const length = (def.front ?? def.radius) + (def.back ?? def.radius);
-  return { rig, group: rig.root, mats: [rig.material, ...(rig.wingMaterial ? [rig.wingMaterial] : [])], head: rig.head, def, length };
+  return { rig, group: rig.root, mats: [rig.material, ...(rig.wingMaterial ? [rig.wingMaterial] : [])], head: rig.head, def, length, wounds: new Map() };
 }
 
-function pose(inst: Inst, f: FighterView, simT: number, horde: boolean, all: FighterView[]) {
-  const d = f.def;
-  let y = d.hover ? d.hover + Math.sin(simT * 3.1 + f.idx) * 0.12 : 0;
-  // Fallen dragons drop out of the air; in a horde the fallen sink away after a while.
-  if (!f.alive && d.hover) y *= 1 - clamp01((simT - f.diedAt) / 0.6);
-  if (!f.alive && horde && f.side === 1) y -= clamp01((simT - f.diedAt - 2.2) / 1.2) * d.height * 1.2;
-  inst.group.position.set(f.x, y, f.y);
-  inst.group.rotation.set(0, Math.atan2(Math.cos(f.heading), Math.sin(f.heading)), 0);
-  inst.group.visible = f.alive || !horde || simT - f.diedAt < 3.6;
-  inst.rig.pose(PROC_POSES[d.proc.kind](f, simT, all));
-  const fl = f.flash * 0.22;
-  for (const m of inst.mats) m.emissive.setRGB(fl + f.burn * 0.45, fl * 0.5 + f.burn * 0.12, fl * 0.4);
+/** Its wounds: each one made on the spot it names, shown from the moment it was made (a quick bloom). */
+function drawWounds(inst: Inst, f: FighterView, simT: number) {
+  for (let i = 0; i < f.wounds.length; i++) {
+    const w = f.wounds[i];
+    let m = inst.wounds.get(i);
+    if (!m) {
+      if (w.t > simT) continue;
+      const s = spotOf(inst.rig, w);
+      if (!s) continue;
+      m = woundMesh(s, w, f.def);
+      s.parent.add(m);
+      inst.wounds.set(i, m);
+    }
+    const age = simT - w.t;
+    m.visible = age >= 0;
+    m.scale.setScalar(0.4 + 0.6 * clamp01(age / 0.15));
+  }
 }
 
 /** Sandy floor with raked rings and scuffs. */
@@ -161,8 +170,8 @@ function buildArena(scene: THREE.Scene) {
   crowd.repeat.set(4, 1);
   for (let k = 0; k < 5; k++) {
     const r = ARENA_R + 1.6 + k * 1.6;
-    // Both sides: from far out the camera sees the near stands' backs (the crowd faces in either way).
-    const tier = new THREE.Mesh(new THREE.CylinderGeometry(r + 1.2, r, 1.3, 48, 1, true), new THREE.MeshStandardMaterial({ map: crowd, roughness: 1, side: THREE.DoubleSide }));
+    // Inside faces only: the far stands face the camera; the near ones (between it and the arena) aren't drawn.
+    const tier = new THREE.Mesh(new THREE.CylinderGeometry(r + 1.2, r, 1.3, 48, 1, true), new THREE.MeshStandardMaterial({ map: crowd, roughness: 1, side: THREE.BackSide }));
     tier.position.y = WALL_H + 0.65 + k * 1.3;
     scene.add(tier);
   }
@@ -247,7 +256,13 @@ function build(s: State, theme: Theme) {
     scene.add(m);
     return m;
   });
-  return { scene, camera, vsCam, sun, vsLight, torches, showcase, fighters: new Map<number, Inst>(), flames, bursts };
+  const dust = Array.from({ length: DUST_N }, () => {
+    const m = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: 0xcaa978, transparent: true, depthWrite: false }));
+    m.visible = false;
+    scene.add(m);
+    return m;
+  });
+  return { scene, camera, vsCam, sun, vsLight, torches, showcase, fighters: new Map<number, Inst>(), flames, bursts, dust };
 }
 
 const view = sceneCache(build);
@@ -276,7 +291,7 @@ function aimReplay(camera: THREE.PerspectiveCamera, s: State, fighters: FighterV
   const by = fighters.find((f) => f.idx === s.koBy) ?? who;
   const mx = (who.x + by.x) / 2;
   const my = (who.y + by.y) / 2;
-  const tall = Math.max(who.def.height + (who.def.hover ?? 0), by.def.height + (by.def.hover ?? 0));
+  const tall = Math.max(who.def.height + who.hover, by.def.height + by.hover);
   // Low, looking nearly along the line between them (a narrow portrait frame fits two along its
   // depth), slowly circling; always inside the arena (the stands would block the view from outside).
   // Of the four ways round, the one with the most room.
@@ -333,8 +348,8 @@ function drawBreath(v: ReturnType<typeof view>, insts: Map<number, Inst>, fighte
   for (let i = used; i < FLAME_N; i++) v.flames[i].visible = false;
 }
 
-/** A star burst where each recent blow landed. */
-function drawBursts(v: ReturnType<typeof view>, s: State, simT: number) {
+/** A star burst where each recent blow landed (on the wound it made, as the body is now). */
+function drawBursts(v: ReturnType<typeof view>, s: State, simT: number, fighters: FighterView[]) {
   let used = 0;
   for (let i = s.hits.length - 1; i >= 0 && used < BURST_N; i--) {
     const h = s.hits[i];
@@ -343,8 +358,13 @@ function drawBursts(v: ReturnType<typeof view>, s: State, simT: number) {
     if (age > 0.3) break;
     const sp = v.bursts[used++];
     const k = age / 0.3;
-    const size = (0.6 + Math.min(1.6, h.power) * 0.5) * (h.crit ? 1.5 : 1) * (0.5 + k);
-    sp.position.set(h.x, h.h, h.y);
+    const size = (0.45 + Math.min(1.6, h.power) * 0.4) * (h.crit ? 1.5 : 1) * (0.5 + k);
+    const inst = v.fighters.get(h.who);
+    const f = fighters.find((x) => x.idx === h.who);
+    const w = f?.wounds[h.wound];
+    const spot = inst && w ? spotOf(inst.rig, w) : null;
+    if (spot) spotWorld(spot, sp.position);
+    else sp.position.set(h.x, h.h, h.y);
     sp.scale.set(size, size, 1);
     const mat = sp.material as THREE.SpriteMaterial;
     mat.opacity = 1 - k;
@@ -353,6 +373,28 @@ function drawBursts(v: ReturnType<typeof view>, s: State, simT: number) {
     sp.visible = true;
   }
   for (let i = used; i < BURST_N; i++) v.bursts[i].visible = false;
+}
+
+/** Dust kicked up where a body hits the ground: a ring of puffs that spread and settle. */
+function drawDust(v: ReturnType<typeof view>, s: State, simT: number) {
+  let used = 0;
+  for (let i = s.dust.length - 1; i >= 0; i--) {
+    const d = s.dust[i];
+    const age = simT - d.simT;
+    if (age < 0 || age > 1.3) continue;
+    const k = age / 1.3;
+    for (let j = 0; j < 6 && used < DUST_N; j++) {
+      const sp = v.dust[used++];
+      const a = (j / 6) * Math.PI * 2 + hash(i * 7 + j) * 0.8;
+      const r = d.size * (0.25 + 0.75 * Math.sqrt(k)) * (0.7 + 0.4 * hash(j * 3 + i));
+      sp.position.set(d.x + Math.cos(a) * r, 0.15 + d.size * 0.25 * Math.sqrt(k), d.y + Math.sin(a) * r);
+      const sz = d.size * (0.6 + 0.9 * k);
+      sp.scale.set(sz, sz * 0.7, 1);
+      (sp.material as THREE.SpriteMaterial).opacity = 0.55 * (1 - k) * clamp01(age / 0.06);
+      sp.visible = true;
+    }
+  }
+  for (let i = used; i < DUST_N; i++) v.dust[i].visible = false;
 }
 
 /** The two halves of the VS card: a coloured strip each, with its fighter on a pedestal. */
@@ -429,13 +471,21 @@ export function drawScene(ctx: Ctx2D, s: State, theme: Theme) {
       v.scene.add(inst.group);
       v.fighters.set(f.idx, inst);
     }
-    pose(inst, f, simT, horde, fighters);
+  }
+  const rigs = new Map([...v.fighters].map(([k, inst]) => [k, inst.rig]));
+  stage(rigs, fighters, simT, horde);
+  for (const f of fighters) {
+    const inst = v.fighters.get(f.idx)!;
+    const fl = f.flash * f.flash * 0.12;
+    for (const m of inst.mats) m.emissive.setRGB(fl + f.burn * 0.45, fl * 0.85 + f.burn * 0.12, fl * 0.75);
+    drawWounds(inst, f, simT);
   }
   // Fighters not in this snapshot (a replay from before they came in) stay hidden.
   for (const [idx, inst] of v.fighters) if (!fighters.some((f) => f.idx === idx)) inst.group.visible = false;
   for (const [k, fl] of v.torches.entries()) fl.scale.y = 0.8 + 0.3 * Math.abs(Math.sin(s.t * 9 + k * 1.7));
   drawBreath(v, v.fighters, fighters, simT);
-  drawBursts(v, s, simT);
+  drawBursts(v, s, simT, fighters);
+  drawDust(v, s, simT);
   if (s.phase !== 'vs') {
     if (replaying(s)) aimReplay(v.camera, s, fighters);
     else aimArena(v.camera, s);

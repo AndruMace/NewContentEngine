@@ -6,8 +6,10 @@
  */
 import { strideFor, type MoveDef } from '../roster';
 import type { FighterView } from '../index';
+import { condition, isBiped, severity, type HurtKey } from '../sim';
 import { restPose, type LegName, type PoseIn } from './rig';
 import { SPECIES } from './species';
+import { limbFor } from './contact';
 import type { V3 } from './builder';
 
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
@@ -44,7 +46,13 @@ function heldInfo(f: FighterView, others: FighterView[]) {
 
 const moveOf = (f: FighterView): MoveDef | null => (f.state === 'attack' && f.moveIdx >= 0 ? f.def.moves[f.moveIdx] : null);
 
-/** Shared base: gait, head tracking, turning bend, flinch from the last hit. */
+/** A direction in the world (an angle on the floor) in a fighter's own model space (x: its left, z: ahead). */
+const toModel = (f: FighterView, ang: number) => {
+  const r = wrap(ang - f.heading);
+  return { x: -Math.sin(r), z: Math.cos(r) };
+};
+
+/** Shared base: gait, head tracking, turning bend, recoil from the last hit, a hop back from a blow it read. */
 function base(f: FighterView, simT: number, others: FighterView[]): { p: PoseIn; rel: number; t: FighterView | null; flinch: number; side: number } {
   const p = restPose();
   const proc = f.def.proc!;
@@ -63,13 +71,97 @@ function base(f: FighterView, simT: number, others: FighterView[]): { p: PoseIn;
   p.chestPitch -= flinch * 0.12;
   p.roll += flinch * 0.12 * side;
   p.headYaw += flinch * 0.25 * side;
+  // Recoil: the body is shoved the way the blow pushed it (harder the harder the blow), then sways back.
+  const age = Math.max(0, simT - f.lastHitT);
+  const pow = Math.min(2, f.lastHitPow);
+  const k = (age < 0.05 ? age / 0.05 : Math.exp(-(age - 0.05) * 6) * Math.cos((age - 0.05) * 9)) * pow;
+  if (Math.abs(k) > 0.002) {
+    const d = toModel(f, f.lastHitDir);
+    const sz = f.def.proc.kind === 'fox' ? 0.5 : 1;
+    p.lean = [p.lean[0] + d.x * 0.13 * k * sz, p.lean[1] - 0.03 * Math.abs(k), p.lean[2] + d.z * 0.13 * k * sz];
+    p.roll -= d.x * 0.16 * k;
+    p.chestPitch += d.z * 0.18 * k;
+    p.headYaw += d.x * 0.35 * k;
+    p.neckPitch -= 0.12 * Math.abs(k);
+  }
+  // Slipping a blow: ducks and pulls its head back as it hops away.
+  const ev = pulse(simT - f.evadeT, 0, 0.12, 0.45);
+  if (ev > 0) {
+    p.y -= 0.06 * ev * SPECIES[f.def.proc.kind].rollY;
+    p.neckPitch -= 0.3 * ev;
+    p.chestPitch -= 0.08 * ev;
+  }
   return { p, rel, t, flinch, side };
+}
+
+/** Knocked off its feet: thrown onto its side, struggling, then scrambling back up. */
+function knocked(p: PoseIn, f: FighterView, simT: number, lie: number, roll: number) {
+  const t = simT - f.stateT;
+  const e = ramp(t, 0, 0.28) * (1 - ramp(t, f.downLen - 0.5, f.downLen));
+  p.roll = -roll * f.fallDir * e;
+  p.y = -lie * e;
+  p.pitch *= 1 - e;
+  p.chestPitch = 0;
+  p.neckPitch = (-0.35 + Math.sin(t * 7) * 0.12) * e;
+  p.jaw = 0.35 * e;
+  p.tailWave = 0.4 * e;
+  p.gaitScale = 0;
+  p.wingFold = Math.max(p.wingFold, 0.6 * e);
+  p.wingFlap = -0.2 * e + p.wingFlap * (1 - e);
+  // Legs kick while it is down, and get back under it as it rises.
+  if (e > 0.45) for (const l of limbsOf(f)) p.legs[l] = 'relax';
+}
+
+/**
+ * Injuries, over whatever it is doing: it limps on a hurt leg (holding it up when it stands), a hurt arm
+ * hangs, a blow to the head leaves it dazed (head low and swaying), a battered body or exhaustion has it
+ * panting with its head down, a torn wing hangs.
+ */
+export function wounded(p: PoseIn, f: FighterView, simT: number) {
+  if (!f.alive || f.state === 'down' || f.state === 'held') return;
+  const spec = SPECIES[f.def.proc.kind];
+  const c = condition(f);
+  const limbs: [HurtKey, 'fore' | 'hind', 1 | -1][] = [
+    ['LF', 'fore', 1],
+    ['RF', 'fore', -1],
+    ['LH', 'hind', 1],
+    ['RH', 'hind', -1],
+  ];
+  for (const [key, zone, side] of limbs) {
+    const sv = severity(f.hurt[key]);
+    if (sv < 0.12) continue;
+    const name = limbFor(spec, zone, side);
+    const leg = name ? spec.legs.find((l) => l.name === name) : undefined;
+    if (!leg) continue;
+    if (leg.arm) {
+      const v = p.legs[leg.name];
+      if (Array.isArray(v) && f.state !== 'attack') p.legs[leg.name] = [v[0], v[1] - 0.35 * sv, v[2] - 0.12 * sv];
+    } else p.limp[leg.name] = Math.max(p.limp[leg.name] ?? 0, sv);
+  }
+  const t = simT + f.idx * 1.7;
+  const h = c.head;
+  p.neckPitch += 0.22 * h;
+  p.headYaw += Math.sin(t * 1.7) * 0.2 * h;
+  p.headPitch += Math.sin(t * 2.3) * 0.08 * h;
+  p.roll += Math.sin(t * 1.1) * 0.04 * h;
+  const b = Math.max(c.body, c.spent);
+  p.breath = Math.max(p.breath, 1 + 2 * b);
+  if (!isBiped(f.def) && f.state !== 'attack' && f.state !== 'grab') p.jaw = Math.max(p.jaw, b * 0.35 * (0.55 + 0.45 * Math.sin(simT * 8 + f.idx)));
+  p.neckPitch += 0.14 * c.spent;
+  p.y -= 0.04 * c.spent * spec.rollY;
+  if (spec.wings && c.wing > 0) {
+    let l = 0;
+    let r = 0;
+    for (const w of f.wounds) if (w.zone === 'wing' && w.t <= simT) w.side > 0 ? l++ : r++;
+    p.wingHurt = [c.wing * (l >= r ? 1 : 0.4), c.wing * (r >= l ? 1 : 0.4)];
+  }
 }
 
 /** Lying on its side (or back), legs limp. */
 function fallen(p: PoseIn, f: FighterView, simT: number, lie: number, roll: number) {
   const e = ramp(simT - f.diedAt, 0, 0.55);
-  p.roll = roll * e * (f.idx % 2 ? 1 : -1);
+  // Falls away from the blow that felled it.
+  p.roll = -roll * e * f.fallDir;
   p.y = -lie * e;
   p.pitch = 0;
   p.chestPitch = 0;
@@ -108,6 +200,10 @@ export function lionPose(f: FighterView, simT: number, others: FighterView[]): P
     struggling(p, simT, held);
     return p;
   }
+  if (f.state === 'down') {
+    knocked(p, f, simT, 0.5, 1.45);
+    return p;
+  }
   // Stalking crouch: belly to the ground, head low, tail tip twitching.
   const c = f.crouch;
   p.y -= 0.24 * c;
@@ -120,9 +216,9 @@ export function lionPose(f: FighterView, simT: number, others: FighterView[]): P
   if (f.state === 'grab' && f.grab?.kind === 'latch') {
     // Reared onto its prey, forepaws hooked over its back, jaws locked on and shaking.
     const v = others.find((o) => o.idx === f.grab!.target);
-    const h = v ? v.def.height * (v.def.hover ? 1.3 : 0.75) : 1;
+    const h = v ? v.def.height * (v.hover > 0.3 ? 1.3 : 0.75) : 1;
     const e = ramp(simT - f.grab.t0, 0, 0.2);
-    p.pitch = -0.7 * e * clamp(h / 1.2, 0.3, 1);
+    p.pitch = -0.45 * e * clamp(h / 1.2, 0.3, 1);
     p.y = 0.05 * e;
     p.legs.LF = lerpV(home('lion', 'LF'), [0.22, clamp(h, 0.3, 1.5), 0.62], e);
     p.legs.RF = lerpV(home('lion', 'RF'), [-0.22, clamp(h, 0.3, 1.5), 0.62], e);
@@ -217,6 +313,10 @@ export function bearPose(f: FighterView, simT: number, others: FighterView[]): P
     struggling(p, simT, held);
     return p;
   }
+  if (f.state === 'down') {
+    knocked(p, f, simT, 0.45, 1.4);
+    return p;
+  }
   // Heavy head sway when walking.
   p.neckYaw += Math.sin(f.gait * Math.PI * 2) * 0.08 * Math.min(1, Math.abs(f.spd) / 1.5);
   const m = moveOf(f);
@@ -254,8 +354,10 @@ export function bearPose(f: FighterView, simT: number, others: FighterView[]): P
       break;
     }
     case 'rear': {
-      // Up on its hind legs (armoured while up), a left swipe, a right swipe, back down.
-      const up = ramp(u, 0, 0.3) * (1 - ramp(u, 0.8, 1));
+      // Up on its hind legs (armoured while up), then down onto its foe with the left paw, up and down
+      // again with the right, and back onto all fours.
+      const slam = m.hits.reduce((acc, h) => Math.max(acc, pulse(u, h.at - 0.1, h.at, h.at + 0.08)), 0);
+      const up = ramp(u, 0, 0.3) * (1 - ramp(u, 0.8, 1)) * (1 - 0.5 * slam);
       p.pitch = -1.0 * up;
       p.y = 0.08 * up;
       p.neckPitch = 0.6 * up;
@@ -335,6 +437,10 @@ export function crocPose(f: FighterView, simT: number, others: FighterView[]): P
     struggling(p, simT, held);
     return p;
   }
+  if (f.state === 'down') {
+    knocked(p, f, simT, 0.05, Math.PI * 0.8);
+    return p;
+  }
   const m = moveOf(f);
   const u = m ? (simT - f.stateT) / m.len : 0;
   if (f.state === 'grab' && f.grab?.kind === 'roll') {
@@ -397,6 +503,10 @@ function begin(f: FighterView, simT: number, others: FighterView[], lie: number,
   const held = f.state === 'held' ? heldInfo(f, others) : null;
   if (held) {
     struggling(b.p, simT, held);
+    return { ...b, done: true, m: null as MoveDef | null, u: 0 };
+  }
+  if (f.state === 'down') {
+    knocked(b.p, f, simT, lie, roll);
     return { ...b, done: true, m: null as MoveDef | null, u: 0 };
   }
   const m = moveOf(f);
@@ -558,15 +668,20 @@ export function dragonPose(f: FighterView, simT: number, others: FighterView[]):
     if (!f.alive) p.wingFlap = -0.3;
     return p;
   }
+  // Brought down (a torn wing): on its feet, wings folded up over its back, twitching. (Swooping down to
+  // bite, it is still flying.)
+  const flying = f.hover > 0.35 || condition(f).wing < 0.6;
   // Wings held high in a V and swept back, beating: they read from the side as well as from behind.
-  p.wingFlap = 0.6 + beat * 0.6;
-  p.wingFold = 0.25;
+  p.wingFlap = flying ? 0.6 + beat * 0.6 : 0.95 + beat * 0.08;
+  p.wingFold = flying ? 0.25 : 0.85;
   p.tailWave = 0.25;
-  p.pitch -= 0.12;
+  p.pitch -= flying ? 0.12 : 0;
   p.neckPitch += 0.25;
   // Legs tucked under in flight.
-  for (const l of ['LF', 'RF', 'LH', 'RH']) p.legs[l] = 'relax';
-  p.gaitScale = 0;
+  if (flying) {
+    for (const l of ['LF', 'RF', 'LH', 'RH']) p.legs[l] = 'relax';
+    p.gaitScale = 0;
+  }
   if (f.state === 'stagger') {
     const k = pulse((simT - f.stateT) / 0.45, 0, 0.2, 1);
     p.wingFold = 0.4 * k;
