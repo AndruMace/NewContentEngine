@@ -26,8 +26,6 @@ import {
   getRender,
   pendingAutoExports,
   insertConcept,
-  insertPredictionOnce,
-  predictionFor,
   insertExport,
   insertRender,
   manualBatchForToday,
@@ -40,8 +38,6 @@ import {
 } from './db';
 import { ALL_MELODY_IDS, chooseMelody, hashSeed, recipeFor, type BatchRunner } from './batch';
 import { getTemplate } from '@sim/templates';
-import { copyPerformance, postFeatures, predictFeatures } from './analytics';
-import { chooseParams } from './taste';
 import { REJECT_REASONS } from '@sim/analytics';
 
 const REASON_IDS = new Set<string>(REJECT_REASONS.map((r) => r.id));
@@ -163,7 +159,7 @@ export class ReviewActions {
     const client = claudeAvailable() ? new Anthropic() : undefined;
     // Same simulation, so the new copy is written for the settings already on screen.
     const keep = () => ({ params: c.concept.params, source: c.concept.paramsSource ?? 'kept' });
-    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams: keep, recentTitles: recentTitles(), performanceSummary: copyPerformance() }, new Rng(Date.now() % 1e9), client);
+    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams: keep, recentTitles: recentTitles() }, new Rng(Date.now() % 1e9), client);
     // Keep the video's comment prompt (or its absence): only the written copy is being replaced.
     const { nudge: _drop, ...fresh } = planned.concept.copy;
     const copy = { ...fresh, ...(c.concept.copy.nudge ? { nudge: c.concept.copy.nudge } : {}) };
@@ -177,7 +173,7 @@ export class ReviewActions {
     const c = r.conceptId ? getConcept(r.conceptId) : undefined;
     if (!c || !r.batchId) throw new Error('This video has no concept to replace');
     const client = claudeAvailable() ? new Anthropic() : undefined;
-    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams, recentTitles: recentTitles(), performanceSummary: copyPerformance() }, new Rng(Date.now() % 1e9), client);
+    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), recentTitles: recentTitles() }, new Rng(Date.now() % 1e9), client);
     if (c.concept.experiment) planned.concept.experiment = c.concept.experiment;
     planned.concept.melodyId = chooseMelody(r.batchId, planned.concept.templateId, new Rng(Date.now() % 1e9));
     const concept = insertConcept(r.batchId, conceptsForBatch(r.batchId).length, planned.concept);
@@ -292,7 +288,6 @@ export class ReviewActions {
             onScreen: { hook: base.hook, cta: base.cta, nudge: base.nudge },
             notes: c?.concept.notes,
             titleEmoji,
-            performance: copyPerformance(),
             recentTitles: recentTitles().filter((t) => t !== base.title),
           },
           base,
@@ -355,10 +350,6 @@ export class ReviewActions {
     await copyFile(join(src, 'final.mp4'), join(dir, 'video.mp4'));
     await copyFile(join(src, 'cover.jpg'), join(dir, 'cover.jpg'));
     await copyFile(join(src, 'events.json'), join(dir, 'events.json')).catch(() => {});
-    const features = predictionFor(id)?.features ?? postFeatures(r);
-    // Frozen at first export: what we knew before any results came in.
-    const pred = predictFeatures(features);
-    insertPredictionOnce({ renderId: id, createdAt: Date.now(), modelVersion: pred?.modelVersion ?? null, mean: pred?.mean ?? null, sd: pred?.sd ?? null, experiment: features.experiment, features });
     await writeUploadFiles(dir, r);
     if (r.decision === 'pending') updateRender(id, { decision: 'approved' });
     return insertExport(id, rel);
@@ -403,8 +394,7 @@ async function writeUploadFiles(dir: string, r: RenderRow) {
   const copy = r.copy ?? emptyCopy();
   const text = platformText(copy);
   for (const p of PLATFORMS) await writeFile(join(dir, `${p}.txt`), text[p] + '\n');
-  const features = predictionFor(r.id)?.features ?? postFeatures(r);
-  await writeFile(join(dir, 'meta.json'), JSON.stringify({ recipe: r.recipe, copy, score: r.score, qc: r.qc, features }, null, 2));
+  await writeFile(join(dir, 'meta.json'), JSON.stringify({ recipe: r.recipe, copy, score: r.score, qc: r.qc }, null, 2));
   const files: Record<string, Uint8Array> = {};
   for (const f of ['video.mp4', 'cover.jpg', ...PLATFORMS.map((p) => `${p}.txt`), 'meta.json']) files[f] = new Uint8Array(await readFile(join(dir, f)));
   // Store only: the MP4 is already compressed.

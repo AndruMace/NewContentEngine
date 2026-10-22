@@ -3,8 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { Rng, searchBudgetOf, type Recipe } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
-import { claudeAvailable, coerceParams, planConcepts, type Concept } from '@sim/planner';
-import { copyFeatures } from '@sim/analytics';
+import { claudeAvailable, coerceParams, flatArmModel, planConcepts, type Concept } from '@sim/planner';
 import {
   activeBatches,
   conceptsForBatch,
@@ -26,9 +25,6 @@ import {
 } from './db';
 import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
-import { refreshYouTube, youtubeStatus } from './youtube';
-import { copyPerformance, lastPostedAt, planningModel, predictInput, refitLearner } from './analytics';
-import { chooseParams, tasteArmPlanningModel, tastePredict } from './taste';
 
 const TERMINAL = new Set(['ready', 'failed', 'cancelled', 'deleted']);
 
@@ -129,16 +125,6 @@ export class BatchRunner extends EventEmitter {
     if (missing <= 0) return;
     this.setStatus(batchId, 'planning');
     const s = batch.settings;
-    // Learn from the latest numbers before planning (fresh batches only; bounded so it never stalls the morning run).
-    if (!existing.length && youtubeStatus().connected) {
-      try {
-        const r = await refreshYouTube({ deadline: Date.now() + 20_000 });
-        refitLearner();
-        if (r.errors.length) this.warn(batchId, `Some YouTube stats didn't refresh: ${r.errors[0]}${r.errors.length > 1 ? ` (+${r.errors.length - 1} more)` : ''}`);
-      } catch (e) {
-        this.warn(batchId, `YouTube stats not refreshed: ${(e as Error).message}`);
-      }
-    }
     let generator: 'claude' | 'fallback' | 'mock' = s.useClaude ? 'claude' : 'fallback';
     if (process.env.SIM_PLANNER === 'mock') generator = 'mock';
     if (generator === 'claude' && !claudeAvailable()) {
@@ -146,10 +132,6 @@ export class BatchRunner extends EventEmitter {
       this.warn(batchId, 'No Anthropic API key found (ANTHROPIC_API_KEY in .env), so concepts use template copy.');
     }
     let idx = existing.length;
-    // YouTube results steer once enough posts have matured; until then, the taste model learned
-    // from Review decisions does (templates judged by their best settings, not the batch average).
-    const youtube = planningModel();
-    const model = youtube.ready ? youtube : (tasteArmPlanningModel() ?? youtube);
     await planConcepts(
       {
         count: missing,
@@ -157,16 +139,15 @@ export class BatchRunner extends EventEmitter {
         themeIds: s.themeIds,
         minLengthS: s.minLengthS,
         maxLengthS: s.maxLengthS,
-        lastPostedAt: lastPostedAt(),
         generator,
         seed: hashSeed(batchId) + existing.length,
       },
-      model,
-      { recentHooks: recentHooks(), notes: s.notes || undefined, chooseParams, recentNudges: recentNudges(), recentTitles: recentTitles(), performanceSummary: copyPerformance() },
+      flatArmModel,
+      { recentHooks: recentHooks(), notes: s.notes || undefined, recentNudges: recentNudges(), recentTitles: recentTitles() },
       (planned) => {
         if (this.cancelled.has(batchId)) return;
         const concept = planned.concept;
-        // Melodies are assigned for variety (never learned): no repeats within the batch.
+        // Melodies are assigned for variety: no repeats within the batch.
         concept.melodyId = chooseMelody(batchId, concept.templateId, new Rng(hashSeed(batchId) + idx * 7919));
         insertConcept(batchId, idx++, concept);
         if (planned.warning) this.warn(batchId, planned.warning);
@@ -204,12 +185,6 @@ export class BatchRunner extends EventEmitter {
       } else concept = c.concept;
     }
     const best = results[0];
-    // Rank by what the learner expects of this exact candidate (its real length, drama and copy);
-    // until the model is steering, by drama score alone.
-    const input = { arm: concept.arm, melodyId: concept.melodyId, durationS: best.durationS, drama: best.total, copy: copyFeatures(concept.copy) };
-    const prediction = predictInput(input);
-    // Without YouTube data yet, rank by fit to taste (settings included), with drama as a tiebreak.
-    const taste = prediction ? null : tastePredict({ ...input, params: concept.params });
     const row = insertRender({
       batchId,
       conceptId: c.id,
@@ -219,8 +194,7 @@ export class BatchRunner extends EventEmitter {
       score: best.total,
       scoreParts: best.parts ?? null,
       altSeeds: results.slice(1, 8).filter((r) => !r.timedOut).map((r) => r.seed),
-      rankScore: prediction ? prediction.mean : taste ? taste.mean + 0.3 * best.total : best.total,
-      prediction,
+      rankScore: best.total,
     });
     // Cancelled while this search was running: keep the result for reference, don't render it.
     if (this.cancelled.has(batchId)) updateRender(row.id, { status: 'cancelled' });
