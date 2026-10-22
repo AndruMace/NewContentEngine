@@ -7,7 +7,7 @@ data/exports/
 *.log
 .DS_Store
 data/sqlite.db*
-data/youtube-token.json
+data/backups/
 data/ambient-sources/
 
 # Narration: the Kokoro model and voiced lines (regenerated on demand)

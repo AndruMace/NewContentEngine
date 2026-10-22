@@ -194,7 +194,7 @@ app.put<{ Params: { id: string }; Body: { platform: Platform; url: string } }>('
     if (platform === 'youtube' && !externalId) return reply.code(400).send({ error: "That doesn't look like a YouTube video link" });
     const other = externalId ? postByExternalId(platform, externalId) : undefined;
     if (other && other.renderId !== req.params.id) return reply.code(409).send({ error: 'That post is already linked to another video' });
-    upsertPost({ renderId: req.params.id, platform, url: url.trim(), postedAt: Date.now(), externalId, linkedBy: 'paste' });
+    upsertPost({ renderId: req.params.id, platform, url: url.trim(), postedAt: Date.now(), externalId });
   } else deletePost(req.params.id, platform);
   const r = getRender(req.params.id)!;
   changed(r);

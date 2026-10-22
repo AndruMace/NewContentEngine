@@ -5,8 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Recipe } from '@sim/engine';
 import type { Concept, SocialCopy } from '@sim/planner';
 import { ROOT, type QcReport } from '@sim/render';
-import type { PostFeatures } from '@sim/analytics';
-import { LONG_FORM_TEMPLATES, canonicalTemplateId } from '@sim/templates';
+import { canonicalTemplateId } from '@sim/templates';
 
 /** SIM_DATA_DIR points the database (and tokens) elsewhere, e.g. for tests. */
 export const DATA_DIR = process.env.SIM_DATA_DIR ?? join(ROOT, 'data');
@@ -91,8 +90,6 @@ export interface RenderRow {
   renderMs: number | null;
   decision: Decision;
   supersededBy: string | null;
-  /** Learner's expected reward when the candidate was ranked (null before the model is ready). */
-  prediction: { mean: number; sd: number; modelVersion: number } | null;
   /** Reject reasons chosen in Review (see REJECT_REASONS). */
   reasons: string[];
   note: string | null;
@@ -118,11 +115,6 @@ export interface PostRow {
   postedAt: number;
   /** Platform's id for the post (YouTube video id), when known. */
   externalId?: string | null;
-  /** When the platform says it went live (more accurate than postedAt). */
-  publishedAt?: number | null;
-  linkedBy?: 'paste' | 'auto';
-  /** Numbers typed in by hand, e.g. YouTube Studio's "Stayed to watch" %. */
-  manual?: Record<string, number>;
 }
 
 export const db = new DatabaseSync(join(DATA_DIR, 'sqlite.db'));
@@ -180,6 +172,17 @@ const MIGRATIONS = [
      copy TEXT, copy_status TEXT NOT NULL DEFAULT 'none', copy_error TEXT,
      started_at INTEGER, finished_at INTEGER);
    CREATE INDEX longform_status ON longform_jobs(status);`,
+  // Learner and analytics removed: their tables, columns and saved state.
+  `DROP TABLE metric_snapshots;
+   DROP TABLE retention_curves;
+   DROP TABLE predictions;
+   DROP TABLE insights;
+   DROP TABLE arms;
+   ALTER TABLE renders DROP COLUMN prediction;
+   ALTER TABLE posts DROP COLUMN published_at;
+   ALTER TABLE posts DROP COLUMN linked_by;
+   ALTER TABLE posts DROP COLUMN manual;
+   DELETE FROM kv WHERE key IN ('learner', 'analytics_settings', 'youtube_ignored', 'youtube_unlinked', 'youtube_last_refresh');`,
 ];
 
 {
@@ -310,19 +313,18 @@ const toRender = (r: any): RenderRow => ({
   renderMs: r.render_ms,
   decision: r.decision,
   supersededBy: r.superseded_by,
-  prediction: json(r.prediction, null),
   reasons: json(r.reasons, []),
   note: r.note ?? null,
   autoExport: Boolean(r.auto_export),
 });
 
 export function insertRender(
-  r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind' | 'recipe' | 'copy' | 'score' | 'scoreParts' | 'altSeeds' | 'rankScore'> & Partial<Pick<RenderRow, 'prediction' | 'decision' | 'autoExport'>>,
+  r: Pick<RenderRow, 'batchId' | 'conceptId' | 'kind' | 'recipe' | 'copy' | 'score' | 'scoreParts' | 'altSeeds' | 'rankScore'> & Partial<Pick<RenderRow, 'decision' | 'autoExport'>>,
 ): RenderRow {
   const id = newId();
   db.prepare(
-    `INSERT INTO renders (id, batch_id, concept_id, kind, recipe, copy, score, score_parts, alt_seeds, status, rank_score, created_at, prediction, decision, auto_export)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+    `INSERT INTO renders (id, batch_id, concept_id, kind, recipe, copy, score, score_parts, alt_seeds, status, rank_score, created_at, decision, auto_export)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
   ).run(
     id,
     r.batchId,
@@ -335,7 +337,6 @@ export function insertRender(
     JSON.stringify(r.altSeeds),
     r.rankScore,
     Date.now(),
-    r.prediction ? JSON.stringify(r.prediction) : null,
     r.decision ?? 'pending',
     r.autoExport ? 1 : 0,
   );
@@ -345,22 +346,6 @@ export function insertRender(
 export function getRender(id: string): RenderRow | undefined {
   const r = db.prepare('SELECT * FROM renders WHERE id = ?').get(id);
   return r ? toRender(r) : undefined;
-}
-
-/** Changes whenever a decision, reason, reroll or new render could change what the taste model learns. */
-export function tasteFingerprint(): string {
-  const r = db
-    .prepare("SELECT COUNT(*) AS n, group_concat(id || decision || reasons || coalesce(superseded_by, ''), ',') AS f FROM renders WHERE status IN ('ready', 'deleted')")
-    .get() as { n: number; f: string | null };
-  let h = 2166136261;
-  const f = r.f ?? '';
-  for (let i = 0; i < f.length; i++) h = Math.imul(h ^ f.charCodeAt(i), 16777619) >>> 0;
-  return `${r.n}:${h}`;
-}
-
-/** Every render that can teach the taste model: reviewed batch candidates plus playground work. */
-export function reviewableRenders(): RenderRow[] {
-  return db.prepare("SELECT * FROM renders WHERE status IN ('ready', 'deleted') ORDER BY created_at").all().map(toRender);
 }
 
 export function rendersForBatch(batchId: string): RenderRow[] {
@@ -382,10 +367,10 @@ export function nextQueuedRender(): RenderRow | undefined {
 const RENDER_COLS: Record<string, string> = {
   recipe: 'recipe', copy: 'copy', score: 'score', scoreParts: 'score_parts', altSeeds: 'alt_seeds', status: 'status', stage: 'stage',
   progress: 'progress', dir: 'dir', qc: 'qc', durationS: 'duration_s', rankScore: 'rank_score', error: 'error', startedAt: 'started_at',
-  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', prediction: 'prediction', reasons: 'reasons', note: 'note',
+  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', reasons: 'reasons', note: 'note',
   autoExport: 'auto_export',
 };
-const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc', 'prediction', 'reasons']);
+const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc', 'reasons']);
 
 export function updateRender(id: string, patch: Partial<RenderRow>) {
   const cols: string[] = [];
@@ -470,22 +455,13 @@ const toPost = (r: any): PostRow => ({
   url: r.url,
   postedAt: r.posted_at,
   externalId: r.external_id,
-  publishedAt: r.published_at,
-  linkedBy: r.linked_by,
-  manual: json(r.manual, {}),
 });
 
 export function upsertPost(p: PostRow) {
   db.prepare(
-    `INSERT INTO posts (render_id, platform, url, posted_at, external_id, published_at, linked_by) VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(render_id, platform) DO UPDATE SET url = excluded.url, posted_at = excluded.posted_at,
-       external_id = excluded.external_id, published_at = COALESCE(excluded.published_at, posts.published_at), linked_by = excluded.linked_by`,
-  ).run(p.renderId, p.platform, p.url, p.postedAt, p.externalId ?? null, p.publishedAt ?? null, p.linkedBy ?? 'paste');
-}
-
-export function updatePostMeta(renderId: string, platform: Platform, patch: { publishedAt?: number; manual?: Record<string, number> }) {
-  if (patch.publishedAt !== undefined) db.prepare('UPDATE posts SET published_at = ? WHERE render_id = ? AND platform = ?').run(patch.publishedAt, renderId, platform);
-  if (patch.manual !== undefined) db.prepare('UPDATE posts SET manual = ? WHERE render_id = ? AND platform = ?').run(JSON.stringify(patch.manual), renderId, platform);
+    `INSERT INTO posts (render_id, platform, url, posted_at, external_id) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(render_id, platform) DO UPDATE SET url = excluded.url, posted_at = excluded.posted_at, external_id = excluded.external_id`,
+  ).run(p.renderId, p.platform, p.url, p.postedAt, p.externalId ?? null);
 }
 
 export function deletePost(renderId: string, platform: string) {
@@ -496,110 +472,7 @@ export function postsForRender(renderId: string): PostRow[] {
   return db.prepare('SELECT * FROM posts WHERE render_id = ?').all(renderId).map(toPost);
 }
 
-/** Posts of Shorts. Long-form ambient videos share the channel but are ignored by analytics entirely. */
-export function allPosts(platform?: Platform): PostRow[] {
-  const longForm = LONG_FORM_TEMPLATES.map((t) => t.id);
-  const notLongForm = `p.render_id NOT IN (SELECT id FROM renders WHERE json_extract(recipe, '$.templateId') IN (${longForm.map(() => '?').join(',') || "''"}))`;
-  const rows = platform
-    ? db.prepare(`SELECT p.* FROM posts p WHERE p.platform = ? AND ${notLongForm} ORDER BY p.posted_at`).all(platform, ...longForm)
-    : db.prepare(`SELECT p.* FROM posts p WHERE ${notLongForm} ORDER BY p.posted_at`).all(...longForm);
-  return rows.map(toPost);
-}
-
 export function postByExternalId(platform: Platform, externalId: string): PostRow | undefined {
   const r = db.prepare('SELECT * FROM posts WHERE platform = ? AND external_id = ?').get(platform, externalId);
   return r ? toPost(r) : undefined;
 }
-
-// ---- analytics -----------------------------------------------------------------------------
-
-export interface SnapshotRow {
-  renderId: string;
-  platform: Platform;
-  fetchedAt: number;
-  ageH: number;
-  source: 'youtube' | 'manual' | 'csv';
-  metrics: Record<string, number>;
-}
-
-export function insertSnapshot(s: SnapshotRow) {
-  db.prepare('INSERT INTO metric_snapshots (render_id, platform, fetched_at, age_h, source, metrics) VALUES (?, ?, ?, ?, ?, ?)').run(
-    s.renderId,
-    s.platform,
-    s.fetchedAt,
-    s.ageH,
-    s.source,
-    JSON.stringify(s.metrics),
-  );
-}
-
-export function snapshotsFor(renderId: string, platform: Platform): SnapshotRow[] {
-  return db
-    .prepare('SELECT * FROM metric_snapshots WHERE render_id = ? AND platform = ? ORDER BY fetched_at')
-    .all(renderId, platform)
-    .map((r: any) => ({ renderId: r.render_id, platform: r.platform, fetchedAt: r.fetched_at, ageH: r.age_h, source: r.source, metrics: json(r.metrics, {}) }));
-}
-
-export interface RetentionRow {
-  renderId: string;
-  platform: Platform;
-  fetchedAt: number;
-  ageH: number;
-  /** elapsed ratio 0..1, audienceWatchRatio, relativeRetentionPerformance */
-  points: { t: number; watch: number; relative: number | null }[];
-}
-
-export function upsertRetention(r: RetentionRow) {
-  db.prepare(
-    `INSERT INTO retention_curves (render_id, platform, fetched_at, age_h, points) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(render_id, platform) DO UPDATE SET fetched_at = excluded.fetched_at, age_h = excluded.age_h, points = excluded.points`,
-  ).run(r.renderId, r.platform, r.fetchedAt, r.ageH, JSON.stringify(r.points));
-}
-
-export function retentionFor(renderId: string, platform: Platform): RetentionRow | undefined {
-  const r = db.prepare('SELECT * FROM retention_curves WHERE render_id = ? AND platform = ?').get(renderId, platform) as any;
-  return r ? { renderId: r.render_id, platform: r.platform, fetchedAt: r.fetched_at, ageH: r.age_h, points: json(r.points, []) } : undefined;
-}
-
-export interface PredictionRow {
-  renderId: string;
-  createdAt: number;
-  modelVersion: number | null;
-  mean: number | null;
-  sd: number | null;
-  experiment: boolean;
-  features: PostFeatures;
-}
-
-/** Written once, at first export: what the model expected before any results existed. */
-export function insertPredictionOnce(p: PredictionRow) {
-  db.prepare('INSERT OR IGNORE INTO predictions (render_id, created_at, model_version, mean, sd, experiment, features) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-    p.renderId,
-    p.createdAt,
-    p.modelVersion,
-    p.mean,
-    p.sd,
-    p.experiment ? 1 : 0,
-    JSON.stringify(p.features),
-  );
-}
-
-const toPrediction = (r: any): PredictionRow => ({
-  renderId: r.render_id,
-  createdAt: r.created_at,
-  modelVersion: r.model_version,
-  mean: r.mean,
-  sd: r.sd,
-  experiment: Boolean(r.experiment),
-  features: json(r.features, null as unknown as PostFeatures),
-});
-
-export function predictionFor(renderId: string): PredictionRow | undefined {
-  const r = db.prepare('SELECT * FROM predictions WHERE render_id = ?').get(renderId);
-  return r ? toPrediction(r) : undefined;
-}
-
-export function allPredictions(): PredictionRow[] {
-  return db.prepare('SELECT * FROM predictions ORDER BY created_at').all().map(toPrediction);
-}
-
