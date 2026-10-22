@@ -205,6 +205,7 @@ export const api = {
   exportBundle: (id: string) => call<ReviewItem>('POST', `/api/review/${id}/export`),
   setPost: (id: string, platform: string, url: string) => call<ReviewItem>('PUT', `/api/review/${id}/posts`, { platform, url }),
   addManual: (recipe: Recipe) => call<ReviewItem>('POST', '/api/manual', { recipe }),
+  prepareNarration: (recipe: Recipe, force = false) => call<{ voice: Recipe['voice'] | null; warnings: string[] }>('POST', '/api/narration/prepare', { recipe, force }),
   startUpload: (recipe: Recipe, notes: string) => call<ReviewItem>('POST', '/api/uploads', { recipe, notes }),
   item: (id: string) => call<ReviewItem>('GET', `/api/review/${id}`),
   regenerateCopy: (id: string, target: CopyTarget | 'all', notes: string) => call<ReviewItem>('POST', `/api/review/${id}/copy/regenerate`, { target, notes }),

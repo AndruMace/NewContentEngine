@@ -30,7 +30,7 @@ export function searchSeeds(recipe: Recipe, opts: { count: number; targetS: numb
 /** Re-simulate one recipe headlessly and score it (deterministic, so this matches the rendered video). */
 export function scoreRecipe(recipe: Recipe, targetS: number): { total: number; parts: Record<string, number>; durationS: number; timedOut: boolean } {
   const template = getTemplate(recipe.templateId);
-  const r = new Runner(template, { seed: recipe.seed, params: recipe.params, theme: getTheme(recipe.themeId), melody: getMelody(recipe.melodyId), visual: false }).runToEnd();
+  const r = new Runner(template, { seed: recipe.seed, params: recipe.params, theme: getTheme(recipe.themeId), melody: getMelody(recipe.melodyId), visual: false, voice: recipe.voice }).runToEnd();
   const score = r.score(targetS);
   return { total: score.total, parts: score.parts, durationS: r.durationS, timedOut: r.timedOut };
 }

@@ -9,7 +9,7 @@ import { api, exportFileUrl, previewVideoRef, uploadPageHash, type ReviewItem, t
 const SOURCE_LABEL: Record<string, string> = { claude: 'Claude', fallback: 'Template defaults', mock: 'Mock (dry run)', manual: 'You (Playground)' };
 const HOOK_STYLE_LABEL: Record<string, string> = { question: 'Question', challenge: 'Challenge', 'pick-a-side': 'Pick a side', curiosity: 'Curiosity' };
 const PLATFORM_LABEL = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram', x: 'X' } as const;
-const STAGE_LABEL: Record<string, string> = { frames: 'Rendering frames', audio: 'Rendering audio', mastering: 'Mastering', qc: 'Quality checks' };
+const STAGE_LABEL: Record<string, string> = { voice: 'Voicing narration', frames: 'Rendering frames', audio: 'Rendering audio', mastering: 'Mastering', qc: 'Quality checks' };
 
 export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);

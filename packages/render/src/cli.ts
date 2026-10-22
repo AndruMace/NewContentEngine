@@ -19,6 +19,13 @@ import { loopLengthOf, type Recipe } from '@sim/engine';
 import { getTemplate } from '@sim/templates';
 import { RENDERS_DIR, ROOT, readRecipe, renderLongForm, renderLongFormStills, renderRecipe, searchSeeds } from './index';
 
+// Load .env (ANTHROPIC_API_KEY for narration lines), as the server does.
+try {
+  process.loadEnvFile(join(ROOT, '.env'));
+} catch {
+  /* no .env */
+}
+
 /** "90s", "30m", "2.5h" or plain seconds. */
 function parseDuration(s: string): number {
   const m = /^(\d+(?:\.\d+)?)\s*(s|m|h)?$/.exec(s.trim());
@@ -142,8 +149,13 @@ async function main() {
         process.stdout.write(`  ${last}%`);
       }
     },
+    onWarning: (m) => console.warn(`Warning: ${m}`),
   });
   process.stdout.write('\n');
+  if (out.recipe.voice) {
+    console.log(`Narration (${out.recipe.voice.writer}, ${out.recipe.voice.provider}/${out.recipe.voice.voiceId}):`);
+    for (const l of out.recipe.voice.lines) console.log(`  ${l.beat.padEnd(8)} ${l.durationS.toFixed(2)}s  ${l.caption}`);
+  }
   const t = out.timings;
   console.log(`Codec ${out.codec} · ${out.durationS.toFixed(2)}s · drama ${(out.score.total * 100).toFixed(0)}`);
   console.log(

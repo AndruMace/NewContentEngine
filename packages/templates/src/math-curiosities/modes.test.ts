@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Rng, Runner, getTheme, hashString, paramsJsonSchema, searchBudgetOf } from '@sim/engine';
+import { Rng, Runner, getTheme, hashString, paramsJsonSchema, searchBudgetOf, type VoiceTrack } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { MODES, mathCuriosities } from './index';
 import { collatzSequence } from './modes/collatz';
@@ -141,5 +141,67 @@ describe('math curiosities: settings and the rename', () => {
     expect(props.mode.modes).toBeUndefined();
     expect(searchBudgetOf(mathCuriosities, {})).toBe(4);
     expect(searchBudgetOf(mathCuriosities, { mode: 'monty-hall' })).toBe(60);
+  });
+});
+
+describe('math curiosities: narration', () => {
+  /** A voice track with given line lengths for every beat the template asks for. */
+  function voiceFor(params: Record<string, unknown>, seconds: number): VoiceTrack {
+    const p = mathCuriosities.schema.parse(params);
+    const events = run(params).events;
+    const beats = mathCuriosities.narration!.beats(p, events);
+    return {
+      provider: 'test',
+      voiceId: 'v',
+      factsHash: 'x',
+      writer: 'fallback',
+      lines: beats.map((b) => ({ beat: b.id, text: b.id, caption: `${b.id} line`, clip: `${b.id}.wav`, durationS: seconds })),
+    };
+  }
+  const runVoiced = (params: Record<string, unknown>, voice?: VoiceTrack, seed = 4, visual = false) =>
+    new Runner(mathCuriosities, { seed, theme, melody, visual, params, voice, maxSeconds: 90 }).runToEnd();
+
+  it('leaves narrated modes unchanged with narration off, and only voices collatz and times-table', () => {
+    for (const mode of TIMED) {
+      expect(hash(run({ mode, narration: 'off' }))).toBe(hash(run({ mode })));
+      expect(mathCuriosities.narration!.enabled(mathCuriosities.schema.parse({ mode, narration: 'on' }))).toBe(mode === 'collatz' || mode === 'times-table');
+    }
+  });
+
+  it('lays out beats with this run’s facts', () => {
+    const collatz = { mode: 'collatz', narration: 'on', start: 27 };
+    const beats = mathCuriosities.narration!.beats(mathCuriosities.schema.parse(collatz), run(collatz).events);
+    expect(beats.map((b) => b.id)).toEqual(['intro', 'step1', 'repeat', 'reveal']);
+    expect(beats[0].facts).toEqual({ n: 27 });
+    expect(beats[1].facts).toEqual({ prev: 27, value: 82 });
+    expect(beats[3].facts).toEqual({ steps: 111, peak: 9232 });
+    const long = { ...collatz, durationS: 40 };
+    expect(mathCuriosities.narration!.beats(mathCuriosities.schema.parse(long), run(long).events).map((b) => b.id)).toContain('step2');
+    const tt = { mode: 'times-table', narration: 'on' };
+    const ttBeats = mathCuriosities.narration!.beats(mathCuriosities.schema.parse(tt), run(tt).events);
+    expect(ttBeats.map((b) => b.id)).toEqual(['intro', 'demo0', 'demo1', 'wrap', 'fill', 'sweep', 'reveal']);
+    expect(ttBeats.find((b) => b.id === 'wrap')!.facts).toEqual({ k: 130, product: 260, last: 199, landed: 60 });
+  });
+
+  it.each(['collatz', 'times-table'])('%s waits for every line, speaks it once, and still ends on time', (mode) => {
+    const params = { mode, narration: 'on', durationS: 40 };
+    for (const seconds of [1, 3.5]) {
+      const voice = voiceFor(params, seconds);
+      const r = runVoiced(params, voice);
+      expect(r.timedOut).toBe(false);
+      expect(Math.abs(r.durationS - 40)).toBeLessThan(0.05);
+      const says = r.events.filter((e) => e.type === `${mode}:say`);
+      expect(says.map((e) => e.beat)).toEqual(voice.lines.map((l) => l.beat));
+      // Lines never overlap: each starts after the one before has finished.
+      for (let i = 1; i < says.length; i++) expect(says[i].t).toBeGreaterThanOrEqual(says[i - 1].t + seconds - 1e-9);
+      expect(r.audio.filter((a) => a.kind === 'voice')).toHaveLength(voice.lines.length);
+      expect(hash(runVoiced(params, voice, 4, true))).toBe(hash(r));
+    }
+  });
+
+  it('runs silently on estimated timing before the lines are voiced', () => {
+    const r = runVoiced({ mode: 'collatz', narration: 'on' });
+    expect(r.events.some((e) => e.type === 'collatz:say')).toBe(false);
+    expect(r.timedOut).toBe(false);
   });
 });

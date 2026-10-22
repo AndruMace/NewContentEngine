@@ -30,12 +30,69 @@ export type AudioEvent =
   | { t: number; kind: 'note'; midi: number; vel: number; voice?: VoiceId; dur?: number; pan?: number }
   | { t: number; kind: 'sfx'; name: SfxId; vel: number; pitch?: number; pan?: number }
   /** A recorded sound from assets/ambient (e.g. 'audio/thunder-close-1.opus'), at a playback rate. */
-  | { t: number; kind: 'sample'; name: string; vel: number; rate?: number; pan?: number };
+  | { t: number; kind: 'sample'; name: string; vel: number; rate?: number; pan?: number }
+  /** A narrated line (a clip in the voice cache): plays on its own path and ducks everything else. */
+  | { t: number; kind: 'voice'; clip: string; vel: number };
 
 export type AudioEventInput =
   | Omit<Extract<AudioEvent, { kind: 'note' }>, 't'>
   | Omit<Extract<AudioEvent, { kind: 'sfx' }>, 't'>
-  | Omit<Extract<AudioEvent, { kind: 'sample' }>, 't'>;
+  | Omit<Extract<AudioEvent, { kind: 'sample' }>, 't'>
+  | Omit<Extract<AudioEvent, { kind: 'voice' }>, 't'>;
+
+/** One voiced line of a narration: what is said, the clip that says it and how long it runs. */
+export interface NarrationLine {
+  beat: string;
+  /** What is spoken (numbers as words). */
+  text: string;
+  /** The same line for the screen (numbers as digits). */
+  caption: string;
+  /** File name in the voice cache (data/voice-cache). */
+  clip: string;
+  durationS: number;
+}
+
+/** A video's narration, made before it renders (see @sim/voice). */
+export interface VoiceTrack {
+  provider: string;
+  voiceId: string;
+  /** Hash of the beats' facts: a different seed or settings means the lines must be rewritten. */
+  factsHash: string;
+  /** Who wrote the lines. */
+  writer: 'claude' | 'fallback';
+  lines: NarrationLine[];
+}
+
+/**
+ * A moment the narration speaks to. Lines are written with {placeholders} for every number, filled
+ * in afterwards (spelled out), so whoever writes them can't get a fact wrong.
+ */
+export interface NarrationBeat {
+  id: string;
+  /** What the moment shows, for the writer. */
+  about: string;
+  /** Placeholder values, e.g. { n: 703, value: 2110 }. Numbers are spoken as words. */
+  facts: Record<string, string | number>;
+  /** Placeholders the line must use. */
+  required: string[];
+  maxWords: number;
+  /** Hand-written lines (with placeholders), for when no model writes them. */
+  fallback: string[];
+}
+
+/** A template that can be narrated. */
+export interface NarrationSpec<P> {
+  enabled(params: P): boolean;
+  /** Voice id for the provider (e.g. Kokoro's 'af_heart'). */
+  voice(params: P): string;
+  /** Tone and audience for the writer. */
+  style: string;
+  /**
+   * This run's beats, from the event log of a headless run (facts are seed-dependent; timing isn't
+   * needed, so a run with estimated line lengths gives the same facts as the final one).
+   */
+  beats(params: P, events: SimEvent[]): NarrationBeat[];
+}
 
 /**
  * A recording that plays continuously under a long-form video (rain, fire, a ship's room tone). Its
@@ -80,6 +137,8 @@ export interface InitCtx<P> {
   theme: Theme;
   /** The video's melody (already transposed), for templates whose run is built from it. */
   melody: Melody;
+  /** Narrated lines by beat id, when the video has a prepared voice (empty otherwise: estimate). */
+  narration: Record<string, NarrationLine>;
 }
 
 export interface StepCtx {
@@ -221,6 +280,8 @@ export interface Template<P = any, S = any> {
   lengthParam?: { param: string; offsetS: number };
   /** Copy with {paramName} / {hud:key} placeholders. */
   defaultCopy: Copy;
+  /** Set when the template can be narrated (lines written and voiced before rendering). */
+  narration?: NarrationSpec<P>;
   /**
    * Load files the template draws or plays (textures, models, recordings) before the first frame.
    * Browser only; never called for headless runs, so it can't affect the simulation.

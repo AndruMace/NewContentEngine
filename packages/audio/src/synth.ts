@@ -14,9 +14,18 @@ export interface SynthBus {
   t0: number;
   /** Long-form loop length: noise offsets repeat with it, so the loop's end flows into its start. 0 = none. */
   loopS: number;
-  /** Decoded recordings for 'sample' events, by path in assets/ambient. */
+  /** Decoded recordings for 'sample' events (by path in assets/ambient) and narration clips (by clip name). */
   samples: Map<string, AudioBuffer>;
+  /** Everything but the narration passes through here, so it can dip under a voice. */
+  music: GainNode;
+  /** Narration: straight to the master, past the hard compressor (speech shouldn't be pumped). */
+  voice: GainNode;
+  /** Preview: a narration clip that failed to load is skipped (renders treat it as an error). */
+  lenient: boolean;
 }
+
+/** How far the music dips under a narrated line (about −8 dB), and how quickly. */
+const DUCK = { level: 0.4, fall: 0.08, rise: 0.25 };
 
 /** Where in the shared noise buffer a sound starting at context time `when` reads from (same in every segment). */
 function noiseOffset(bus: SynthBus, when: number) {
@@ -47,7 +56,7 @@ function seededNoise(ctx: BaseAudioContext, seconds: number, channels: number, d
 
 export function createBus(
   ctx: BaseAudioContext,
-  opts: { reverb: number; destination?: AudioNode; t0?: number; loopS?: number; samples?: Map<string, AudioBuffer>; compress?: boolean },
+  opts: { reverb: number; destination?: AudioNode; t0?: number; loopS?: number; samples?: Map<string, AudioBuffer>; compress?: boolean; lenient?: boolean },
 ): SynthBus {
   const master = ctx.createGain();
   master.gain.value = 0.9;
@@ -66,16 +75,41 @@ export function createBus(
     comp = c;
   }
 
+  const music = ctx.createGain();
+  music.connect(comp);
   const input = ctx.createGain();
-  input.connect(comp);
+  input.connect(music);
   if (opts.reverb > 0) {
     const verb = ctx.createConvolver();
     verb.buffer = seededNoise(ctx, 2.4, 2, 3.2);
     const wet = ctx.createGain();
     wet.gain.value = opts.reverb;
-    input.connect(verb).connect(wet).connect(comp);
+    input.connect(verb).connect(wet).connect(music);
   }
-  return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map(), t0: opts.t0 ?? 0, loopS: opts.loopS ?? 0, samples: opts.samples ?? new Map() };
+  const voice = ctx.createGain();
+  voice.connect(master);
+  return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map(), t0: opts.t0 ?? 0, loopS: opts.loopS ?? 0, samples: opts.samples ?? new Map(), music, voice, lenient: opts.lenient ?? false };
+}
+
+/** Play a narrated line at `when`, dipping the music under it (lines never overlap). */
+function playLine(bus: SynthBus, clip: string, vel: number, when: number) {
+  const buffer = bus.samples.get(clip);
+  if (!buffer) {
+    if (bus.lenient) return;
+    throw new Error(`Narration clip not loaded: ${clip}`);
+  }
+  const src = bus.ctx.createBufferSource();
+  src.buffer = buffer;
+  const g = bus.ctx.createGain();
+  g.gain.value = vel;
+  src.connect(g).connect(bus.voice);
+  src.start(when);
+  const gain = bus.music.gain;
+  const end = when + buffer.duration;
+  gain.setValueAtTime(1, Math.max(0, when - DUCK.fall));
+  gain.linearRampToValueAtTime(DUCK.level, when);
+  gain.setValueAtTime(DUCK.level, end);
+  gain.linearRampToValueAtTime(1, end + DUCK.rise);
 }
 
 function out(bus: SynthBus, pan = 0): AudioNode {
@@ -316,6 +350,10 @@ function vocal(
 }
 
 export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
+  if (ev.kind === 'voice') {
+    playLine(bus, ev.clip, ev.vel, when);
+    return;
+  }
   const dest = out(bus, ev.pan ?? 0);
   if (ev.kind === 'note') {
     playVoice(bus, ev.voice ?? 'marimba', ev.midi, ev.vel, when, ev.dur ?? 1, dest);
@@ -755,11 +793,11 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
 export async function renderAudio(
   events: AudioEvent[],
   durationS: number,
-  opts: { reverb: number; sampleRate?: number },
+  opts: { reverb: number; sampleRate?: number; samples?: Map<string, AudioBuffer> },
 ): Promise<AudioBuffer> {
   const sr = opts.sampleRate ?? 48000;
   const ctx = new OfflineAudioContext(2, Math.ceil(durationS * sr), sr);
-  const bus = createBus(ctx, { reverb: opts.reverb });
+  const bus = createBus(ctx, { reverb: opts.reverb, samples: opts.samples });
   for (const ev of events) if (ev.t < durationS) scheduleEvent(bus, ev, ev.t);
   return ctx.startRendering();
 }

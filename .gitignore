@@ -9,3 +9,7 @@ data/exports/
 data/sqlite.db*
 data/youtube-token.json
 data/ambient-sources/
+
+# Narration: the Kokoro model and voiced lines (regenerated on demand)
+data/models/
+data/voice-cache/

@@ -1,4 +1,4 @@
-import { FONT_FAMILY, type AudioEventInput, type AudioMapCtx, type Ctx2D, type DramaScore, type InitCtx, type LeaderboardRow, type RenderCtx, type SimEvent, type StepCtx, type Theme } from '@sim/engine';
+import { FONT_FAMILY, type AudioEventInput, type AudioMapCtx, type Ctx2D, type DramaScore, type InitCtx, type LeaderboardRow, type NarrationBeat, type RenderCtx, type SimEvent, type StepCtx, type Theme } from '@sim/engine';
 import type { MathParams, ModeId } from './params';
 
 export interface ScoreInfo {
@@ -21,6 +21,8 @@ export interface ModeImpl<S = any> {
   /** Only sees this mode's events (see `modeOfEvent`). */
   audio(e: SimEvent, m: AudioMapCtx): AudioEventInput[];
   score(events: SimEvent[], info: ScoreInfo): DramaScore;
+  /** Modes with a voiceover: this run's beats (facts read from its events). See speech.ts. */
+  beats?(p: MathParams, events: SimEvent[]): NarrationBeat[];
 }
 
 /**

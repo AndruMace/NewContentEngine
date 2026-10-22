@@ -1,8 +1,9 @@
-import { paletteAt, rgbToCss, type Ctx2D, type Theme } from '@sim/engine';
+import { paletteAt, rgbToCss, type Ctx2D, type NarrationBeat, type Theme } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { scaleNote } from '../../music';
 import { gaussFit } from '../../scoring';
 import type { MathParams } from '../params';
+import { drawSpoken, fireSays, lineLength, newSpeech, sayAudio, speaking, spokenProgress, type BeatDef, type Speech } from '../speech';
 import { OUTRO_DELAY_S, REVEAL_S, caption, clamp01, drawModeTitle, ev, evName, outlined, popIn, smooth, type ModeImpl } from '../shared';
 
 /**
@@ -48,6 +49,7 @@ interface State {
   revealAt: number;
   started: boolean;
   revealed: boolean;
+  speech: Speech;
   /** Palette offset for the chord colours. */
   hue: number;
   t: number;
@@ -64,6 +66,67 @@ const HOLD_S = 0.75;
  */
 const DEMO_AT = [0.05, 0.15, 0.3, 0.65];
 const DEMO_DRAW_S = 0.45;
+
+/** Voiceover beats (see speech.ts). The third worked example goes by silently. */
+const BEAT: Record<string, BeatDef> = {
+  intro: {
+    about: '{points} points are spaced evenly round a circle and numbered from zero to {last}.',
+    required: ['points'],
+    maxWords: 15,
+    fallback: ['Here are {points} points round a circle, numbered zero to {last}.', 'Take {points} points round a circle, numbered from zero.'],
+  },
+  demo0: {
+    about: 'The rule: join every point to the point at double its number. The first example draws a line from {k} to {product}.',
+    required: ['k', 'product'],
+    maxWords: 13,
+    fallback: ['Join each number to its double. {k} goes to {product}.', 'Now double every number. {k} connects to {product}.'],
+  },
+  demo1: {
+    about: 'A second example of the same rule: {k} connects to {product}.',
+    required: ['k', 'product'],
+    maxWords: 8,
+    fallback: ['{k} goes to {product}.', '{k} connects to {product}.'],
+  },
+  wrap: {
+    about: 'Doubling {k} gives {product}, which is past the last point {last}, so it keeps counting round the circle and lands on {landed}.',
+    required: ['k', 'product', 'landed'],
+    maxWords: 22,
+    fallback: ["{k} doubles to {product}. That's past {last}, so wrap round to {landed}.", '{k} times two is {product}. Keep counting round the circle: {landed}.'],
+  },
+  fill: {
+    about: 'Now the same line is drawn for every point at once, and a heart-shaped curve appears.',
+    required: [],
+    maxWords: 9,
+    fallback: ['Now do that for every single point.', 'Do it for every point, and look.'],
+  },
+  sweep: {
+    about: 'The multiplier now changes smoothly from two upwards, and the picture transforms.',
+    required: [],
+    maxWords: 10,
+    fallback: ['Now watch what happens as the multiplier grows.', "Now let's slowly turn up the multiplier."],
+  },
+  reveal: {
+    about: 'Every shape in the video came from the same simple rule; it ends on times {m}. Ask which shape was the viewer\'s favourite.',
+    required: [],
+    maxWords: 12,
+    fallback: ['All of that from one simple times table. Which was your favourite?', 'Just multiplication on a circle. Which shape did you like best?'],
+  },
+};
+
+/** The worked examples that get a line, by demo index (the third is silent). */
+const DEMO_BEATS = ['demo0', 'demo1', '', 'wrap'];
+
+/** This run's voiceover (facts from the points and the tour). */
+function planBeats(n: number, demos: { k: number; product: number }[], lastStop: number): { id: string; def: BeatDef; facts: Record<string, number> }[] {
+  const out = [{ id: 'intro', def: BEAT.intro, facts: { points: n, last: n - 1 } as Record<string, number> }];
+  demos.forEach((d, i) => {
+    const id = DEMO_BEATS[i];
+    if (!id) return;
+    out.push({ id, def: BEAT[id], facts: id === 'wrap' ? { k: d.k, product: d.product, last: n - 1, landed: d.product % n } : { k: d.k, product: d.product } });
+  });
+  out.push({ id: 'fill', def: BEAT.fill, facts: {} }, { id: 'sweep', def: BEAT.sweep, facts: {} }, { id: 'reveal', def: BEAT.reveal, facts: { m: lastStop } });
+  return out;
+}
 
 /** What the multiplier draws, where it has a name. */
 export function shapeName(m: number, n: number): string {
@@ -104,17 +167,35 @@ export const timesTableMode: ModeImpl<State> = {
   searchBudget: 12,
   glowScale: 0.5,
 
-  init({ params: p, rng }) {
+  init({ params: p, rng, narration }) {
     const n = p.points;
     const stops = tour(p, n, rng);
-    const revealAt = p.durationS - REVEAL_S;
     const g = Math.max(0.75, Math.min(1.15, p.durationS / 32));
-    const demos: Demo[] = DEMO_AT.map((f, i) => {
-      const k = Math.round(f * n);
-      return { k, product: stops[0] * k, t: 1.4 * g + i * 1.05 * g };
+    const voiced = p.narration === 'on';
+    const ks = DEMO_AT.map((f) => Math.round(f * n));
+    // With a voiceover each beat waits for its line (estimated until the lines are voiced).
+    const beats = voiced ? planBeats(n, ks.map((k) => ({ k, product: stops[0] * k })), stops[stops.length - 1]) : [];
+    const len = (id: string) => {
+      const b = beats.find((x) => x.id === id);
+      return b ? lineLength(narration, id, b.def) : 0;
+    };
+    const speech = newSpeech(narration);
+    const say = (t: number, beat: string) => beats.some((b) => b.id === beat) && speech.says.push({ t, beat });
+    const revealAt = p.durationS - Math.max(REVEAL_S, len('reveal') + 1);
+    say(0.3, 'intro');
+    say(revealAt + 0.25, 'reveal');
+    let dt = Math.max(1.4 * g, voiced ? 0.3 + len('intro') + 0.25 : 0);
+    const demos: Demo[] = ks.map((k, i) => {
+      const demo = { k, product: stops[0] * k, t: dt };
+      const beat = DEMO_BEATS[i];
+      say(dt, beat);
+      dt += !voiced ? 1.05 * g : beat ? Math.max(1.05 * g, len(beat) + 0.3) : 0.8 * g;
+      return demo;
     });
-    const fillFrom = demos[demos.length - 1].t + 1.3 * g;
-    const fillTo = fillFrom + 1.5 * g;
+    const last = demos[demos.length - 1];
+    const fillFrom = last.t + Math.max(1.3 * g, voiced ? len('wrap') + 0.3 : 0);
+    const fillTo = fillFrom + Math.max(1.5 * g, len('fill'));
+    say(fillFrom, 'fill');
     // Sweeps are brisk (a long jump only a little longer than a short one: the tangle in between all
     // looks alike) and the time left goes to holding on the clean shapes. The cardioid gets a longer look.
     const first = fillTo + HOLD_S + 0.5;
@@ -125,12 +206,13 @@ export const timesTableMode: ModeImpl<State> = {
     if (sum > most) sweeps = sweeps.map((d) => (d * Math.max(0.5, most)) / sum);
     const hold = Math.max(HOLD_S, (avail - sweeps.reduce((a, b) => a + b, 0)) / Math.max(1, stops.length - 1));
     const segs: Segment[] = [{ t0: 0, t1: 0, m0: stops[0], m1: stops[0] }];
+    say(first, 'sweep');
     let at = first;
     sweeps.forEach((d, i) => {
       segs.push({ t0: at, t1: at + d, m0: stops[i], m1: stops[i + 1] });
       at += d + hold;
     });
-    return { p, n, demos, demoNext: 0, fillFrom, fillTo, filled: false, stops, segs, seg: 0, m: stops[0], reached: -1, reachedAt: -9, lastInt: stops[0], lastTickT: -9, revealAt, started: false, revealed: false, hue: rng.next(), t: 0 };
+    return { p, n, demos, demoNext: 0, fillFrom, fillTo, filled: false, stops, segs, seg: 0, m: stops[0], reached: -1, reachedAt: -9, lastInt: stops[0], lastTickT: -9, revealAt, started: false, revealed: false, speech: { ...speech, says: speech.says.sort((a, b) => a.t - b.t) }, hue: rng.next(), t: 0 };
   },
 
   step(s, { dt, t, emit }) {
@@ -139,6 +221,7 @@ export const timesTableMode: ModeImpl<State> = {
       s.started = true;
       emit({ type: ev(M, 'start'), points: s.n, stops: s.stops.length });
     }
+    fireSays(s.speech, M, t, emit);
     while (s.demoNext < s.demos.length && t >= s.demos[s.demoNext].t) {
       const d = s.demos[s.demoNext];
       emit({ type: ev(M, 'demo'), i: s.demoNext++, k: d.k, product: d.product, wraps: d.product >= s.n });
@@ -192,7 +275,8 @@ export const timesTableMode: ModeImpl<State> = {
     const pop = holding ? popIn((t - s.reachedAt) / 0.35) : 1;
     outlined(ctx, theme, label, 540, 450, { size: s.revealed ? 130 : 112, fill: holding ? theme.accent : theme.text, scale: pop });
     const name = holding ? shapeName(Math.round(s.m), s.n) : '';
-    if (name) outlined(ctx, theme, name, 540, 548, { size: 46, alpha: clamp01((t - s.reachedAt) / 0.25), scale: pop });
+    // A spoken line takes the slot under the multiplier, then the shape's name comes back.
+    if (name && !speaking(s.speech, t)) outlined(ctx, theme, name, 540, 548, { size: 46, alpha: clamp01((t - s.reachedAt) / 0.25), scale: pop });
     else drawStory(ctx, theme, s);
     caption(ctx, `point k  →  point ${whole ? Math.round(s.m) : s.m.toFixed(1)} × k   (${s.n} points)`, 540, 1568, 30, `rgba(255,255,255,${s.t < s.fillFrom ? 0.3 : 0.55})`);
   },
@@ -201,6 +285,8 @@ export const timesTableMode: ModeImpl<State> = {
     switch (evName(e)) {
       case 'start':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.16 }];
+      case 'say':
+        return sayAudio(e.clip as string);
       case 'demo':
         return [
           { kind: 'sfx', name: 'tick', vel: 0.24, pitch: 1 },
@@ -219,6 +305,13 @@ export const timesTableMode: ModeImpl<State> = {
         return [48, 55, 60, 67].map((midi, i) => ({ kind: 'note' as const, midi, vel: 0.22 + i * 0.02, voice: 'softsine' as const, dur: 3.2 }));
     }
     return [];
+  },
+
+  beats(p, events) {
+    const demos = events.filter((e) => e.type === ev(M, 'demo')).map((e) => ({ k: e.k as number, product: e.product as number }));
+    const stops = events.filter((e) => e.type === ev(M, 'stop'));
+    const lastStop = (events.find((e) => e.type === ev(M, 'reveal'))?.m as number) ?? (stops[stops.length - 1]?.m as number) ?? 2;
+    return planBeats(p.points, demos, lastStop).map((b): NarrationBeat => ({ id: b.id, ...b.def, facts: b.facts }));
   },
 
   score(events, { durationS, targetS }) {
@@ -324,6 +417,12 @@ function drawDemos(ctx: Ctx2D, theme: Theme, s: State, ang: (k: number) => numbe
 /** The line under the multiplier while nothing has a name: what the opening is showing right now. */
 function drawStory(ctx: Ctx2D, theme: Theme, s: State) {
   const t = s.t;
+  // A line being spoken takes the slot, as a caption.
+  const said = speaking(s.speech, t);
+  if (said) {
+    drawSpoken(ctx, theme, said.line.caption, spokenProgress(said.since, said.line.durationS), 540, 545, { size: 36, maxW: 1000 });
+    return;
+  }
   let text = '';
   let since = 0;
   let fill = theme.text;

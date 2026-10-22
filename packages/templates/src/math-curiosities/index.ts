@@ -1,5 +1,5 @@
 import type { Template } from '@sim/engine';
-import { mathCuriositiesSchema, type MathParams, type ModeId } from './params';
+import { NARRATED, mathCuriositiesSchema, type MathParams, type ModeId } from './params';
 import { modeOfEvent, type ModeImpl } from './shared';
 import { BLOCKS_CTA, BLOCKS_HOOK, blocksMode } from './modes/blocks';
 import { collatzMode } from './modes/collatz';
@@ -39,6 +39,13 @@ export const mathCuriosities: Template<MathParams, State> = {
   ownMusic: true,
   lengthParam: { param: 'durationS', offsetS: 0 },
   defaultCopy: { hook: BLOCKS_HOOK, cta: BLOCKS_CTA },
+  narration: {
+    enabled: (p) => p.narration === 'on' && NARRATED.includes(p.mode) && Boolean(MODE_IMPLS[p.mode].beats),
+    voice: (p) => p.narrator,
+    style:
+      'A warm, curious maths explainer talking to someone scrolling Shorts: clear, quick, a little playful, never condescending. Short sentences that land on the beat.',
+    beats: (p, events) => MODE_IMPLS[p.mode].beats?.(p, events) ?? [],
+  },
   nudges: ['Comment your guess 👇', 'Lock in your answer 👇', 'Guess before the end 👇', 'Called it? Comment 👇', 'What do you think? 👇', 'Spot the pattern yet? 👇'],
 
   init(ctx) {

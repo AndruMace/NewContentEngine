@@ -1,9 +1,10 @@
-import { lighten, paletteAt, rgbToCss, type AudioEventInput, type Ctx2D, type Theme } from '@sim/engine';
+import { lighten, paletteAt, rgbToCss, type AudioEventInput, type Ctx2D, type NarrationBeat, type Theme } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { drawCommentPrompt } from '../../guess';
 import { scaleNote } from '../../music';
 import { gaussFit } from '../../scoring';
 import type { MathParams } from '../params';
+import { drawSpoken, fireSays, lineLength, newSpeech, sayAudio, speaking, spokenProgress, type BeatDef, type Speech } from '../speech';
 import { OUTRO_DELAY_S, REVEAL_S, caption, clamp01, drawModeTitle, ev, evName, fireCues, flash, fmtInt, outlined, panel, popIn, smooth, type Cue, type ModeImpl } from '../shared';
 
 /**
@@ -66,6 +67,7 @@ interface State {
   revealAt: number;
   started: boolean;
   revealed: boolean;
+  speech: Speech;
   t: number;
 }
 
@@ -81,6 +83,88 @@ const PROMPT_Y = 1565;
 const CHART = { x: 90, y: 860, w: 910, h: 580 };
 
 const M = 'collatz';
+
+/** Voiceover beats: what each line covers and how many words it may use (see speech.ts). */
+const BEAT: Record<string, BeatDef> = {
+  intro: {
+    about: 'The starting number appears; two simple rules are about to be applied to it again and again.',
+    required: ['n'],
+    maxWords: 11,
+    fallback: ["Pick any number. Let's say {n}.", 'Start with any number, like {n}.', 'Here is a number: {n}.'],
+  },
+  introPair: {
+    about: 'Two neighbouring numbers appear side by side; both will follow the same two rules in a race to reach 1.',
+    required: ['n', 'm'],
+    maxWords: 18,
+    fallback: ['Two neighbours, {n} and {m}. Same two rules.', 'Meet {n} and {m}. They follow the same two rules.'],
+  },
+  odd: {
+    about: 'The number {prev} is odd, so the odd rule applies: multiply by three and add one, giving {value}.',
+    required: ['prev', 'value'],
+    maxWords: 18,
+    fallback: ['{prev} is odd, so triple it and add one: {value}.', 'Odd? Times three, plus one: {value}.'],
+  },
+  even: {
+    about: 'The number {prev} is even, so the even rule applies: halve it, giving {value}.',
+    required: ['prev', 'value'],
+    maxWords: 16,
+    fallback: ['{prev} is even, so cut it in half: {value}.', 'Even? Halve it. {value}.'],
+  },
+  repeat: {
+    about: 'From here the rules repeat on their own, faster and faster, until the number reaches 1. Ask how many steps it will take.',
+    required: [],
+    maxWords: 12,
+    fallback: ['Keep going until you hit one. How many steps will it take?', 'Repeat until it reaches one. Guess how many steps.'],
+  },
+  repeatPair: {
+    about: 'From here both numbers keep following the rules, faster and faster. Ask which one reaches 1 first.',
+    required: [],
+    maxWords: 9,
+    fallback: ['Keep going. Which one reaches one first?', 'Now let them race. Who hits one first?'],
+  },
+  reveal: {
+    about: 'It reached 1 after {steps} steps, having climbed as high as {peak} on the way.',
+    required: ['steps'],
+    maxWords: 15,
+    fallback: ['{steps} steps! And it climbed all the way to {peak} first.', 'That took {steps} steps, peaking at {peak}.', '{steps} steps to get back down to one!', 'It took {steps} steps. Did you guess close?'],
+  },
+  revealPair: {
+    about: '{winner} reached 1 first, in {steps} steps, while {loser} took {loserSteps}.',
+    required: ['winner'],
+    maxWords: 16,
+    fallback: ['{winner} wins, in {steps} steps. {loser} needed {loserSteps}.', "It's {winner}! {steps} steps against {loserSteps}.", '{winner} gets there first!'],
+  },
+};
+
+interface PlannedBeat {
+  id: string;
+  def: BeatDef;
+  facts: Record<string, number>;
+}
+
+/**
+ * The run's voiceover: intro, the first narrated steps (single number only; long enough videos get
+ * two), "keep going", and the reveal. Facts come from the start number alone.
+ */
+function planBeats(p: MathParams, n: number, narrate: number): PlannedBeat[] {
+  const a = collatzSequence(n);
+  if (p.compare) {
+    const b = collatzSequence(n + 1);
+    const [w, l] = a.length <= b.length ? [{ n, s: a }, { n: n + 1, s: b }] : [{ n: n + 1, s: b }, { n, s: a }];
+    return [
+      { id: 'intro', def: BEAT.introPair, facts: { n, m: n + 1 } },
+      { id: 'repeat', def: BEAT.repeatPair, facts: {} },
+      { id: 'reveal', def: BEAT.revealPair, facts: { winner: w.n, steps: w.s.length - 1, loser: l.n, loserSteps: l.s.length - 1 } },
+    ];
+  }
+  const out: PlannedBeat[] = [{ id: 'intro', def: BEAT.intro, facts: { n } }];
+  // A second narrated step only on longer videos: lines take time the fast run needs.
+  const voicedSteps = Math.min(narrate, p.durationS >= 36 ? 2 : 1);
+  for (let k = 1; k <= voicedSteps; k++) out.push({ id: `step${k}`, def: a[k - 1] % 2 ? BEAT.odd : BEAT.even, facts: { prev: a[k - 1], value: a[k] } });
+  out.push({ id: 'repeat', def: BEAT.repeat, facts: {} });
+  out.push({ id: 'reveal', def: BEAT.reveal, facts: { steps: a.length - 1, peak: Math.max(...a) } });
+  return out;
+}
 
 /** Seed-picked start: a long flight that soars (or, racing, two neighbours that finish close together, so the race stays open). */
 function pickStart(p: MathParams, rng: { int(a: number, b: number): number }): number {
@@ -111,12 +195,12 @@ export const collatzMode: ModeImpl<State> = {
   searchBudget: 60,
   glowScale: 0.6,
 
-  init({ params: p, rng }) {
+  init({ params: p, rng, narration }) {
     const n = pickStart(p, rng);
     const lanes = p.compare ? [makeLane(n), makeLane(n + 1)] : [makeLane(n)];
     const total = Math.max(...lanes.map((l) => l.seq.length - 1));
-    const revealAt = p.durationS - REVEAL_S;
-    // Narrate until both rules have shown up (at least two steps, at most four).
+    const voiced = p.narration === 'on';
+    // Narrate until both rules have shown up (at least two steps, at most four; two when voiced).
     const lead = lanes[0].seq;
     let narrate = 0;
     let odd = false;
@@ -127,13 +211,30 @@ export const collatzMode: ModeImpl<State> = {
       narrate++;
       if (narrate >= 2 && odd && even) break;
     }
+    if (voiced) narrate = Math.min(narrate, 2);
+    // With a voiceover every beat waits for its line (estimated until the lines are voiced).
+    const beats = voiced ? planBeats(p, n, narrate) : [];
+    const len = (id: string) => {
+      const b = beats.find((x) => x.id === id);
+      return b ? lineLength(narration, id, b.def) : 0;
+    };
+    const speech = newSpeech(narration);
+    const say = (t: number, beat: string) => beats.some((b) => b.id === beat) && speech.says.push({ t, beat });
+    const revealAt = p.durationS - Math.max(REVEAL_S, len('reveal') + 1);
+    say(revealAt + 0.25, 'reveal');
     const gap = Math.max(1.05, Math.min(1.6, (1.5 * p.durationS) / 32));
     const cues: StepCue[] = [];
-    let at = NARRATE_FROM_S;
-    for (let k = 1; k <= narrate; k++, at += gap) cues.push({ t: at, k, narrate: true });
+    say(0.3, 'intro');
+    let at = Math.max(NARRATE_FROM_S, voiced ? 0.3 + len('intro') + 0.3 : 0);
+    for (let k = 1; k <= narrate; k++) {
+      cues.push({ t: at, k, narrate: true });
+      say(at, `step${k}`);
+      at += Math.max(gap, len(`step${k}`) ? len(`step${k}`) + 0.35 : 0);
+    }
     const repeatAt = at;
+    say(repeatAt, 'repeat');
     // Then quicker and quicker, with a slow 8 → 4 → 2 → 1 at the end.
-    const from = repeatAt + 0.7;
+    const from = repeatAt + Math.max(0.7, len('repeat') - 0.6);
     const weights: number[] = [];
     for (let k = narrate + 1; k <= total; k++) weights.push(1 + 2 * dm.exp(-(k - narrate - 1) / 5) + (k > total - 3 ? 3 : 0));
     const sum = weights.reduce((a, b) => a + b, 0) || 1;
@@ -143,7 +244,8 @@ export const collatzMode: ModeImpl<State> = {
       cues.push({ t: at, k: narrate + 1 + i, narrate: false });
       at += (span * w) / sum;
     });
-    return { p, lanes, cues, cue: 0, total, lastStepT: -9, lastOdd: false, narrate, repeatAt, repeated: false, revealAt, started: false, revealed: false, t: 0 };
+    speech.says.sort((x, y) => x.t - y.t);
+    return { p, lanes, cues, cue: 0, total, lastStepT: -9, lastOdd: false, narrate, repeatAt, repeated: false, revealAt, started: false, revealed: false, speech, t: 0 };
   },
 
   step(s, { dt, t, emit }) {
@@ -179,6 +281,7 @@ export const collatzMode: ModeImpl<State> = {
         }
       });
     });
+    fireSays(s.speech, M, t, emit);
     if (!s.repeated && t >= s.repeatAt) {
       s.repeated = true;
       emit({ type: ev(M, 'repeat') });
@@ -214,6 +317,8 @@ export const collatzMode: ModeImpl<State> = {
     switch (evName(e)) {
       case 'start':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.16 }];
+      case 'say':
+        return sayAudio(e.clip as string);
       case 'repeat':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.2 }, ...[57, 64, 69].map((midi) => ({ kind: 'note' as const, midi, vel: 0.2, voice: 'softsine' as const, dur: 1.6 }))];
       case 'step': {
@@ -234,6 +339,13 @@ export const collatzMode: ModeImpl<State> = {
         return [48, 55, 60, 64].map((midi, i) => ({ kind: 'note' as const, midi, vel: 0.22 + i * 0.02, voice: 'softsine' as const, dur: 3.2 }));
     }
     return [];
+  },
+
+  beats(p, events) {
+    const start = events.find((e) => e.type === ev(M, 'start'));
+    if (!start) return [];
+    const narrate = events.filter((e) => e.type === ev(M, 'step') && e.narrate && e.lane === 0).length;
+    return planBeats(p, start.n as number, narrate).map((b): NarrationBeat => ({ id: b.id, ...b.def, facts: b.facts }));
   },
 
   score(events, { durationS, targetS }) {
@@ -287,7 +399,7 @@ function drawSingle(ctx: Ctx2D, theme: Theme, s: State) {
   if (s.revealed) {
     const u = t - s.revealAt;
     outlined(ctx, theme, `${lane.seq.length - 1} STEPS`, 540, 590, { size: 130, fill: theme.accent, scale: popIn(u / 0.4) });
-    caption(ctx, `${fmtInt(lane.n)} climbed to ${fmtInt(lane.peak)} before falling to 1`, 540, 700, 34, `rgba(255,255,255,${0.75 * clamp01((u - 0.3) / 0.3)})`);
+    if (!drawSaid(ctx, theme, s, 540, 705, 980)) caption(ctx, `${fmtInt(lane.n)} climbed to ${fmtInt(lane.peak)} before falling to 1`, 540, 700, 34, `rgba(255,255,255,${0.75 * clamp01((u - 0.3) / 0.3)})`);
     return;
   }
   const str = fmtInt(value);
@@ -306,6 +418,8 @@ function drawSingle(ctx: Ctx2D, theme: Theme, s: State) {
 function drawEquation(ctx: Ctx2D, theme: Theme, s: State, lane: Lane, x: number, y: number, maxW: number) {
   const t = s.t;
   const pair = s.lanes.length > 1;
+  // While a line is being spoken it takes this slot (the single number's; a race's has its own).
+  if (pair ? speaking(s.speech, t) : drawSaid(ctx, theme, s, x, y, maxW)) return;
   if (lane.k === 0) {
     if (!pair) outlined(ctx, theme, 'Start with any number…', x, y, { size: 44, alpha: clamp01((t - 0.3) / 0.3), maxW });
     return;
@@ -349,7 +463,16 @@ function drawPair(ctx: Ctx2D, theme: Theme, s: State) {
       drawEquation(ctx, theme, s, lane, x, 770, 470);
     }
   });
+  if (drawSaid(ctx, theme, s, 540, 800, 980)) return;
   if (s.lanes[0].k === 0) outlined(ctx, theme, 'Two neighbours, the same two rules…', 540, 770, { size: 40, alpha: clamp01((t - 0.3) / 0.3) });
+}
+
+/** The line being spoken, as a caption; false when nothing is being said. */
+function drawSaid(ctx: Ctx2D, theme: Theme, s: State, x: number, y: number, maxW: number): boolean {
+  const said = speaking(s.speech, s.t);
+  if (!said) return false;
+  drawSpoken(ctx, theme, said.line.caption, spokenProgress(said.since, said.line.durationS), x, y, { size: 40, maxW });
+  return true;
 }
 
 const laneColor = (theme: Theme, i: number) => paletteAt(theme.palette, i ? 0.62 : 0.12);

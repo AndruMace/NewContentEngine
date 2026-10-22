@@ -40,6 +40,19 @@ async function loadFonts() {
   document.fonts.add(face);
 }
 
+/** The recipe's narration clips (served from the voice cache by the harness), decoded for the mix. */
+async function loadVoice(recipe: Recipe): Promise<Map<string, AudioBuffer>> {
+  const out = new Map<string, AudioBuffer>();
+  const decoder = new OfflineAudioContext(1, 1, 48000);
+  for (const line of recipe.voice?.lines ?? []) {
+    if (out.has(line.clip)) continue;
+    const res = await fetch(`voice/${encodeURIComponent(line.clip)}`);
+    if (!res.ok) throw new Error(`Narration clip missing: ${line.clip}`);
+    out.set(line.clip, await decoder.decodeAudioData(await res.arrayBuffer()));
+  }
+  return out;
+}
+
 window.renderRecipe = async (recipe, opts) => {
   await loadFonts();
   const template = getTemplate(recipe.templateId);
@@ -53,6 +66,7 @@ window.renderRecipe = async (recipe, opts) => {
     copy: recipe.copy,
     visual: true,
     maxSeconds: opts.maxSeconds,
+    voice: recipe.voice,
   });
 
   // Headless pre-run gives the exact frame count for progress reporting.
@@ -63,6 +77,7 @@ window.renderRecipe = async (recipe, opts) => {
     melody: getMelody(recipe.melodyId),
     visual: false,
     maxSeconds: opts.maxSeconds,
+    voice: recipe.voice,
   }).runToEnd();
   const estFrames = pre.frame + 1;
 
@@ -99,7 +114,7 @@ window.renderRecipe = async (recipe, opts) => {
   window.reportStage?.('audio');
   const t1 = performance.now();
   const durationS = frames / FPS;
-  const audio = await renderAudio(runner.audio, durationS, { reverb: theme.reverb });
+  const audio = await renderAudio(runner.audio, durationS, { reverb: theme.reverb, samples: await loadVoice(recipe) });
   await upload('audio.wav', audioBufferToWav(audio));
   const audioMs = performance.now() - t1;
 

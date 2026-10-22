@@ -3,6 +3,7 @@ import { THEMES, paramsJsonSchema, parseParams, searchBudgetOf, type Recipe } fr
 import { MELODIES } from '@sim/audio';
 import { TEMPLATES, findTemplate, getTemplate } from '@sim/templates';
 import { ParamControls } from './ParamControls';
+import { NarrationPanel, type VoiceState } from './NarrationPanel';
 import { usePlayer } from './usePlayer';
 import { useAnalysis } from './useAnalysis';
 import { ExportPanel } from './ExportPanel';
@@ -55,7 +56,13 @@ export function Playground() {
   const changedParams = Object.entries(recipe.params).filter(([k, v]) => k in schema.properties && v !== schema.properties[k].default).length;
   const player = usePlayer(canvasRef, recipe, muted, volume);
   const searchBudget = searchBudgetOf(template, recipe.params);
-  const update = (patch: Partial<Recipe>) => setRecipe((r) => ({ ...r, ...patch }));
+  // A new seed, template or setting means new facts to narrate: the old lines no longer fit.
+  const update = (patch: Partial<Recipe>) =>
+    setRecipe((r) => ({ ...r, ...patch, ...(('seed' in patch || 'params' in patch || 'templateId' in patch) && !('voice' in patch) ? { voice: undefined } : {}) }));
+  const narrated = Boolean(template.narration?.enabled(parseParams(template, recipe.params)));
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  // Narrated previews wait for their lines (unless voicing failed: then they play silently).
+  const awaitingVoice = narrated && !recipe.voice && voiceState !== 'failed';
 
   useEffect(() => {
     try {
@@ -263,6 +270,7 @@ export function Playground() {
           </h3>
           <ParamControls schema={schema} values={recipe.params} onChange={(params) => update({ params })} />
         </section>
+        {narrated && <NarrationPanel recipe={recipe} onVoice={(voice) => update({ voice })} onState={setVoiceState} />}
       </aside>
 
       <section className="stage">
@@ -280,11 +288,13 @@ export function Playground() {
           {player.status === 'playing' ? (
             <button className="primary" onClick={player.pause}>Pause</button>
           ) : (
-            <button className="primary" onClick={() => void player.play()}>
-              {player.status === 'done' ? 'Replay' : 'Play'}
+            <button className="primary" disabled={awaitingVoice} onClick={() => void player.play()}>
+              {awaitingVoice ? 'Voicing…' : player.status === 'done' ? 'Replay' : 'Play'}
             </button>
           )}
-          <button onClick={player.restart}>Restart</button>
+          <button disabled={awaitingVoice} onClick={player.restart}>
+            Restart
+          </button>
           <button onClick={() => setMuted((m) => !m)}>{muted ? 'Unmute' : 'Mute'}</button>
           <label className="volume" title="Preview volume only; exported videos are unaffected">
             <span>Vol</span>

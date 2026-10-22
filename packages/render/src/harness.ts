@@ -17,6 +17,8 @@ const SOFTWARE = process.env.SIM_RENDER_SOFTWARE === '1';
 /** A page call that takes longer than this is treated as stuck: the page is closed (default 20 min). */
 const CALL_TIMEOUT_MS = Number(process.env.SIM_RENDER_CALL_TIMEOUT_MS ?? 20 * 60_000);
 const ASSETS = join(ROOT, 'assets/ambient');
+/** Narration clips (see @sim/voice), read-only. */
+const VOICE_CACHE = join(ROOT, 'data/voice-cache');
 const ASSET_TYPES: Record<string, string> = {
   jpg: 'image/jpeg',
   png: 'image/png',
@@ -90,6 +92,18 @@ export class RenderHarness {
         }
         try {
           res.writeHead(200, { 'content-type': type }).end(await readFile(file));
+        } catch {
+          res.writeHead(404).end();
+        }
+      }
+      else if (path.startsWith('/voice/')) {
+        const file = resolve(VOICE_CACHE, decodeURIComponent(path.slice('/voice/'.length)));
+        if (!file.startsWith(VOICE_CACHE + sep) || !file.endsWith('.wav')) {
+          res.writeHead(404).end();
+          return;
+        }
+        try {
+          res.writeHead(200, { 'content-type': 'audio/wav' }).end(await readFile(file));
         } catch {
           res.writeHead(404).end();
         }

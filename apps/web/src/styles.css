@@ -272,3 +272,8 @@ button.wide { width: 100%; }
 .job-detail h4 { margin: 8px 0 0; font-size: 12px; display: flex; gap: 8px; align-items: baseline; }
 .job-detail .param span { display: flex; justify-content: space-between; align-items: center; }
 .delete-row { justify-content: space-between; align-items: center; margin-top: 6px; }
+
+/* Narration panel (Playground) */
+.narration-lines { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; line-height: 1.35; }
+.narration-lines .hint { margin: 0 6px 0 0; font-variant-numeric: tabular-nums; }
+.hint.error { color: #ff6b6b; }

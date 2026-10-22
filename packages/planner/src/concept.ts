@@ -177,6 +177,16 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
           'Mode: the birthday paradox (fixed for this video). People enter a room one by one and land on a calendar until two share a birthday, over one or more rooms. "Guess how many people it takes" angles work. The CTA may use {result} (e.g. "23, 17 and 41 people"). Never give the number away.',
       },
     },
+    {
+      // Off first: the baseline the learner compares the voiceover against.
+      param: 'narration',
+      values: ['off', 'on'],
+      when: { param: 'mode', values: ['collatz', 'times-table'] },
+      guide: {
+        off: 'Narration: off (fixed for this video). No voiceover; on-screen text explains the idea.',
+        on: 'Narration: on (fixed for this video). A voiceover explains the idea step by step as it plays, with matching captions. The on-screen hook still has to work silently (many watch muted). You may mention the explanation in captions ("explained in 30 seconds"), but never give away the answer.',
+      },
+    },
   ],
   'grow-until-full': [
     {

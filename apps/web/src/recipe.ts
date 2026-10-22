@@ -10,6 +10,7 @@ export function makeRunner(recipe: Recipe, visual = true) {
     melody: getMelody(recipe.melodyId),
     copy: recipe.copy,
     visual,
+    voice: recipe.voice,
   });
 }
 

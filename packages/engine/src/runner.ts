@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Rng } from './rng';
 import { MelodyCursor, transposeMelody, type Melody } from './melody';
 import type { Theme } from './themes';
-import type { AudioEvent, Copy, Ctx2D, DramaScore, OverlaySpec, SimEvent, Template, VideoFormat } from './types';
+import type { AudioEvent, Copy, Ctx2D, DramaScore, OverlaySpec, SimEvent, Template, VideoFormat, VoiceTrack } from './types';
 import { drawOverlays, fillCopy, newOverlayState, type OverlayState } from './overlays';
 import { PostFx, fillBackground } from './postfx';
 
@@ -27,6 +27,8 @@ export interface Recipe {
   loopS?: number;
   /** Long-form: final video length the loop is repeated to. */
   totalS?: number;
+  /** Narration, written and voiced before rendering (see @sim/voice). Its line lengths time the sim. */
+  voice?: VoiceTrack;
 }
 
 /** A long-form recipe's loop length, clamped to what the template allows (`allowShort` for quick test renders). */
@@ -54,6 +56,8 @@ export interface RunnerOptions {
   transpose?: number;
   /** Long-form: master loop length (already validated, see loopLengthOf). */
   loopS?: number;
+  /** Prepared narration: templates time their beats to its lines (estimates without it). */
+  voice?: VoiceTrack;
 }
 
 /**
@@ -117,6 +121,7 @@ export class Runner<P = any, S = any> {
       loopS: this.loopS,
       theme: opts.theme,
       melody: transposeMelody(opts.melody, opts.transpose ?? 0),
+      narration: Object.fromEntries((opts.voice?.lines ?? []).map((l) => [l.beat, l])),
     });
     // Field by field, so a field present but undefined (a cleared input) still falls back to the default.
     const copy: Copy = {

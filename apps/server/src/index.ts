@@ -11,6 +11,7 @@ import { LongFormService } from './longform';
 import { getLongFormJob, listLongFormJobs } from './longformJobs';
 import { REWARD_PRESETS, parsePostUrl } from '@sim/analytics';
 import { tasteStatus } from './taste';
+import { VOICE_CACHE, prepareNarration } from '@sim/voice';
 
 // Load .env (ANTHROPIC_API_KEY etc.) before anything reads the environment.
 try {
@@ -269,6 +270,26 @@ app.get<{ Params: { id: string }; Querystring: { name: string; inline?: string }
   const base = ex.dir.split(sep).pop();
   if (!(req.query as { inline?: string }).inline) reply.header('content-disposition', `attachment; filename="${base}-${name}"`);
   return reply.type(name.endsWith('.zip') ? 'application/zip' : name.endsWith('.mp4') ? 'video/mp4' : name.endsWith('.jpg') ? 'image/jpeg' : 'text/plain').send(createReadStream(abs));
+});
+
+// ---- narration ------------------------------------------------------------------------------
+
+/** Write and voice a recipe's narration (Playground "Voice it"); returns the recipe with its lines. */
+app.post<{ Body: { recipe: Recipe; force?: boolean } }>('/api/narration/prepare', async (req, reply) => {
+  const warnings: string[] = [];
+  try {
+    const recipe = await prepareNarration(req.body.recipe, { force: req.body.force, onWarning: (m) => warnings.push(m) });
+    return { voice: recipe.voice ?? null, warnings };
+  } catch (e) {
+    return reply.code(500).send({ error: (e as Error).message });
+  }
+});
+
+/** A voiced line from the cache. */
+app.get<{ Params: { file: string } }>('/api/voice/:file', (req, reply) => {
+  const abs = /^[\w-]+\.wav$/.test(req.params.file) ? safePath(VOICE_CACHE, req.params.file) : null;
+  if (!abs || !existsSync(abs)) return reply.code(404).send({ error: 'not found' });
+  return reply.type('audio/wav').send(createReadStream(abs));
 });
 
 app.get('/api/storage', async () => ({ rendersBytes: await dirSize(RENDERS_DIR), exportsBytes: await dirSize(EXPORTS_DIR) }));

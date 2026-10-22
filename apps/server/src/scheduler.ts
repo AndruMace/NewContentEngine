@@ -116,6 +116,7 @@ export class RenderScheduler extends EventEmitter {
           updateRender(job.id, { stage });
           this.emitRender(job.id);
         },
+        onWarning: (message) => console.warn(`[render ${job.id}] ${message}`),
         onProgress: (frame, est) => {
           const pct = Math.floor((frame / est) * 50);
           if (pct === lastPct) return;
@@ -131,6 +132,8 @@ export class RenderScheduler extends EventEmitter {
         stage: null,
         progress: 1,
         dir: relative(RENDERS_DIR, out.dir),
+        // With its narration, if it has one: review and re-renders then play the same lines.
+        recipe: out.recipe,
         qc: out.qc,
         durationS: out.durationS,
         renderMs,
