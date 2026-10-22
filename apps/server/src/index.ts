@@ -140,8 +140,8 @@ app.post<{ Params: { id: string } }>('/api/batches/:id/cancel', async (req) => {
 
 const changed = (r: { batchId: string | null }) => r.batchId && batches.emit('changed', r.batchId);
 
-app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected' | 'pending'; reasons?: string[]; note?: string | null } }>('/api/review/:id/decision', async (req) => {
-  const r = review.setDecision(req.params.id, req.body.decision, { reasons: req.body.reasons, note: req.body.note });
+app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected' | 'pending'; note?: string | null } }>('/api/review/:id/decision', async (req) => {
+  const r = review.setDecision(req.params.id, req.body.decision, { note: req.body.note });
   changed(r);
   return reviewItem(r);
 });

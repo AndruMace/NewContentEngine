@@ -90,8 +90,6 @@ export interface RenderRow {
   renderMs: number | null;
   decision: Decision;
   supersededBy: string | null;
-  /** Reject reasons chosen in Review (see REJECT_REASONS). */
-  reasons: string[];
   note: string | null;
   /** Write the upload bundle as soon as the render (and its copy) is ready: Playground exports. */
   autoExport: boolean;
@@ -183,6 +181,8 @@ const MIGRATIONS = [
    ALTER TABLE posts DROP COLUMN linked_by;
    ALTER TABLE posts DROP COLUMN manual;
    DELETE FROM kv WHERE key IN ('learner', 'analytics_settings', 'youtube_ignored', 'youtube_unlinked', 'youtube_last_refresh');`,
+  // Reject reasons only fed the taste model; a rejection keeps its note.
+  `ALTER TABLE renders DROP COLUMN reasons;`,
 ];
 
 {
@@ -313,7 +313,6 @@ const toRender = (r: any): RenderRow => ({
   renderMs: r.render_ms,
   decision: r.decision,
   supersededBy: r.superseded_by,
-  reasons: json(r.reasons, []),
   note: r.note ?? null,
   autoExport: Boolean(r.auto_export),
 });
@@ -367,10 +366,10 @@ export function nextQueuedRender(): RenderRow | undefined {
 const RENDER_COLS: Record<string, string> = {
   recipe: 'recipe', copy: 'copy', score: 'score', scoreParts: 'score_parts', altSeeds: 'alt_seeds', status: 'status', stage: 'stage',
   progress: 'progress', dir: 'dir', qc: 'qc', durationS: 'duration_s', rankScore: 'rank_score', error: 'error', startedAt: 'started_at',
-  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', reasons: 'reasons', note: 'note',
+  finishedAt: 'finished_at', renderMs: 'render_ms', decision: 'decision', supersededBy: 'superseded_by', note: 'note',
   autoExport: 'auto_export',
 };
-const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc', 'reasons']);
+const JSON_COLS = new Set(['recipe', 'copy', 'scoreParts', 'altSeeds', 'qc']);
 
 export function updateRender(id: string, patch: Partial<RenderRow>) {
   const cols: string[] = [];

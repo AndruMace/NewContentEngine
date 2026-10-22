@@ -159,40 +159,10 @@ button.link { color: var(--accent); padding: 0; }
 .planner-details dt { color: var(--muted); }
 .planner-details dd { margin: 0; color: #c4c8d2; }
 
-/* Analytics */
-.notice { margin: 0 0 12px; padding: 8px 12px; background: #0f2a20; border: 1px solid #13563d; border-radius: 8px; color: #8ff0c6; }
-.yt-connected { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-.yt-channel { display: flex; align-items: center; gap: 8px; }
-.yt-channel img { width: 28px; height: 28px; border-radius: 50%; }
-.uploads { display: flex; flex-direction: column; gap: 12px; }
 .upload { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .upload:last-child { border-bottom: 0; }
-.upload-head { display: flex; gap: 8px; align-items: flex-start; }
-.upload-head img { width: 64px; border-radius: 4px; }
 .upload .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .upload select { max-width: 160px; }
-.table-wrap { overflow-x: auto; }
-.posts-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.posts-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.posts-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
-.posts-table td.title { white-space: normal; min-width: 220px; }
-.posts-table td.title a { color: var(--text); text-decoration: none; font-weight: 600; }
-.posts-table td.title a:hover { text-decoration: underline; }
-.posts-table td.title .hint { margin: 2px 0 0; }
-.posts-table .thumb img { width: 34px; height: 60px; object-fit: cover; border-radius: 4px; display: block; background: #000; }
-.posts-table tr.young td:not(.title):not(.thumb) { color: var(--muted); }
-.posts-table input.stayed { width: 52px; padding: 3px 6px; }
-.badge.exp-badge { background: #2a1f4a; color: #c9b5ff; }
-.prediction { margin: 0; font-size: 12px; color: #c4c8d2; }
-.prediction b.pos { color: var(--accent); }
-.prediction b.neg { color: #ff8a8a; }
-.learning p { margin: 4px 0 8px; }
-.learning .ok { color: var(--accent); }
-.reward { font-weight: 700; }
-.reward.pos { color: var(--accent); }
-.reward.neg { color: #ff8a8a; }
-.reward.early { opacity: 0.75; }
-.reward small { font-weight: 400; color: var(--muted); font-size: 10px; }
 .params-head { position: sticky; top: 0; z-index: 2; background: var(--panel); margin: 0 0 10px; padding: 6px 0; align-items: center; }
 .reset-params { text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--text); }
 .reset-params:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
@@ -200,19 +170,6 @@ button.link { color: var(--accent); padding: 0; }
 .reject-panel { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 8px; border: 1px solid #3a1616; border-radius: 8px; background: #1a1012; }
 .reject-panel input { width: 100%; }
 .reject-panel .hint { margin: 0; }
-.chip.on.reason { background: #ff8a8a; border-color: #ff8a8a; color: #2a0c0c; }
-.taste-panel { margin-bottom: 18px; }
-.taste-panel h3 { margin: 0 0 4px; }
-.taste-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.taste-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid #222632; }
-.taste-table td { padding: 6px; border-bottom: 1px solid #1a1d26; vertical-align: top; }
-.taste-bar { display: flex; width: 90px; height: 8px; border-radius: 4px; overflow: hidden; background: #222632; margin-bottom: 2px; }
-.taste-bar .yes { background: var(--accent); }
-.taste-bar .no { background: #ff8a8a; }
-.taste-bar .skip { background: #555b6e; }
-.taste-table .pos { color: var(--accent); }
-.taste-table .neg { color: #ff8a8a; }
-.taste-table .leaning { opacity: 0.7; }
 
 /* Upload page (Batches & Review → one exported video) */
 .upload { flex: 1; overflow-y: auto; padding: 16px 20px 60px; min-height: 0; }

@@ -38,9 +38,6 @@ import {
 } from './db';
 import { ALL_MELODY_IDS, chooseMelody, hashSeed, recipeFor, type BatchRunner } from './batch';
 import { getTemplate } from '@sim/templates';
-import { REJECT_REASONS } from '@sim/analytics';
-
-const REASON_IDS = new Set<string>(REJECT_REASONS.map((r) => r.id));
 import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
 import { fallbackConcept } from '@sim/planner';
@@ -81,10 +78,10 @@ export class ReviewActions {
     if (r?.batchId) this.batches.emit('changed', r.batchId);
   }
 
-  /** Approve / reject / undo. Reject reasons and a note teach the taste model why. */
-  setDecision(id: string, decision: 'approved' | 'rejected' | 'pending', feedback: { reasons?: string[]; note?: string | null } = {}) {
+  /** Approve / reject / undo. A rejection can carry a note on what was wrong. */
+  setDecision(id: string, decision: 'approved' | 'rejected' | 'pending', feedback: { note?: string | null } = {}) {
     const keep = decision === 'rejected';
-    updateRender(id, { decision, reasons: keep ? (feedback.reasons ?? []).filter((x) => REASON_IDS.has(x)) : [], note: keep ? feedback.note?.trim() || null : null });
+    updateRender(id, { decision, note: keep ? feedback.note?.trim() || null : null });
     return getRender(id)!;
   }
 
