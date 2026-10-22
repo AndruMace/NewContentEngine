@@ -9,7 +9,7 @@ import { RENDERS_DIR, ROOT } from '@sim/render';
 import { COPY_TARGETS, PLATFORMS, claudeAvailable, type CopyTarget, type LongFormCopy, type Platform, type SocialCopy } from '@sim/planner';
 import { LongFormService } from './longform';
 import { getLongFormJob, listLongFormJobs } from './longformJobs';
-import { parsePostUrl } from '@sim/analytics';
+import { parsePostUrl } from './postUrl';
 import { VOICE_CACHE, prepareNarration, warmUpKokoro } from '@sim/voice';
 
 // Load .env (ANTHROPIC_API_KEY etc.) before anything reads the environment.

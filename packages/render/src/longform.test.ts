@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { chooseArms, flatArmModel } from '@sim/planner';
-import { defaultCatalog } from '@sim/analytics';
 import { Rng } from '@sim/engine';
 import { maxFlashesPerSecond } from './ffmpeg';
 
@@ -24,15 +23,11 @@ describe('flash counting (photosensitivity QC)', () => {
   });
 });
 
-describe('long-form templates stay out of Shorts planning and analytics', () => {
+describe('long-form templates stay out of Shorts planning', () => {
   it('are never chosen for a batch, even when named', () => {
     const settings = { count: 6, templateIds: ['cabin-storm'], themeIds: [], minLengthS: 20, maxLengthS: 45 };
     const arms = chooseArms(settings, flatArmModel, new Rng(1));
     expect(arms.length).toBeGreaterThan(0);
     expect(arms.some((a) => a.arm.templateId === 'cabin-storm')).toBe(false);
-  });
-
-  it('are not in the analytics catalog', () => {
-    expect(defaultCatalog().templates.some((t) => t.id === 'cabin-storm')).toBe(false);
   });
 });
