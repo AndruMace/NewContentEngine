@@ -1,7 +1,7 @@
 /**
  * Long-form (ambient) render jobs: queued from the Ambient page, rendered by the shared scheduler
  * (after any queued Shorts), resumable after a restart. Kept in their own table, away from the Shorts
- * renders that batches, review and analytics read.
+ * renders that batches and review read.
  */
 import { randomUUID } from 'node:crypto';
 import type { Recipe } from '@sim/engine';

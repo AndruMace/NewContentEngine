@@ -1,7 +1,7 @@
 /**
  * YouTube copy for long-form ambient videos (hours long, for sleep, study and focus): title,
  * description, tags and a few words for the thumbnail. Written by Claude, with a plain fallback
- * when Claude isn't available. Long-form videos go to YouTube only (and are ignored by analytics).
+ * when Claude isn't available. Long-form videos go to YouTube only.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';

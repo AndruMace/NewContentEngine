@@ -76,8 +76,6 @@ export interface ReviewItem {
     source: string;
     rationale: string | null;
     targetS: number;
-    /** Where the taste model got the settings (e.g. "near a video you approved"). */
-    paramsSource: string | null;
     /** Your notes for Claude (Playground exports). */
     notes: string | null;
   } | null;

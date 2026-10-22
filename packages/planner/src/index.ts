@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Rng } from '@sim/engine';
-import { chooseArms, targetLength, type Arm, type ArmChoiceSettings, type ArmModel } from './arms';
+import { chooseArms, targetLength, type Arm, type ArmChoiceSettings } from './arms';
 import { conceptFromClaude, conceptFromMock, type PlanContext } from './claude';
 import { claudeErrorReason } from './upload';
 import { CUES_SHARE, TITLE_EMOJI_SHARE, fallbackConcept, pickNudge, planVariants, type Concept } from './concept';
@@ -38,15 +38,11 @@ export async function planOne(
   const titleEmoji = rng.chance(TITLE_EMOJI_SHARE);
   // Cosmetic variants (e.g. Ball Battle country vs colour teams) are split evenly rather than left to Claude.
   const variants: Record<string, unknown> = planVariants(arm.templateId, rng);
-  // The taste model, when present, picks every setting up front (variants stay as planned).
-  const chosen = ctx.chooseParams?.(arm, targetS, variants, rng);
-  const opts = { titleEmoji, variants: chosen ? chosen.params : variants, fixedParams: Boolean(chosen) };
+  // Rewriting copy for a run already rendered: its settings stay as they are.
+  const opts = { titleEmoji, variants: ctx.keepParams ?? variants, fixedParams: Boolean(ctx.keepParams) };
   // Engagement cues (comment prompt + like heart) for most videos; the rest are a comparison group.
   const nudge = rng.chance(CUES_SHARE) ? pickNudge(arm.templateId, rng, ctx.recentNudges) : undefined;
-  const withSource = (p: PlannedConcept): PlannedConcept => {
-    const concept = { ...p.concept, copy: { ...p.concept.copy, ...(nudge ? { nudge } : {}) } };
-    return { ...p, concept: chosen ? { ...concept, paramsSource: chosen.source } : concept };
-  };
+  const withSource = (p: PlannedConcept): PlannedConcept => ({ ...p, concept: { ...p.concept, copy: { ...p.concept.copy, ...(nudge ? { nudge } : {}) } } });
   if (generator === 'mock') return withSource({ concept: conceptFromMock(arm, targetS, rng, opts) });
   if (generator === 'claude' && client) {
     try {
@@ -62,13 +58,12 @@ export async function planOne(
 /** Choose arms and plan their concepts, at most `concurrency` API calls at a time. */
 export async function planConcepts(
   settings: ArmChoiceSettings & { generator: Generator; seed: number },
-  model: ArmModel,
   ctx: PlanContext,
   onConcept?: (p: PlannedConcept, index: number) => void | Promise<void>,
   concurrency = 4,
 ): Promise<PlannedConcept[]> {
   const rng = new Rng(settings.seed);
-  const arms = chooseArms(settings, model, rng);
+  const arms = chooseArms(settings, rng);
   const client = settings.generator === 'claude' && claudeAvailable() ? new Anthropic() : undefined;
   const results: PlannedConcept[] = new Array(arms.length);
   let next = 0;
@@ -76,10 +71,9 @@ export async function planConcepts(
     while (next < arms.length) {
       const i = next++;
       const armRng = new Rng(settings.seed + 1000 + i);
-      const { arm, experiment } = arms[i];
+      const arm = arms[i];
       const target = targetLength(arm.lengthBucket, settings.minLengthS, settings.maxLengthS, armRng);
       results[i] = await planOne(arm, target, settings.generator, ctx, armRng, client);
-      if (experiment) results[i].concept.experiment = experiment;
       await onConcept?.(results[i], i);
     }
   };

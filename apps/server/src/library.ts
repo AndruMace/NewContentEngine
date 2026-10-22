@@ -76,7 +76,7 @@ export async function scanLibrary(): Promise<LibraryEntry[]> {
         if (!batchTimes.has(row.batch_id)) batchTimes.set(row.batch_id, getBatch(row.batch_id)?.createdAt ?? 0);
         batchCreatedAt = batchTimes.get(row.batch_id)!;
       }
-      // Long-form (ambient) videos: from the Ambient tab or the CLI. Never part of batches or analytics.
+      // Long-form (ambient) videos: from the Ambient tab or the CLI. Never part of batches.
       const source: RenderSource = longForm.has(rel) || isLongForm(recipe?.templateId) ? 'ambient' : !row ? 'cli' : row.kind === 'batch' ? 'batch' : row.kind === 'manual' ? 'playground-review' : 'playground-export';
       const qc = row?.qc ? JSON.parse(row.qc) : result?.qc;
       return {

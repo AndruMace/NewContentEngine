@@ -1,52 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, paramsJsonSchema } from '@sim/engine';
 import { TEMPLATES, getTemplate } from '@sim/templates';
-import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, flatArmModel, planOne, startsWithEmoji, type ArmModel, variantGuide, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema, summarizePerformance, uploadCopyFromClaude, variantHook, coerceParams, describeTemplate } from './index';
+import { LIMITS, PLANNED_VARIANTS, applyTitleEmoji, chooseArms, planOne, startsWithEmoji, variantGuide, conceptFromMock, conceptFromResponse, fallbackConcept, normalizeCopy, planConcepts, platformText, mergeCopyOutput, uploadText, conceptOutputSchema, uploadCopyFromClaude, variantHook, coerceParams, describeTemplate } from './index';
 
 describe('arm selection', () => {
   it('spreads arms across templates and respects the filters', () => {
-    const arms = chooseArms({ count: 9, templateIds: [], themeIds: ['neon-dark', 'sunset'], minLengthS: 20, maxLengthS: 45 }, flatArmModel, new Rng(1)).map((c) => c.arm);
+    const arms = chooseArms({ count: 9, templateIds: [], themeIds: ['neon-dark', 'sunset'], minLengthS: 20, maxLengthS: 45 }, new Rng(1));
     expect(arms).toHaveLength(9);
     expect(new Set(arms.map((a) => a.templateId)).size).toBeGreaterThanOrEqual(5);
     expect(arms.every((a) => ['neon-dark', 'sunset'].includes(a.themeId))).toBe(true);
-    expect(chooseArms({ count: 4, templateIds: [], themeIds: [], minLengthS: 15, maxLengthS: 24 }, flatArmModel, new Rng(2)).every((c) => c.arm.lengthBucket === 'short')).toBe(true);
+    expect(chooseArms({ count: 4, templateIds: [], themeIds: [], minLengthS: 15, maxLengthS: 24 }, new Rng(2)).every((a) => a.lengthBucket === 'short')).toBe(true);
   });
 
   it('keeps templates picked under an old (renamed) id', () => {
-    const arms = chooseArms({ count: 3, templateIds: ['colliding-blocks'], themeIds: [], minLengthS: 20, maxLengthS: 45 }, flatArmModel, new Rng(4)).map((c) => c.arm);
+    const arms = chooseArms({ count: 3, templateIds: ['colliding-blocks'], themeIds: [], minLengthS: 20, maxLengthS: 45 }, new Rng(4));
     expect(arms.every((a) => a.templateId === 'math-curiosities')).toBe(true);
-  });
-
-  it('runs no experiments until the model is ready', () => {
-    expect(chooseArms({ count: 9, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45 }, flatArmModel, new Rng(3)).some((c) => c.experiment)).toBe(false);
-  });
-
-  it('reserves experiment slots for uncertain arms and boosts stale templates once ready', () => {
-    // A confident model that loves ring-escape and knows nothing about sand-pour.
-    const model: ArmModel = {
-      ready: true,
-      sample: () => (arm) => (arm.templateId === 'ring-escape' ? 1 : 0),
-      mean: (arm) => (arm.templateId === 'ring-escape' ? 1 : 0.2),
-      sd: (arm) => (arm.templateId === 'sand-pour' ? 0.9 : 0.1),
-      experimentReason: (arm) => `Testing ${arm.templateId}`,
-    };
-    // A fixed template set so the per-template cap (ceil(9 / 5) = 2) doesn't depend on the catalog
-    // size; sand-pour last so the tied exploit slots don't use up its cap first.
-    const templateIds = ['ring-escape', 'marble-race', 'ball-battle', 'polyrhythm', 'sand-pour'];
-    const chosen = chooseArms({ count: 9, templateIds, themeIds: [], minLengthS: 20, maxLengthS: 45 }, model, new Rng(4));
-    const exps = chosen.filter((c) => c.experiment);
-    expect(chosen).toHaveLength(9);
-    expect(exps.length).toBe(2);
-    expect(exps.every((c) => c.arm.templateId === 'sand-pour' && c.experiment!.reason === 'Testing sand-pour')).toBe(true);
-    // Diversity still holds: ring-escape can't take every exploit slot.
-    expect(chosen.filter((c) => c.arm.templateId === 'ring-escape').length).toBeLessThanOrEqual(2);
-
-    const now = Date.now();
-    const lastPostedAt = Object.fromEntries(TEMPLATES.map((t) => [t.id, now]));
-    lastPostedAt['marble-race'] = now - 30 * 86_400_000;
-    const flatish: ArmModel = { ...model, sample: () => () => 0, mean: () => 0, sd: () => 0.1 };
-    const withStale = chooseArms({ count: 3, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45, lastPostedAt, now }, flatish, new Rng(5));
-    expect(withStale[0].arm.templateId).toBe('marble-race');
   });
 });
 
@@ -88,7 +56,6 @@ describe('concepts', () => {
   it('plans a full batch offline with the mock generator', async () => {
     const planned = await planConcepts(
       { count: 6, templateIds: [], themeIds: [], minLengthS: 20, maxLengthS: 45, generator: 'mock', seed: 11 },
-      flatArmModel,
       { recentHooks: [] },
     );
     expect(planned).toHaveLength(6);
@@ -195,15 +162,13 @@ describe('title emoji', () => {
     expect([...seen].sort()).toEqual(['arctic', 'classic', 'futuristic', 'neon']);
   });
 
-  it('uses settings chosen up front (taste model) whatever the model returns, keeping planned variants', async () => {
+  it('keeps the settings of a rendered run whatever the model returns', async () => {
     const bb = { ...arm, templateId: 'ball-battle' };
-    const chooseParams = (_a: unknown, _t: number, fixed: Record<string, unknown>) => ({ params: { ...fixed, speed: 1111, hp: 222 }, source: 'near a video you approved' });
     for (const gen of ['mock', 'fallback'] as const) {
-      const { concept } = await planOne(bb, 30, gen, { recentHooks: [], chooseParams }, new Rng(3));
+      const { concept } = await planOne(bb, 30, gen, { recentHooks: [], keepParams: { teams: 'countries', speed: 1111, hp: 222 } }, new Rng(3));
       expect(concept.params.speed).toBe(1111);
       expect(concept.params.hp).toBe(222);
-      expect(['colors', 'countries']).toContain(concept.params.teams);
-      expect(concept.paramsSource).toBe('near a video you approved');
+      expect(concept.params.teams).toBe('countries');
     }
   });
 
@@ -283,24 +248,6 @@ describe('upload text', () => {
   it('asks the batch planner for every platform', () => {
     const schema = conceptOutputSchema(getTemplate('ring-escape'));
     for (const k of ['instagramCaption', 'youtubePinnedComment', 'xReply', 'coverText', 'emojis']) expect(schema.required).toContain(k);
-  });
-});
-
-describe('performance summary', () => {
-  const post = (title: string, reward: number, extra: { views?: number; provisional?: boolean } = {}) => ({ title, hook: 'hook', templateName: 'Ring Escape', reward, provisional: false, ...extra });
-
-  it('says nothing until enough posts are scored', () => {
-    expect(summarizePerformance([post('a', 1), post('b', 0), post('c', -1)])).toBeUndefined();
-  });
-
-  it('lists the best first and the weakest separately, without overlap', () => {
-    const s = summarizePerformance([post('mid', 0.1), post('top', 1.5, { views: 12000 }), post('low', -1.2, { provisional: true }), post('ok', 0.6), post('bad', -0.4)])!;
-    const lines = s.split('\n');
-    expect(lines[1]).toBe('- "top" (Ring Escape; on-screen "hook"): +1.5 vs average, 12,000 views');
-    expect(lines.indexOf('Weakest:')).toBe(4);
-    expect(lines[5]).toContain('"low"');
-    expect(lines[5]).toContain('early numbers');
-    expect(s.match(/"mid"/g)).toHaveLength(1);
   });
 });
 

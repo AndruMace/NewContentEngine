@@ -34,7 +34,7 @@ export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, bal
 
 /**
  * Long-form ambient templates (hours-long background videos). Kept out of TEMPLATES on purpose: that
- * list feeds batches, the planner, the taste model and analytics, which are all about Shorts.
+ * list feeds batches and the planner, which are all about Shorts.
  */
 export { setAssetBase, loadedSounds } from './ambient/assets';
 
@@ -77,5 +77,5 @@ export const findTemplate = (id: string): Template | undefined => {
   return ALL_TEMPLATES.find((t) => t.id === current);
 };
 
-/** Long-form ambient videos are ignored by analytics and never planned into batches. */
+/** Long-form ambient videos are never planned into batches. */
 export const isLongForm = (templateId: string | undefined): boolean => Boolean(templateId && LONG_FORM_TEMPLATES.some((t) => t.id === canonicalTemplateId(templateId)));

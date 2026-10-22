@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { Rng, searchBudgetOf, type Recipe } from '@sim/engine';
 import { MELODIES } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
-import { claudeAvailable, coerceParams, flatArmModel, planConcepts, type Concept } from '@sim/planner';
+import { claudeAvailable, coerceParams, planConcepts, type Concept } from '@sim/planner';
 import {
   activeBatches,
   conceptsForBatch,
@@ -142,7 +142,6 @@ export class BatchRunner extends EventEmitter {
         generator,
         seed: hashSeed(batchId) + existing.length,
       },
-      flatArmModel,
       { recentHooks: recentHooks(), notes: s.notes || undefined, recentNudges: recentNudges(), recentTitles: recentTitles() },
       (planned) => {
         if (this.cancelled.has(batchId)) return;

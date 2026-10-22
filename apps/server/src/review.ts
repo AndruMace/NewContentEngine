@@ -155,8 +155,7 @@ export class ReviewActions {
     if (!c) throw new Error('This video has no concept to rewrite');
     const client = claudeAvailable() ? new Anthropic() : undefined;
     // Same simulation, so the new copy is written for the settings already on screen.
-    const keep = () => ({ params: c.concept.params, source: c.concept.paramsSource ?? 'kept' });
-    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), chooseParams: keep, recentTitles: recentTitles() }, new Rng(Date.now() % 1e9), client);
+    const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), keepParams: c.concept.params, recentTitles: recentTitles() }, new Rng(Date.now() % 1e9), client);
     // Keep the video's comment prompt (or its absence): only the written copy is being replaced.
     const { nudge: _drop, ...fresh } = planned.concept.copy;
     const copy = { ...fresh, ...(c.concept.copy.nudge ? { nudge: c.concept.copy.nudge } : {}) };
@@ -171,7 +170,6 @@ export class ReviewActions {
     if (!c || !r.batchId) throw new Error('This video has no concept to replace');
     const client = claudeAvailable() ? new Anthropic() : undefined;
     const planned = await planOne(c.concept.arm, c.concept.targetS, client ? 'claude' : 'fallback', { recentHooks: recentHooks(), recentTitles: recentTitles() }, new Rng(Date.now() % 1e9), client);
-    if (c.concept.experiment) planned.concept.experiment = c.concept.experiment;
     planned.concept.melodyId = chooseMelody(r.batchId, planned.concept.templateId, new Rng(Date.now() % 1e9));
     const concept = insertConcept(r.batchId, conceptsForBatch(r.batchId).length, planned.concept);
     const next = await this.batches.searchAndQueue(r.batchId, concept, { kind: r.kind });

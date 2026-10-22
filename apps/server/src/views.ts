@@ -20,7 +20,7 @@ export function reviewItem(r: RenderRow) {
   return {
     ...r,
     files: r.dir ? { final: join(r.dir, 'final.mp4'), cover: join(r.dir, 'cover.jpg'), contact: join(r.dir, 'contact.jpg') } : null,
-    concept: c ? { arm: c.arm, source: c.source, rationale: c.rationale ?? null, targetS: c.targetS, experiment: c.experiment ?? null, paramsSource: c.paramsSource ?? null, notes: c.notes ?? null } : null,
+    concept: c ? { arm: c.arm, source: c.source, rationale: c.rationale ?? null, targetS: c.targetS, notes: c.notes ?? null } : null,
     platformText: r.copy ? platformText(r.copy) : null,
     /** Claude writing upload text in the background (null when nothing has run since the server started). */
     copyJob: copyJobFor(r.id),

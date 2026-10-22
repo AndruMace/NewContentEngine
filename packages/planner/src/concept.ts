@@ -36,12 +36,8 @@ export interface Concept {
   copy: SocialCopy;
   source: 'claude' | 'fallback' | 'mock' | 'manual';
   rationale?: string;
-  /** Set when the learner chose this arm to test it rather than because it is expected to win. */
-  experiment?: { reason: string };
   /** Whether the title was planned to lead with an emoji (most do; the rest are a comparison group). */
   titleEmoji?: boolean;
-  /** Where the settings came from when the taste model chose them (e.g. "near a video you approved"). */
-  paramsSource?: string;
   /** Owner's notes for Claude when the copy was written (Playground exports). */
   notes?: string;
 }
@@ -94,7 +90,7 @@ export function normalizeCopy(c: SocialCopy): SocialCopy {
   };
 }
 
-/** Share of videos with engagement cues (comment prompt + like heart); the rest are the comparison group. */
+/** Share of videos with engagement cues (comment prompt + like heart). */
 export const CUES_SHARE = 0.75;
 
 /**
@@ -112,7 +108,7 @@ export function pickNudge(templateId: string, rng: Rng, recent: string[] = []): 
 
 /**
  * Params the planner decides itself (seeded, evenly split) instead of leaving them to Claude, which
- * tends to keep defaults for cosmetic options. Even splits also give the analytics a clean comparison.
+ * tends to keep defaults for cosmetic options.
  */
 export interface PlannedVariant {
   param: string;
@@ -122,15 +118,11 @@ export interface PlannedVariant {
   /** On-screen hook used verbatim for a value (overrides whatever the model writes). */
   hook?: Record<string, string>;
   /**
-   * Only planned (and only learned from) when an earlier variant took one of these values, e.g. the
+   * Only planned when an earlier variant took one of these values, e.g. the
    * player count only for a free-for-all. Unplanned, the param keeps its default.
    */
   when?: { param: string; values: readonly string[] };
 }
-
-/** Analytics key for one value of a planned variant (with its condition, if any). */
-export const variantKey = (templateId: string, v: PlannedVariant, value: string) =>
-  `${templateId}.${v.param}=${value}${v.when ? `?${v.when.param}=${v.when.values.join(',')}` : ''}`;
 
 export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   'ball-battle': [
@@ -157,7 +149,6 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   ],
   'math-curiosities': [
     {
-      // Blocks first: the learner's baseline for comparing the modes.
       param: 'mode',
       values: ['blocks', 'collatz', 'times-table', 'phyllotaxis', 'chaos-game', 'monty-hall', 'birthday'],
       guide: {
@@ -178,7 +169,6 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
     {
-      // Off first: the baseline the learner compares the voiceover against.
       param: 'narration',
       values: ['off', 'on'],
       when: { param: 'mode', values: ['collatz', 'times-table', 'monty-hall', 'birthday'] },
@@ -215,7 +205,7 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       },
     },
     {
-      // Rotates the looks so batches don't repeat one style, and lets the learner compare them.
+      // Rotates the looks so batches don't repeat one style.
       param: 'style',
       values: ['paint', 'clean', 'rings', 'face'],
       guide: {
@@ -239,7 +229,7 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   ],
   polyrhythm: [
     {
-      // Rotates the looks so batches don't repeat one style, and lets the learner compare them.
+      // Rotates the looks so batches don't repeat one style.
       param: 'style',
       values: ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d'],
       guide: {
@@ -444,7 +434,7 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   ],
   'marble-race-3d': [
     {
-      // Rotates the looks so batches don't repeat one style, and lets the learner compare them.
+      // Rotates the looks so batches don't repeat one style.
       param: 'look',
       values: ['classic', 'futuristic', 'arctic', 'neon'],
       guide: {
@@ -495,7 +485,7 @@ export const variantGuide = (templateId: string, chosen: Record<string, unknown>
 const applicableVariants = (templateId: string, chosen: Record<string, unknown>) =>
   (PLANNED_VARIANTS[templateId] ?? []).filter((v) => !v.when || v.when.values.includes(String(chosen[v.when.param])));
 
-/** Share of titles that lead with an emoji. The rest keep a comparison group for the analytics. */
+/** Share of titles that lead with an emoji. */
 export const TITLE_EMOJI_SHARE = 0.75;
 
 /** Fallback lead emoji per template, used when a title should lead with one but doesn't. */

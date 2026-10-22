@@ -14,13 +14,8 @@ export interface PlanContext {
   recentHooks: string[];
   /** Free-text "notes / trends for today" from the batch settings. */
   notes?: string;
-  /** Phase 5: summary of what has been performing. */
-  performanceSummary?: string;
-  /**
-   * Picks the simulation settings before the copy is written (the taste model: settings near what
-   * the owner approved). When set, the model's own params are ignored and it writes to these.
-   */
-  chooseParams?: (arm: Arm, targetS: number, fixed: Record<string, unknown>, rng: Rng) => { params: Record<string, unknown>; source: string };
+  /** Settings of a run already rendered (rewriting its copy): the model writes to these instead of choosing its own. */
+  keepParams?: Record<string, unknown>;
   /** Comment prompts used recently (newest first); picks are added here so a batch varies them. */
   recentNudges?: string[];
   /** Recent titles on the channel (newest first), so new ones vary their structure. */
@@ -71,7 +66,7 @@ export interface ConceptOptions {
   titleEmoji: boolean;
   /** Params the planner already chose (see PLANNED_VARIANTS); they override whatever the model returns. */
   variants?: Record<string, unknown>;
-  /** Every param was chosen up front (taste model): tell the model they're fixed. */
+  /** Every param is already set (rewriting copy for a rendered run): tell the model they're fixed. */
   fixedParams?: boolean;
 }
 
@@ -90,11 +85,10 @@ function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOp
     titleEmojiGuide(opts.titleEmoji),
     ...variantGuide(arm.templateId, opts.variants ?? {}),
     opts.fixedParams
-      ? `Parameters are already chosen for this video (from settings the channel owner liked): ${JSON.stringify(opts.variants)}. Return them unchanged as params and write copy that matches them; prefer {paramName} placeholders over restating numbers.`
+      ? `Parameters are already set for this video: ${JSON.stringify(opts.variants)}. Return them unchanged as params and write copy that matches them; prefer {paramName} placeholders over restating numbers.`
       : '',
     `Melody: assigned separately for variety; return "${MELODIES[0].id}" as melodyId.`,
     ctx.recentHooks.length ? `Recent hooks to avoid repeating:\n${ctx.recentHooks.slice(0, 20).map((h) => `- ${h}`).join('\n')}` : '',
-    ctx.performanceSummary ? `What has been performing:\n${ctx.performanceSummary}` : '',
     ctx.recentTitles?.length ? `Recent titles on the channel (vary the structure from these):\n${ctx.recentTitles.slice(0, 12).map((t) => `- ${t}`).join('\n')}` : '',
     ctx.notes ? `Notes from the channel owner for today: ${ctx.notes}` : '',
     previousError ? `Your previous answer could not be used: ${previousError}. Return a corrected answer.` : '',
@@ -106,7 +100,7 @@ function userPrompt(arm: Arm, targetS: number, ctx: PlanContext, opts: ConceptOp
 /** Turn a raw structured-output object into a validated Concept (throws with a readable reason). */
 export function conceptFromResponse(raw: unknown, arm: Arm, targetS: number, source: Concept['source'], opts?: ConceptOptions & { rng: Rng }): Concept {
   const r = ResponseShape.parse(raw);
-  // Enforce the planned title style even if the model didn't follow it, so the analytics compare cleanly.
+  // Enforce the planned title style even if the model didn't follow it.
   if (opts) r.title = applyTitleEmoji(r.title, opts.titleEmoji, arm.templateId, opts.rng);
   const template = getTemplate(arm.templateId);
   const melodyId = MELODIES.some((m) => m.id === r.melodyId) ? r.melodyId : MELODIES[0].id;

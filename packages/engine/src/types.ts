@@ -213,7 +213,7 @@ export interface VideoFormat {
 /**
  * Long-form (ambient) templates render a seamless master loop that is repeated to the final length.
  * Every frame must depend only on t (so segments can start anywhere) and t = loopS must look and sound
- * exactly like t = 0. They are kept out of batches, the planner and analytics.
+ * exactly like t = 0. They are kept out of batches and the planner.
  */
 export interface LongFormSpec {
   /** Allowed master-loop lengths in seconds. */

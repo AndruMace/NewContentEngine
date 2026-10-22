@@ -41,41 +41,8 @@ export interface UploadCopyInput {
   notes?: string;
   /** Lead the title with an emoji (true) or not (false). */
   titleEmoji: boolean;
-  /** What has been performing on the channel (see summarizePerformance). */
-  performance?: string;
   /** Recent titles on the channel, newest first, so new ones don't repeat their structure. */
   recentTitles?: string[];
-}
-
-/** One posted video's result, for summarizePerformance. */
-export interface PostResult {
-  title: string;
-  hook: string;
-  templateName: string;
-  /** Reward in typical post-to-post swings vs the channel's average. */
-  reward: number;
-  views?: number;
-  /** Still early (not at the scoring horizon yet). */
-  provisional: boolean;
-}
-
-/**
- * Best and weakest posts as prompt lines, so the copy can lean on what works for this audience.
- * Undefined until there are enough scored posts to say anything.
- */
-export function summarizePerformance(posts: PostResult[], minPosts = 4): string | undefined {
-  if (posts.length < minPosts) return undefined;
-  const sorted = [...posts].sort((a, b) => b.reward - a.reward);
-  const top = sorted.slice(0, Math.min(5, Math.ceil(sorted.length / 2)));
-  const bottom = sorted.slice(top.length).slice(-3).reverse();
-  const line = (p: PostResult) =>
-    `- "${p.title}" (${p.templateName}; on-screen "${p.hook}"): ${p.reward >= 0 ? '+' : '−'}${Math.abs(p.reward).toFixed(1)} vs average${p.views !== undefined ? `, ${p.views.toLocaleString('en-US')} views` : ''}${p.provisional ? ', early numbers' : ''}`;
-  return [
-    'Best performers on YouTube (reward combines retention, reach, engagement and follows; in typical post-to-post swings):',
-    ...top.map(line),
-    ...(bottom.length ? ['Weakest:', ...bottom.map(line)] : []),
-    'Lean on what the best ones have in common and avoid what the weakest share, without copying their wording. The template matters too, so judge the titles, not just the topic.',
-  ].join('\n');
 }
 
 function schemaFor(groups: CopyGroup[]) {
@@ -131,7 +98,6 @@ function userPrompt(input: UploadCopyInput, target: CopyTarget | null, current: 
       input.onScreen.nudge && `Comment prompt: "${input.onScreen.nudge}"`,
     ]),
     section('From the channel owner', [input.notes?.trim()]),
-    section('What has been performing', [input.performance]),
     section('Recent titles on the channel (vary the structure from these)', (input.recentTitles ?? []).slice(0, 12).map((t) => `- ${t}`)),
     section('This request', [
       (target === null || target === 'youtube') &&
