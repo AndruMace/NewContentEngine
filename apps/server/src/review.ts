@@ -1,7 +1,7 @@
 import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { zipSync } from 'fflate';
-import { Rng, searchBudgetOf } from '@sim/engine';
+import { Rng, searchBudgetOf, type Recipe } from '@sim/engine';
 import { RENDERS_DIR } from '@sim/render';
 import {
   PLATFORMS,
@@ -48,6 +48,7 @@ const REASON_IDS = new Set<string>(REJECT_REASONS.map((r) => r.id));
 import type { RenderScheduler } from './scheduler';
 import type { SearchPool } from './searchPool';
 import { fallbackConcept } from '@sim/planner';
+import { pruneVoiceCache } from '@sim/voice';
 
 /** Claude writing upload text for a render, in the background. Only lives in memory. */
 export interface CopyJob {
@@ -388,6 +389,11 @@ export class ReviewActions {
       }
       updateRender(row.id, { status: 'deleted', dir: null });
     }
+    // Voiced lines no render still needs (each render copies its own; deleted ones re-voice if replayed).
+    const keep = new Set<string>();
+    for (const r of db.prepare("SELECT recipe FROM renders WHERE status != 'deleted' AND json_extract(recipe, '$.voice') IS NOT NULL").all() as { recipe: string }[])
+      for (const l of (JSON.parse(r.recipe) as Recipe).voice?.lines ?? []) keep.add(l.clip);
+    freed += (await pruneVoiceCache(keep, cutoff)).freedBytes;
     return { deleted: rows.length, freedBytes: freed };
   }
 }

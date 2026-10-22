@@ -101,6 +101,7 @@ export const growUntilFull: Template<GrowUntilFullParams, State> = {
   id: 'grow-until-full',
   name: 'Grow Until Full',
   family: 'bounce',
+  category: 'bounce',
   description:
     'A ball bounces inside an arena (circle, square, hexagon or triangle) and grows a little on every bounce until it fills it. As it grows the bounces get faster and faster. ' +
     'In the square, hexagon and triangle arenas the "ball" is the same shape as the arena (never rotating), so it can fill it perfectly. ' +

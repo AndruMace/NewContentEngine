@@ -77,6 +77,7 @@ export const marbleRace3d: Template<MarbleRace3dParams, State> = {
   id: 'marble-race-3d',
   name: 'Marble Race 3D',
   family: 'race',
+  category: 'races',
   description:
     'Marbles race down a 3D tower with real rolling physics: sloping lanes, drops, hairpin turns, helixes, coin funnels, peg fields and spinning bars, different for every seed. Four looks: classic (photoreal wood, brass and felt, like a handmade marble run), futuristic (carbon fibre, titanium and light strips in a dark hangar), arctic (a track carved from ice, with snow) and neon (stylised, in the video theme\'s colours). In elimination mode the last marble(s) past each checkpoint are knocked out (the rest wait at a gate) until one remains; in race mode first past the finish wins.',
   schema: marbleRace3dSchema,

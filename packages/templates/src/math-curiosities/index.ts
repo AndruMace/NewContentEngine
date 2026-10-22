@@ -30,6 +30,7 @@ export const mathCuriosities: Template<MathParams, State> = {
   id: 'math-curiosities',
   name: 'Math Curiosities',
   family: 'bounce',
+  category: 'brainy',
   description:
     'Surprising maths, one curiosity per video (the mode): colliding blocks whose collision counts spell π; Collatz hailstone numbers (how many steps to reach 1?); times tables drawn on a circle (cardioids and stars); a sunflower whose seed angle sweeps to the golden angle; the chaos game (random dots that draw a fractal); the Monty Hall problem, played once and then hundreds of times; and the birthday paradox (how many people until two share a birthday?). CTAs may use {result} (the mode\'s answer) and, for the blocks, {count}.',
   schema: mathCuriositiesSchema,

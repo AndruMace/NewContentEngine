@@ -89,6 +89,7 @@ export const pathfindingRace: Template<PathfindingRaceParams, State> = {
   id: 'pathfinding-race',
   name: 'Pathfinding Race',
   family: 'kinetic',
+  category: 'brainy',
   description:
     'Search algorithms (BFS, DFS, Dijkstra, A*, Greedy, Bidirectional, Wall follower) race through the same maze at the same speed. Explored cells flood outward with a note each; finishers trace their route, and badges show who found the shortest path.',
   schema: pathfindingRaceSchema,

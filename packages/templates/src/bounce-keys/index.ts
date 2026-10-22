@@ -238,6 +238,7 @@ export const bounceKeys: Template<BounceKeysParams, State> = {
   id: 'bounce-keys',
   name: 'Bounce Keys',
   family: 'bounce',
+  category: 'bounce',
   description:
     'A mystery tune played by a bouncing ball: every landing is the next note, exactly on the beat. Styles: note blocks running down the screen (cascade), a piano keyboard (keys), glossy 3D blocks receding into depth (3D cascade), blocks spiralling down a glowing column with an orbiting camera (spiral), or a top-down drop through layers of blocks (falling). Bars lean so each bounce carries the ball on to the next note, and longer notes fly higher. Partway through, a second ball joins on the bass line. The title of the song is revealed at the end.',
   schema: bounceKeysSchema,

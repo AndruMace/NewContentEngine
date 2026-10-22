@@ -15,7 +15,7 @@ import { ProcRig, restPose } from './proc/rig';
 import { SPECIES } from './proc/species';
 import { spotOf, spotWorld, woundMesh } from './proc/contact';
 import { stage } from './proc/stage';
-import { REPLAY_S, fightersNow, replaying, type FighterView, type State } from './index';
+import { REPLAY_S, fightersNow, replaying, sidesOf, type FighterView, type State } from './index';
 
 const VFOV = 32;
 const ASPECT = 1080 / 1920;
@@ -226,16 +226,11 @@ function build(s: State, theme: Theme) {
 
   // Pedestals for the VS card.
   const pedestal = new THREE.MeshStandardMaterial({ color: 0x2a2a33, roughness: 0.6, metalness: 0.2 });
-  for (const p of PEDESTALS) {
+  const pedestals = PEDESTALS.map((p) => {
     const ped = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.4, 0.3, 32), pedestal);
     ped.position.set(p.x, -0.15, p.z);
     scene.add(ped);
-  }
-  const showcase = [s.a, s.b].map((def, k) => {
-    const inst = makeInst(def);
-    inst.group.position.copy(PEDESTALS[k]);
-    scene.add(inst.group);
-    return inst;
+    return ped;
   });
 
   const camera = new THREE.PerspectiveCamera(VFOV, ASPECT, 0.1, 300);
@@ -262,10 +257,27 @@ function build(s: State, theme: Theme) {
     scene.add(m);
     return m;
   });
-  return { scene, camera, vsCam, sun, vsLight, torches, showcase, fighters: new Map<number, Inst>(), flames, bursts, dust };
+  // (The fighters, in the arena and on the VS card, are made per fight: see forBout.)
+  return { scene, camera, vsCam, sun, vsLight, torches, pedestals, showcase: [] as Inst[][], boutId: -1, fighters: new Map<number, Inst>(), flames, bursts, dust };
 }
 
 const view = sceneCache(build);
+
+/** A new fight on the card: its fighters made afresh (fresh wounds), and its pair or pairs for the VS card. */
+function forBout(v: ReturnType<typeof view>, s: State) {
+  if (v.boutId === s.boutId) return;
+  v.boutId = s.boutId;
+  for (const inst of v.fighters.values()) v.scene.remove(inst.group);
+  v.fighters.clear();
+  for (const side of v.showcase) for (const inst of side) v.scene.remove(inst.group);
+  v.showcase = sidesOf(s).map((cs) =>
+    cs.map((def) => {
+      const inst = makeInst(def);
+      v.scene.add(inst.group);
+      return inst;
+    }),
+  );
+}
 let lastCamera: THREE.PerspectiveCamera | null = null;
 
 /** Where a point of the arena (height h) lands on screen in the last frame drawn (null if behind). */
@@ -433,18 +445,29 @@ function drawVsCard(ctx: Ctx2D, s: State, v: ReturnType<typeof view>) {
       ctx.lineTo(i * 240 + drift + 700, -40);
       ctx.stroke();
     }
-    // The fighter, framed so it stands st.model.h pixels tall at st.model (x, y).
-    const inst = v.showcase[k];
-    const def = inst.def;
+    // The fighter (or a pair, one a little behind the other), framed so it stands st.model.h pixels tall at st.model (x, y).
+    const insts = v.showcase[k] ?? [];
     const p = PEDESTALS[k];
     const idleT = s.t;
-    // Standing on the pedestal; the dragon hovers with its wings beating.
-    inst.rig.pose({ ...restPose(), time: idleT + k * 0.7, wingFlap: 0.6 + 0.6 * Math.sin(idleT * 6.5), wingFold: 0.25, legs: def.hover ? Object.fromEntries(SPECIES[def.proc.kind].legs.map((l) => [l.name, 'relax' as const])) : {}, gaitScale: def.hover ? 0 : 1 });
-    // Face the camera, three-quarters on, the two looking towards each other.
-    inst.group.rotation.y = Math.PI + (k === 0 ? 0.6 : -0.6);
-    const tall = def.height + (def.hover ?? 0);
-    inst.group.position.set(p.x, def.hover ? def.hover + Math.sin(s.t * 3) * 0.1 : 0, p.z);
-    const size = Math.max(tall, inst.length * 0.85);
+    const pair = insts.length > 1;
+    const gap = pair ? (insts[0].length + insts[1].length) * 0.32 + 0.3 : 0;
+    let tall = 0;
+    insts.forEach((inst, j) => {
+      const def = inst.def;
+      // Standing on the pedestal; the dragon hovers with its wings beating.
+      inst.rig.pose({ ...restPose(), time: idleT + k * 0.7 + j * 0.4, wingFlap: 0.6 + 0.6 * Math.sin(idleT * 6.5), wingFold: 0.25, legs: def.hover ? Object.fromEntries(SPECIES[def.proc.kind].legs.map((l) => [l.name, 'relax' as const])) : {}, gaitScale: def.hover ? 0 : 1 });
+      // Face the camera, three-quarters on, the two sides looking towards each other.
+      inst.group.rotation.y = Math.PI + (k === 0 ? 0.6 : -0.6);
+      inst.group.scale.setScalar(def.scale ?? 1);
+      // (A pair side by side across the frame, the second one a step back.)
+      const dx = pair ? (j === 0 ? -gap / 2 : gap / 2) * (k === 0 ? -1 : 1) : 0;
+      inst.group.position.set(p.x + dx, def.hover ? def.hover + Math.sin(s.t * 3 + j) * 0.1 : 0, p.z + (pair && j === 1 ? 0.9 : 0));
+      tall = Math.max(tall, def.height + (def.hover ?? 0));
+    });
+    v.pedestals[k].scale.set(pair ? 1.6 : 1, 1, pair ? 1.3 : 1);
+    const longest = Math.max(0.5, ...insts.map((x) => x.length));
+    // (A pair has half the card's width to stand in.)
+    const size = Math.max(tall, longest * 0.85, pair ? (gap + longest) * 1.15 : 0);
     const visH = (size / st.model.h) * 1920;
     const d = visH / 2 / Math.tan(((VFOV / 2) * Math.PI) / 180);
     const look = new THREE.Vector3(p.x, tall * 0.5, p.z);
@@ -462,6 +485,7 @@ function drawVsCard(ctx: Ctx2D, s: State, v: ReturnType<typeof view>) {
 
 export function drawScene(ctx: Ctx2D, s: State, theme: Theme) {
   const v = view(s, theme);
+  forBout(v, s);
   const { fighters, simT } = fightersNow(s);
   const horde = s.mode === 'horde';
   for (const f of fighters) {
@@ -477,7 +501,9 @@ export function drawScene(ctx: Ctx2D, s: State, theme: Theme) {
   for (const f of fighters) {
     const inst = v.fighters.get(f.idx)!;
     const fl = f.flash * f.flash * 0.12;
-    for (const m of inst.mats) m.emissive.setRGB(fl + f.burn * 0.45, fl * 0.85 + f.burn * 0.12, fl * 0.75);
+    // Full of fury: a pulsing orange glow.
+    const fury = f.alive && f.fury >= 1 ? 0.1 + 0.08 * Math.sin(simT * 9 + f.idx) : 0;
+    for (const m of inst.mats) m.emissive.setRGB(fl + f.burn * 0.45 + fury, fl * 0.85 + f.burn * 0.12 + fury * 0.4, fl * 0.75);
     drawWounds(inst, f, simT);
   }
   // Fighters not in this snapshot (a replay from before they came in) stay hidden.

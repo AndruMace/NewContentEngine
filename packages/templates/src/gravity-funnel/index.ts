@@ -78,6 +78,7 @@ export const gravityFunnel: Template<GravityFunnelParams, State> = {
   id: 'gravity-funnel',
   name: 'Gravity Funnel 3D',
   family: 'race',
+  category: 'races',
   description:
     'Rendered in 3D: marbles (colours, or countries with their flags) roll around a spiral "wishing well" funnel like a charity coin funnel. They spin faster and faster as their orbits tighten, knock into each other with sparks, and drop through the hole in the middle one by one. A glowing strip runs across the funnel and every marble rolling over it plays a note, so the music speeds up as they spiral in. A live list shows who is still spinning; the last marble left wins.',
   schema: gravityFunnelSchema,

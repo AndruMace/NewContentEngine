@@ -54,15 +54,39 @@ export function wingPart(len: number, chordIn: number, chordOut: number, fingers
       const notch = feathers ? (k % 2 ? 0.78 : 1.05) : 0.85 + 0.15 * Math.sin(t * Math.PI * fingers);
       pts.push([t * len, 0.05 * t - 0.02, -(chordIn + (chordOut - chordIn) * t) * notch]);
     }
+    // Each span between two fingers: from the leading edge to a sagging middle row (a curved surface, not
+    // a board) to the trailing edge, scalloped in between a dragon's finger tips (a bat's wing).
+    const lead = (k: number): V3 => [(k / fingers) * len, 0.05 * (k / fingers), 0.02];
+    const mid = (k: number): V3 => {
+      const l = lead(k);
+      const t = pts[k];
+      return [(l[0] + t[0]) / 2, (l[1] + t[1]) / 2 - 0.12 * Math.abs(t[2] - l[2]), (l[2] + t[2]) / 2];
+    };
+    const mixV = (p: V3, q: V3, u: number): V3 => [p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u, p[2] + (q[2] - p[2]) * u];
     for (let k = 0; k < fingers; k++) {
-      const a: V3 = [(k / fingers) * len, 0.05 * (k / fingers), 0.02];
-      const c: V3 = [((k + 1) / fingers) * len, 0.05 * ((k + 1) / fingers), 0.02];
-      const col = shade(feathers ? (k % 2 ? skinC : skinC.clone().multiplyScalar(0.82)) : lerpColor(skinC, edgeC, hash(k) * 0.4), 1, a, 0.05);
-      b.tri(a, pts[k], pts[k + 1], col);
-      b.tri(a, pts[k + 1], c, col);
-      // Finger struts (a bat's or a dragon's; feathers have none).
-      if (strut) cone(b, a, [pts[k + 1][0] - a[0], pts[k + 1][1] - a[1], pts[k + 1][2] - a[2]], Math.hypot(pts[k + 1][0] - a[0], pts[k + 1][2] - a[2]), 0.012, edgeC, 3);
+      const [l0, l1, m0, m1, t0, t1] = [lead(k), lead(k + 1), mid(k), mid(k + 1), pts[k], pts[k + 1]];
+      const col = shade(feathers ? (k % 2 ? skinC : skinC.clone().multiplyScalar(0.82)) : lerpColor(skinC, edgeC, hash(k) * 0.4), 1, l0, 0.05);
+      const inner = col.clone().multiplyScalar(0.9);
+      b.tri(l0, m0, m1, col);
+      b.tri(l0, m1, l1, col);
+      if (feathers) {
+        b.tri(m0, t0, t1, inner);
+        b.tri(m0, t1, m1, inner);
+      } else {
+        const sc = mixV(mixV(t0, t1, 0.5), mixV(m0, m1, 0.5), 0.4);
+        b.tri(m0, t0, sc, inner);
+        b.tri(m0, sc, m1, inner);
+        b.tri(m1, sc, t1, inner);
+      }
     }
+    // Finger struts (a bat's or a dragon's; feathers have none), following the membrane's curve.
+    if (strut)
+      for (let k = 1; k <= fingers; k++)
+        for (const [p, q] of [
+          [lead(k), mid(k)],
+          [mid(k), pts[k]],
+        ] as const)
+          cone(b, p, [q[0] - p[0], q[1] - p[1], q[2] - p[2]], Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]), 0.012, edgeC, 3);
   };
 }
 

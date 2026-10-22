@@ -384,8 +384,9 @@ void main() {
 `;
 
 // ---- rain or snow, three sheets (added on top) --------------------------------------------------------
-const PRECIP_FRAG = /* glsl */ `
-${COMMON}
+/** Rain or snow sheets; `common` must declare along(), uD, uPhase, uLoop, uPrecip and hash12(). */
+export const precipFrag = (common: string) => /* glsl */ `
+${common}
 uniform float uV;       // train speed (m/s)
 uniform float uFall;    // fall speed (m/s)
 uniform float uCellW;   // column width (m), divides the ring
@@ -424,6 +425,7 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }
 `;
+const PRECIP_FRAG = precipFrag(COMMON);
 
 // ---- what the window reflects: the lamp, and the warm room behind us -------------------------------------
 const REFLECT_FRAG = /* glsl */ `

@@ -5,6 +5,9 @@ import type { Melody, MelodyCursor } from './melody';
 
 export type Family = 'bounce' | 'race' | 'particles' | 'kinetic';
 
+/** How the template pickers group templates (display only; `family` is what the planner uses). */
+export type TemplateCategory = 'battles' | 'races' | 'bounce' | 'machines' | 'brainy' | 'ambient';
+
 /** Something that happened in the sim. `t` is stamped by the Runner. */
 export interface SimEvent {
   t: number;
@@ -23,11 +26,13 @@ export type SfxId =
   | 'kick' | 'snare' | 'hat' | 'tom'
   // Combat: blows, movement, voices, crowd.
   | 'impact' | 'smack' | 'crunch' | 'slash' | 'swish' | 'whip' | 'hoof' | 'step' | 'bodyfall' | 'flame'
-  | 'roar' | 'growl' | 'snarl' | 'hiss' | 'whinny' | 'bellow' | 'screech' | 'grunt'
+  | 'roar' | 'growl' | 'snarl' | 'hiss' | 'whinny' | 'bellow' | 'screech' | 'grunt' | 'trumpet'
+  | 'chestbeat' | 'shield'
   | 'cheer' | 'gasp';
 
 export type AudioEvent =
-  | { t: number; kind: 'note'; midi: number; vel: number; voice?: VoiceId; dur?: number; pan?: number }
+  /** `bright` (0–1, default 1) scales the voice's overtones and filter: lower is darker and softer. */
+  | { t: number; kind: 'note'; midi: number; vel: number; voice?: VoiceId; dur?: number; pan?: number; bright?: number }
   | { t: number; kind: 'sfx'; name: SfxId; vel: number; pitch?: number; pan?: number }
   /** A recorded sound from assets/ambient (e.g. 'audio/thunder-close-1.opus'), at a playback rate. */
   | { t: number; kind: 'sample'; name: string; vel: number; rate?: number; pan?: number }
@@ -251,8 +256,11 @@ export interface Template<P = any, S = any> {
   id: string;
   name: string;
   family: Family;
+  category: TemplateCategory;
   description: string;
   schema: z.ZodType<P>;
+  /** Runs that can take longer than the usual 90 s limit (e.g. several fights in a row): the longest run. */
+  maxSeconds?: number | ((params: P) => number);
   /** Physics substeps per frame (default 4 = 240 Hz at 60 fps). */
   substeps?: number;
   /** Defaults to 1080×1920 at 60 fps. */

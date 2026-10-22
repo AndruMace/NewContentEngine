@@ -105,6 +105,34 @@ export function bakeTexture(fragmentShader: string, uniforms: Record<string, THR
 }
 
 /**
+ * A fragment shader run on demand into a float texture of width × height texels (each texel's
+ * shader sees gl_FragCoord), for per-object state that many vertices would otherwise each work out
+ * again (where a tree stands this frame, say). Full float precision, nearest filtering.
+ */
+export function gpuPass(fragmentShader: string, uniforms: Record<string, THREE.IUniform>, width: number, height: number) {
+  const target = new THREE.WebGLRenderTarget(width, height, { type: THREE.FloatType, format: THREE.RGBAFormat, magFilter: THREE.NearestFilter, minFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false });
+  const scene = new THREE.Scene();
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const mat = new THREE.ShaderMaterial({ vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }', fragmentShader, uniforms, depthTest: false, depthWrite: false });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  quad.frustumCulled = false;
+  scene.add(quad);
+  return {
+    texture: target.texture,
+    run() {
+      const { renderer } = get();
+      const prev = renderer.getRenderTarget();
+      const tone = renderer.toneMapping;
+      renderer.toneMapping = THREE.NoToneMapping;
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+      renderer.setRenderTarget(prev);
+      renderer.toneMapping = tone;
+    },
+  };
+}
+
+/**
  * A studio environment of our own for reflections: a dark room lit by a few large softboxes, so
  * metal reflects soft highlights on black (a product-photo look) rather than a bright white room.
  * Built once per call site and cached by key.

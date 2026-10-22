@@ -157,15 +157,16 @@ function noiseBurst(bus: SynthBus, when: number, dur: number, dest: AudioNode, p
   src.stop(when + dur + 0.05);
 }
 
-function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, when: number, dur: number, dest: AudioNode) {
+/** `b` (brightness, 0–1) scales overtones and filter openings: 1 is each voice's full sound. */
+function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, when: number, dur: number, dest: AudioNode, b = 1) {
   const f = midiToHz(midi);
   const a = vel * 0.32;
   switch (voice) {
     case 'marimba': {
       const d = 0.7 * dur;
       osc(bus, 'sine', f, when, when + d + 0.1, dest, a, 0.002, d);
-      osc(bus, 'sine', f * 3.93, when, when + 0.2, dest, a * 0.35, 0.001, 0.12);
-      osc(bus, 'sine', f * 9.2, when, when + 0.06, dest, a * 0.12, 0.001, 0.04);
+      osc(bus, 'sine', f * 3.93, when, when + 0.2, dest, a * 0.35 * b, 0.001, 0.12);
+      osc(bus, 'sine', f * 9.2, when, when + 0.06, dest, a * 0.12 * b * b, 0.001, 0.04);
       break;
     }
     case 'bell': {
@@ -173,8 +174,9 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
       const mod = bus.ctx.createOscillator();
       mod.frequency.value = f * 3.5;
       const modGain = bus.ctx.createGain();
-      modGain.gain.setValueAtTime(f * 2.2, when);
-      modGain.gain.exponentialRampToValueAtTime(f * 0.05, when + d);
+      // The FM depth is the bell's brightness.
+      modGain.gain.setValueAtTime(f * 2.2 * Math.max(0.05, b), when);
+      modGain.gain.exponentialRampToValueAtTime(f * 0.05 * Math.max(0.05, b), when + d);
       mod.connect(modGain);
       const car = osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.9, 0.002, d);
       modGain.connect(car.frequency);
@@ -190,7 +192,7 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
       const lp = bus.ctx.createBiquadFilter();
       lp.type = 'lowpass';
       lp.Q.value = 2;
-      lp.frequency.setValueAtTime(Math.min(16000, f * 10), when);
+      lp.frequency.setValueAtTime(Math.min(16000, f * (1.5 + 8.5 * b)), when);
       lp.frequency.exponentialRampToValueAtTime(Math.max(80, f * 1.2), when + d);
       const g = bus.ctx.createGain();
       env(g, when, a * 0.7, 0.002, d);
@@ -202,8 +204,8 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
     case 'glass': {
       const d = 1.3 * dur;
       osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.8, 0.004, d);
-      osc(bus, 'sine', f * 2.76, when, when + d * 0.6, dest, a * 0.3, 0.003, d * 0.5);
-      osc(bus, 'sine', f * 5.4, when, when + d * 0.3, dest, a * 0.12, 0.002, d * 0.25);
+      osc(bus, 'sine', f * 2.76, when, when + d * 0.6, dest, a * 0.3 * b, 0.003, d * 0.5);
+      osc(bus, 'sine', f * 5.4, when, when + d * 0.3, dest, a * 0.12 * b * b, 0.002, d * 0.25);
       break;
     }
     case 'softsine': {
@@ -215,24 +217,24 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
       // Plucked tine: warm fundamental, a bright inharmonic overtone that dies fast, a soft thumb click.
       const d = 1.1 * dur;
       osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.9, 0.002, d);
-      osc(bus, 'sine', f * 5.95, when, when + 0.12, dest, a * 0.22, 0.001, 0.07);
-      noiseBurst(bus, when, 0.015, dest, a * 0.12, 'bandpass', Math.min(9000, f * 4), 2);
+      osc(bus, 'sine', f * 5.95, when, when + 0.12, dest, a * 0.22 * b * b, 0.001, 0.07);
+      noiseBurst(bus, when, 0.015, dest, a * 0.12 * b, 'bandpass', Math.min(9000, f * 4), 2);
       break;
     }
     case 'musicbox': {
       // Comb tooth: near-harmonic partials, the upper ones short and glassy.
       const d = 1.6 * dur;
       osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.7, 0.001, d);
-      osc(bus, 'sine', f * 2, when, when + d * 0.5, dest, a * 0.28, 0.001, d * 0.4);
-      osc(bus, 'sine', f * 4.07, when, when + 0.25, dest, a * 0.14, 0.001, 0.18);
+      osc(bus, 'sine', f * 2, when, when + d * 0.5, dest, a * 0.28 * b, 0.001, d * 0.4);
+      osc(bus, 'sine', f * 4.07, when, when + 0.25, dest, a * 0.14 * b * b, 0.001, 0.18);
       break;
     }
     case 'handpan': {
       // Steel tone field: fundamental tuned with its octave and compound fifth, soft mallet attack.
       const d = 2.2 * dur;
       osc(bus, 'sine', f, when, when + d + 0.1, dest, a * 0.85, 0.006, d);
-      osc(bus, 'sine', f * 2, when, when + d * 0.7, dest, a * 0.3, 0.005, d * 0.6);
-      osc(bus, 'sine', f * 3, when, when + d * 0.4, dest, a * 0.12, 0.004, d * 0.35);
+      osc(bus, 'sine', f * 2, when, when + d * 0.7, dest, a * 0.3 * b, 0.005, d * 0.6);
+      osc(bus, 'sine', f * 3, when, when + d * 0.4, dest, a * 0.12 * b * b, 0.004, d * 0.35);
       break;
     }
     case 'bass': {
@@ -242,7 +244,7 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
       const lp = bus.ctx.createBiquadFilter();
       lp.type = 'lowpass';
       lp.Q.value = 3;
-      lp.frequency.setValueAtTime(f * 7, when);
+      lp.frequency.setValueAtTime(f * (2.2 + 4.8 * b), when);
       lp.frequency.exponentialRampToValueAtTime(f * 2.2, when + 0.12);
       const g = bus.ctx.createGain();
       g.gain.setValueAtTime(0, when);
@@ -269,8 +271,8 @@ function playVoice(bus: SynthBus, voice: VoiceId, midi: number, vel: number, whe
       lp.type = 'lowpass';
       lp.Q.value = 1.2;
       lp.frequency.setValueAtTime(f * 1.2, when);
-      lp.frequency.linearRampToValueAtTime(Math.min(9000, f * 5), when + 0.06);
-      lp.frequency.exponentialRampToValueAtTime(Math.min(9000, f * 2.8), when + d);
+      lp.frequency.linearRampToValueAtTime(Math.min(9000, f * (1.5 + 3.5 * b)), when + 0.06);
+      lp.frequency.exponentialRampToValueAtTime(Math.min(9000, f * (1.2 + 1.6 * b)), when + d);
       const g = bus.ctx.createGain();
       g.gain.setValueAtTime(0, when);
       g.gain.linearRampToValueAtTime(a * 0.55, when + 0.035);
@@ -356,7 +358,7 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
   }
   const dest = out(bus, ev.pan ?? 0);
   if (ev.kind === 'note') {
-    playVoice(bus, ev.voice ?? 'marimba', ev.midi, ev.vel, when, ev.dur ?? 1, dest);
+    playVoice(bus, ev.voice ?? 'marimba', ev.midi, ev.vel, when, ev.dur ?? 1, dest, ev.bright ?? 1);
     return;
   }
   if (ev.kind === 'sample') {
@@ -716,6 +718,34 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
       const p = ev.pitch ?? 0.5;
       const f0 = 520 + p * 600;
       vocal(bus, when, dest, { f0, f1: f0 * 1.5, dur: 0.6, peak: v * 0.35, formants: [[1600 + p * 800, 3], [3200, 5]], vibrato: 0.08, rattle: 0.2, breath: 0.4 });
+      break;
+    }
+    case 'trumpet': {
+      // An elephant's trumpet: a brassy blare climbing and wavering, with a breathy edge.
+      const p = ev.pitch ?? 0.5;
+      const f0 = 320 + p * 160;
+      vocal(bus, when, dest, { f0: f0 * 0.8, f1: f0 * 1.45, dur: 1.15, peak: v * 0.42, formants: [[1150 + p * 300, 1.6], [2500, 2.5], [3800, 3]], formantsEnd: [[1400, 1.6], [2900, 2.5], [4200, 3]], vibrato: 0.09, rattle: 0.15, breath: 0.3 });
+      break;
+    }
+    case 'chestbeat': {
+      // A gorilla drumming its chest: a quick run of hollow cupped-hand thumps.
+      const p = ev.pitch ?? 0.5;
+      for (let k = 0; k < 7; k++) {
+        const at = when + k * 0.075 + (k % 2) * 0.01;
+        const o = osc(bus, 'sine', 150 + p * 40 + (k % 2) * 18, at, at + 0.16, dest, v * (0.85 - k * 0.05), 0.001, 0.11);
+        o.frequency.exponentialRampToValueAtTime(85 + p * 25, at + 0.1);
+        noiseBurst(bus, at, 0.03, dest, v * 0.3, 'bandpass', 600 + (k % 2) * 150, 1.5);
+      }
+      break;
+    }
+    case 'shield': {
+      // A blow on a round shield: a wooden thunk and the iron boss ringing.
+      const p = ev.pitch ?? 0.5;
+      const o = osc(bus, 'triangle', 170 + p * 60, when, when + 0.25, dest, v * 0.8, 0.001, 0.14);
+      o.frequency.exponentialRampToValueAtTime(110 + p * 30, when + 0.12);
+      noiseBurst(bus, when, 0.07, dest, v * 0.55, 'bandpass', 700 + p * 300, 1.4);
+      osc(bus, 'square', 1450 + p * 200, when, when + 0.35, dest, v * 0.06, 0.001, 0.25);
+      osc(bus, 'sine', 2310 + p * 300, when, when + 0.4, dest, v * 0.1, 0.001, 0.3);
       break;
     }
     case 'grunt': {

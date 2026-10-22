@@ -277,3 +277,14 @@ button.wide { width: 100%; }
 .narration-lines { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; line-height: 1.35; }
 .narration-lines .hint { margin: 0 6px 0 0; font-variant-numeric: tabular-nums; }
 .hint.error { color: #ff6b6b; }
+.template-picker { position: relative; }
+.template-trigger { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; text-align: left; }
+.template-trigger-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.template-pop { position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 40px #000a; padding: 6px; }
+.template-pop input { width: 100%; margin-bottom: 4px; }
+.template-list { max-height: min(60vh, 460px); overflow-y: auto; }
+.template-group { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); padding: 8px 8px 3px; }
+.template-option { padding: 5px 8px; border-radius: 5px; cursor: pointer; }
+.template-option.active { background: #222632; }
+.template-option.current { color: var(--accent); font-weight: 600; }
+.template-empty { padding: 4px 8px; }

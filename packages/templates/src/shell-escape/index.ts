@@ -153,6 +153,7 @@ export const shellEscape: Template<ShellEscapeParams, State> = {
   id: 'shell-escape',
   name: 'Shell Escape 3D',
   family: 'bounce',
+  category: 'bounce',
   description:
     'A glowing ball bounces inside nested, slowly spinning glass shapes (cubes, octahedra, dodecahedra, icosahedra), rendered in 3D with real rigid-body physics. Each shell has one window; when the ball finds it, the shell shatters into glass shards that fly out and rattle round inside the next, bigger shell (where the ball can knock them about), and the camera pulls back. Every bounce plays a note and lights up the face it hit. Escape all of them to win.',
   schema: shellEscapeSchema,

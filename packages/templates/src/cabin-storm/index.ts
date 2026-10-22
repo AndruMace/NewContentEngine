@@ -112,6 +112,7 @@ export const cabinStorm: Template<CabinStormParams, CabinState> = {
   id: 'cabin-storm',
   name: 'Cabin Storm',
   family: 'kinetic',
+  category: 'ambient',
   description: 'Long-form ambient: a log cabin with a crackling fireplace and a thunderstorm outside the windows.',
   schema: cabinStormSchema,
   format: { width: 1920, height: 1080, fps: 30 },

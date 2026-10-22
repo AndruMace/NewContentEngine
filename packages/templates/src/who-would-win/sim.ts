@@ -217,6 +217,9 @@ export interface Fighter {
   evadeT: number;
   /** Its speed along its heading, knockback included (its feet step with it, backwards too). */
   stepV: number;
+  /** Fury (0..1): builds as it lands blows and takes them; full, it goes for its finisher (and when it filled). */
+  fury: number;
+  furyAt: number;
   /** Locked with another, and when it can lock again. */
   clinch: Clinch | null;
   clinchReady: number;
@@ -234,8 +237,11 @@ export interface Fighter {
   fallDir: 1 | -1;
 }
 
+/** One on one, one against a stream of a smaller kind, or two on two. */
+export type WorldMode = 'duel' | 'horde' | 'team';
+
 export interface World {
-  mode: 'duel' | 'horde';
+  mode: WorldMode;
   fighters: Fighter[];
   simT: number;
   /** Seconds since the fight started (sim time). */
@@ -376,6 +382,8 @@ function makeFighter(idx: number, side: 0 | 1, def: CreatureDef, x: number, y: n
     downLen: 0,
     fallDir: 1,
     stepV: 0,
+    fury: 0,
+    furyAt: 0,
     clinch: null,
     clinchReady: simT + 1.5,
     burnUntil: 0,
@@ -388,10 +396,22 @@ function makeFighter(idx: number, side: 0 | 1, def: CreatureDef, x: number, y: n
   };
 }
 
-export function makeWorld(opts: { mode: 'duel' | 'horde'; a: CreatureDef; b: CreatureDef; hpScale: number; capS: number; maxSwarm: number; rng: Rng }): World {
+export function makeWorld(opts: { mode: WorldMode; a: CreatureDef; b: CreatureDef; mates?: [CreatureDef, CreatureDef]; hpScale: number; capS: number; maxSwarm: number; rng: Rng }): World {
   const { mode, a, b, hpScale, rng } = opts;
   const fighters: Fighter[] = [];
-  if (mode === 'duel') {
+  if (mode === 'team') {
+    // Two lines of two across the arena (a: first of the left pair, b: first of the right pair; mates:
+    // their partners), each pair a little apart.
+    const left = [a, opts.mates?.[0] ?? a];
+    const right = [b, opts.mates?.[1] ?? b];
+    const wide = (p: CreatureDef[]) => Math.max(1.5, (p[0].radius + p[1].radius) * 1.25);
+    const d = 3 + (Math.max(...left.map((c) => c.front ?? c.radius)) + Math.max(...right.map((c) => c.front ?? c.radius))) * 0.5;
+    const lw = wide(left);
+    const rw = wide(right);
+    left.forEach((c, k) => fighters.push(makeFighter(k, 0, c, -d + rng.range(-0.3, 0.3), (k ? -1 : 1) * lw + rng.range(-0.3, 0.3), rng.range(-0.2, 0.2), hpScale, rng, 0)));
+    right.forEach((c, k) => fighters.push(makeFighter(2 + k, 1, c, d + rng.range(-0.3, 0.3), (k ? 1 : -1) * rw + rng.range(-0.3, 0.3), Math.PI + rng.range(-0.2, 0.2), hpScale, rng, 0)));
+    for (const f of fighters) f.commitAt = rng.range(0.2, 1.2);
+  } else if (mode === 'duel') {
     // Squared up across the arena (a little differently each time), and each sizes the other up for a
     // moment before committing, so no two fights open the same way.
     const d = 2.4 + ((a.front ?? a.radius) + (b.front ?? b.radius)) * 0.5;
@@ -403,7 +423,7 @@ export function makeWorld(opts: { mode: 'duel' | 'horde'; a: CreatureDef; b: Cre
     fighters.push(fa, fb);
   } else {
     // The big fighter starts in the middle, a little in front, facing the gates at the back.
-    fighters.push(makeFighter(0, 0, a, 0, 1.5, -Math.PI / 2, hpScale, rng, 0));
+    fighters.push(makeFighter(0, 0, a, 0, 1.5, -Math.PI / 2, hpScale * (a.crowd ?? 1), rng, 0));
   }
   const gates = mode === 'horde' ? GATES : [];
   return {
@@ -752,7 +772,11 @@ function startAttack(w: World, f: Fighter, i: number, emit: Emit) {
     if (m.charge) f.lungeV = clamp(f.lungeV, f.spd * 0.5, f.spd * 1.1);
   }
   setState(f, 'attack', w.simT);
-  emit({ type: 'swing', who: f.idx, move: m.name, sound: m.sound, ...voiceOf(f.def), big: (m.weight ?? 1) >= 3 || m.charge || m.grab ? 1 : 0, breath: m.breath ? 1 : 0, weapon: f.def.weapon ?? '', x: r1(f.x) });
+  if (m.finisher) {
+    f.fury = 0;
+    emit({ type: 'finisher', who: f.idx, target: f.target, name: m.name, ...voiceOf(f.def), x: r1(f.x) });
+  }
+  emit({ type: 'swing', who: f.idx, move: m.name, clip: m.clip, sound: m.sound, ...voiceOf(f.def), big: (m.weight ?? 1) >= 3 || m.charge || m.grab ? 1 : 0, breath: m.breath ? 1 : 0, weapon: f.def.weapon ?? '', x: r1(f.x) });
   // Anyone it is swinging at may sidestep (if they are quick enough on their feet), or read it and
   // slip back out of reach just before it lands.
   for (const o of enemiesOf(w, f)) {
@@ -831,9 +855,19 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     else return { heading: r.ang, speed: d.run };
   }
 
-  // A stalker crouches when its pounce is ready and the prey is in range, and leaps once coiled.
+  // Fury full and its finisher needs a run-up: it backs off to make room (then turns and comes).
+  const fin = f.fury >= 1 ? d.moves.find((m) => m.finisher) : undefined;
+  // (Only for a moment: hounded, it launches it from wherever it is.)
+  const making = fin?.minRange !== undefined && w.simT - f.furyAt < 2.5;
+  if (making && d.ai !== 'stalker' && me.leg < 0.7 && f.ready[d.moves.indexOf(fin!)] <= w.simT) {
+    if (r.gap < fin!.minRange! + 0.4) return { heading: r.ang + Math.PI + f.orbit * 0.3, speed: d.run * 0.6 };
+    if (Math.abs(r.rel) > 0.45) return { heading: r.ang, speed: 0 };
+  }
+
+  // A stalker crouches when its pounce (its finishing pounce, fury full) is ready and the prey is in
+  // range, and leaps once coiled.
   if (d.ai === 'stalker' && me.leg < 0.7) {
-    const pi = d.moves.findIndex((m) => m.grab?.kind === 'latch');
+    const pi = fin?.grab?.kind === 'latch' ? d.moves.indexOf(fin) : d.moves.findIndex((m) => m.grab?.kind === 'latch' && !m.finisher);
     const pm = d.moves[pi];
     if (pi >= 0 && f.ready[pi] <= w.simT && grabbable && r.gap >= pm.minRange! && r.gap <= pm.reach + pm.lunge! + 2) {
       f.crouchWant = 1;
@@ -847,7 +881,7 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
 
   // Squared up close, head to head: horns lock, or the two rear up and grapple.
   if (
-    w.mode === 'duel' &&
+    w.mode !== 'horde' &&
     clinchStyle(d) &&
     clinchStyle(t.def) &&
     f.clinchReady <= w.simT &&
@@ -870,17 +904,20 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
   const crowd = enemiesOf(w, f).filter((o) => relation(f, o).gap < 2.5).length;
   d.moves.forEach((m, i) => {
     if (f.ready[i] > w.simT || f.commitAt > w.simT) return;
-    if (m.minRange !== undefined && r.gap < m.minRange) return;
+    if (m.minRange !== undefined && r.gap < m.minRange && !(m.finisher && !making)) return;
     if (m.needs === 'targetDown' && !downed) return;
     if (m.grab && (!grabbable || (m.grab.kind === 'latch' && d.ai === 'stalker'))) return;
     if (launches(m) && me.leg >= 0.7) return;
+    // Its finisher: only with its fury full, and then it wants nothing else.
+    if (m.finisher && f.fury < 1) return;
+    const keen = m.finisher ? 60 : 1;
     // Roars: when crowded, or to open a fight from a distance.
     if (m.roar) {
       if (crowd >= 2 || (w.fightT < 4 && r.gap > 2.5)) options.push({ i, w: (m.weight ?? 1) * 40 });
       return;
     }
     if (m.charge) {
-      if (Math.abs(r.rel) < 0.5 && r.gap < ARENA_R) options.push({ i, w: (m.weight ?? 1) * m.damage * (d.trait === 'rampage' && f.hp < f.maxHp * 0.5 ? 2 : 1) });
+      if (Math.abs(r.rel) < 0.5 && r.gap < ARENA_R) options.push({ i, w: (m.weight ?? 1) * m.damage * keen * (d.trait === 'rampage' && f.hp < f.maxHp * 0.5 ? 2 : 1) });
       return;
     }
     const back = m.hits.every((h) => h.back);
@@ -889,7 +926,7 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     const reach = m.reach + can * (m.minRange !== undefined ? 1 : 0.6);
     // (Blows with a striking part go by what that part can reach; a breath or a tail sweep by its cone.)
     const facing = m.breath || !strikeParts(d, m, 0).length ? off <= m.arc * 0.75 : off <= m.arc + 0.4;
-    if (r.gap <= reach && facing && (m.breath || canReach(f, t, m, (back ? -1 : 1) * Math.min(can, Math.max(0, r.gap))))) options.push({ i, w: (m.weight ?? 1) * m.damage * (m.breath ? 6 : m.hits.length) });
+    if (r.gap <= reach && facing && (m.breath || canReach(f, t, m, (back ? -1 : 1) * Math.min(can, Math.max(0, r.gap))))) options.push({ i, w: (m.weight ?? 1) * m.damage * (m.breath ? 6 : m.hits.length) * keen });
   });
   for (const o of options) total += o.w;
   if (options.length) {
@@ -897,7 +934,7 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     const chosen = options.find((o) => (pick -= o.w) < 0) ?? options[options.length - 1];
     if (d.moves[chosen.i].charge) {
       f.charging = chosen.i;
-      f.bluffing = w.rng.chance(d.moves[chosen.i].bluff ?? 0);
+      f.bluffing = !d.moves[chosen.i].finisher && w.rng.chance(d.moves[chosen.i].bluff ?? 0);
       f.ready[chosen.i] = w.simT + d.moves[chosen.i].cooldown * COOLDOWN_MUL * (d.trait === 'rampage' && f.hp < f.maxHp * 0.5 ? 0.6 : 1);
       // From a distance, a bull (and its kind) paws the ground first.
       if (PAWS_GROUND.has(d.proc.kind) && r.gap > 4.5) {
@@ -934,7 +971,7 @@ function think(w: World, f: Fighter, emit: Emit): { heading: number; speed: numb
     const speed = r.gap > 3 ? d.run : r.gap > closest * 0.7 ? Math.min(d.run, d.walk * 1.8) : inReach ? 0 : d.walk * 1.2;
     // Closing in, it angles for the shoulder rather than meeting it head on (necks, shoulders and
     // forelegs come within reach, and the two end up circling chest to chest).
-    const veer = speed > 0 && r.gap < 2.5 && !d.weapon && w.mode === 'duel' ? f.orbit * 0.55 * dm.sin(Math.PI * clamp(r.gap / 2.5, 0, 1)) : 0;
+    const veer = speed > 0 && r.gap < 2.5 && !d.weapon && w.mode !== 'horde' ? f.orbit * 0.55 * dm.sin(Math.PI * clamp(r.gap / 2.5, 0, 1)) : 0;
     // Right under it (a flier above): back out to have it in front. Up against it with nothing in reach
     // (too low, too tall, head to head): work round it for an opening.
     if (!inReach && r.gap < -0.15) return { heading: r.ang + Math.PI + f.orbit * 0.5, speed: d.walk * 1.2 };
@@ -959,7 +996,7 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
   const oc = condition(o);
   // Flanking: hitting from behind while one of its allies keeps the target's attention.
   const behind = Math.abs(wrap(dm.atan2(f.y - o.y, f.x - o.x) - o.heading)) > 2;
-  const flank = w.mode === 'horde' && f.side === 1 && behind && o.target !== f.idx;
+  const flank = (w.mode === 'team' || (w.mode === 'horde' && f.side === 1)) && behind && o.target !== f.idx;
   // Bracing in an armoured move (a bear reared up) takes the edge off.
   const braced = o.state === 'attack' && o.move?.armor ? o.move.armor : 0;
   // A hurt limb hits weaker; a fighter nearly beaten fights like it has nothing to lose.
@@ -974,6 +1011,7 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
   o.lastHitT = w.simT;
   o.lastHitDir = dm.atan2(o.y - f.y, o.x - f.x);
   f.dealt += dmg;
+  if (!m.finisher) rouse(w, f, o, dmg, emit);
   o.flash = Math.min(1, o.flash + (m.breath ? 0.25 : 1));
   if (m.breath) o.burn = 1;
   // Knockback by the mass ratio, away from the attacker; the attacker rebounds off a heavier body, and a
@@ -1018,7 +1056,7 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
     }
   } else wound(w, o, aim, markOf(f, m), dmg, f.idx, emit);
   if (!m.breath)
-    emit({ type: 'hit', a: f.idx, b: o.idx, move: m.name, sound: m.sound, dmg: Math.round(dmg), crit: crit ? 1 : 0, power: Math.round(power * 100) / 100, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000), mass: f.def.mass, weapon: f.def.weapon ?? '', vcall: o.def.voice?.call ?? '', vcp: o.def.voice?.pitch ?? 0.5, vmass: o.def.mass, zone: aim.zone, wound: o.wounds.length - 1, x: r1(o.x) });
+    emit({ type: 'hit', a: f.idx, b: o.idx, bs: o.side, move: m.name, clip: m.clip, sound: m.sound, dmg: Math.round(dmg), crit: crit ? 1 : 0, power: Math.round(power * 100) / 100, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000), mass: f.def.mass, weapon: f.def.weapon ?? '', vcall: o.def.voice?.call ?? '', vcp: o.def.voice?.pitch ?? 0.5, vmass: o.def.mass, zone: aim.zone, wound: o.wounds.length - 1, x: r1(o.x) });
   else emit({ type: 'burn', a: f.idx, b: o.idx, dmg: Math.round(dmg * 10) / 10, hp: Math.max(0, Math.round((o.hp / o.maxHp) * 1000) / 1000) });
   // Falling is settled once every blow of the step has landed (see stepWorld).
   if (o.hp <= 0) return;
@@ -1029,7 +1067,7 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
   }
   // Horn meets horn: two horned heads facing, the blow locks them together.
   if (
-    w.mode === 'duel' &&
+    w.mode !== 'horde' &&
     (m.clip === 'headbutt' || m.clip === 'charge') &&
     clinchStyle(f.def) === 'horns' &&
     clinchStyle(o.def) === 'horns' &&
@@ -1043,11 +1081,15 @@ function applyHit(w: World, f: Fighter, o: Fighter, m: MoveDef, aimIn: Aim | nul
     startClinch(w, f, o, emit);
     return;
   }
-  if (m.breath || braced || o.staggerReady > w.simT || o.state === 'dodge' || o.state === 'held' || o.state === 'down') return;
+  if (m.breath || braced || (o.staggerReady > w.simT && !m.finisher) || o.state === 'dodge' || o.state === 'held' || o.state === 'down') return;
   // Hard enough to take it off its feet (anything on the ground; a flier is only rocked)…
-  const at = KNOCKDOWN_AT * (f.def.trait === 'hindKick' && m.hits[0].back ? 0.55 : 1) * (o.def.trait === 'stubborn' ? 1.6 : 1) * (1 - 0.35 * oc.sloppy);
+  const at = KNOCKDOWN_AT * (f.def.trait === 'hindKick' && m.hits[0].back ? 0.75 : 1) * (o.def.trait === 'stubborn' ? 1.6 : 1) * (1 - 0.35 * oc.sloppy);
   const bowled =
-    power >= at || (m.charge && f.def.mass >= o.def.mass * 0.8 && power >= 1.1) || (f.def.mass >= o.def.mass * 4 && power >= 1) || (m.charge && f.def.trait === 'juggernaut' && o.def.mass < f.def.mass);
+    !!m.finisher ||
+    power >= at ||
+    (m.charge && f.def.mass >= o.def.mass * 0.8 && power >= 1.1) ||
+    (f.def.mass >= o.def.mass * 4 && power >= 1) ||
+    (m.charge && f.def.trait === 'juggernaut' && o.def.mass < f.def.mass);
   const footed = o.def.trait === 'unstoppable' || o.def.trait === 'colossus';
   if (bowled && !footed && o.hover < 0.3 && (o.state !== 'attack' || o.hitIdx === 0)) {
     if (o.grab) release(w, o, false, emit);
@@ -1105,6 +1147,7 @@ function grind(w: World, f: Fighter, o: Fighter, emit: Emit) {
   o.lastHitPow = 0.35;
   o.flash = Math.min(1, o.flash + 0.25);
   f.dealt += dmg;
+  rouse(w, f, o, dmg, emit);
   const side = sideOf(o, f);
   const aim: Aim = horns ? { zone: 'head', side, u: w.rng.range(0.5, 1), v: w.rng.range(0.4, 1) } : { zone: 'body', side, u: w.rng.range(0.8, 1), v: w.rng.range(0, 0.5) };
   if (w.rng.chance(0.5)) wound(w, o, aim, horns ? 'blunt' : w.rng.chance(0.5) ? 'bite' : 'claw', dmg * 2, f.idx, emit);
@@ -1188,6 +1231,22 @@ function runClinch(w: World, a: Fighter, dt: number, emit: Emit) {
   win.commitAt = w.simT;
   win.ready = win.ready.map((t, i) => (win.def.moves[i].roar ? t : Math.min(t, w.simT + 0.1)));
   emit({ type: 'shove', a: win.idx, b: lose.idx, down: thrown ? 1 : 0, ...voiceOf(win.def), vcall: lose.def.voice?.call ?? '', vcp: lose.def.voice?.pitch ?? 0.5, mass: lose.def.mass, x: r1(lose.x) });
+}
+
+/** Fury from a blow: taking one builds it more than landing one. (The swarm in a horde has none.) */
+function rouse(w: World, f: Fighter, o: Fighter, dmg: number, emit: Emit) {
+  for (const [x, k] of [
+    [o, 1.4],
+    [f, 1.0],
+  ] as const) {
+    if (!x.alive || x.number > 0 || !x.def.moves.some((m) => m.finisher)) continue;
+    const was = x.fury;
+    x.fury = Math.min(1, x.fury + (dmg / o.maxHp) * k);
+    if (was < 1 && x.fury >= 1) {
+      x.furyAt = w.simT;
+      emit({ type: 'fury', who: x.idx, ...voiceOf(x.def), x: r1(x.x) });
+    }
+  }
 }
 
 /** A trait coming into play: called out once. */
@@ -1316,7 +1375,7 @@ function resolveAttack(w: World, f: Fighter, emit: Emit) {
     if (m.breath) continue;
     if (m.roar) {
       // Smaller enemies nearby flinch (and a proud one is fired up).
-      emit({ type: 'roar', who: f.idx, ...voiceOf(f.def), swarm: w.mode === 'horde' && f.side === 1 ? 1 : 0, x: r1(f.x) });
+      emit({ type: 'roar', who: f.idx, clip: m.clip, ...voiceOf(f.def), swarm: w.mode === 'horde' && f.side === 1 ? 1 : 0, x: r1(f.x) });
       if (f.def.trait === 'pride') f.prideUntil = w.simT + 6;
       for (const o of enemiesOf(w, f)) {
         if (relation(f, o).gap > m.roar.radius || o.def.mass >= f.def.mass * 0.75 || o.staggerReady > w.simT || o.state === 'held' || o.state === 'down') continue;
@@ -1361,6 +1420,7 @@ function resolveAttack(w: World, f: Fighter, emit: Emit) {
       if (landed >= (f.def.mass > 300 ? 3 : 1)) break;
     }
     if (!landed) emit({ type: 'miss', a: f.idx, b: f.target, dodged: 0, x: r1(f.x) });
+    if (m.quake) quake(w, f, m, emit);
   }
   if (m.breath && el >= f.breathNext && el <= m.breath.until * m.len) {
     f.breathNext += BREATH_TICK;
@@ -1373,6 +1433,28 @@ function resolveAttack(w: World, f: Fighter, emit: Emit) {
     f.move = null;
     f.aim = null;
     setState(f, 'idle', w.simT, w.rng);
+  }
+}
+
+/** The ground shakes round it: everything of the other side within reach is thrown off its feet. */
+function quake(w: World, f: Fighter, m: MoveDef, emit: Emit) {
+  emit({ type: 'quake', who: f.idx, radius: m.quake, x: r1(f.x), y: r1(f.y) });
+  for (const o of enemiesOf(w, f)) {
+    const d = dm.hypot(o.x - f.x, o.y - f.y);
+    if (d > m.quake! + extent(o, 0) || o.hover > 0.3 || o.state === 'down' || o.state === 'held' || o.def.trait === 'colossus' || o.def.trait === 'unstoppable') continue;
+    const ang = dm.atan2(o.y - f.y, o.x - f.x);
+    o.kx += dm.cos(ang) * 3;
+    o.ky += dm.sin(ang) * 3;
+    if (o.grab) release(w, o, false, emit);
+    o.charging = -1;
+    o.move = null;
+    o.lastHitDir = ang;
+    o.lastHitT = w.simT;
+    o.downLen = DOWN_S;
+    o.fallDir = wrap(ang - o.heading) < 0 ? 1 : -1;
+    o.staggerReady = w.simT + DOWN_S + STAGGER_GUARD_S;
+    setState(o, 'down', w.simT);
+    emit({ type: 'knockdown', who: o.idx, by: f.idx, ...voiceOf(o.def), swarm: w.mode === 'horde' && o.side === 1 ? 1 : 0, x: r1(o.x) });
   }
 }
 
@@ -1527,6 +1609,12 @@ export function stepWorld(w: World, dt: number, emit: Emit) {
         }
         // The committed lunge (or leap, or charge) up to the first hit.
         speed = el < firstHit ? f.lungeV : 0;
+        // A whirlwind spins all the way round, blade out.
+        if (m.clip === 'whirl') {
+          f.heading = wrap(f.heading + ((Math.PI * 2) / m.len) * dt);
+          heading = f.heading;
+          speed = f.lungeV * 0.6;
+        }
         break;
       }
       case 'stagger':

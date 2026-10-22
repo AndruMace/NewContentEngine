@@ -171,7 +171,8 @@ export function woundMesh(s: Spot, w: Wound, def: CreatureDef): THREE.Mesh {
   const turn = (hash(seed) - 0.5) * 2.2;
   const ta = t1.clone().multiplyScalar(Math.cos(turn)).addScaledVector(t2, Math.sin(turn));
   const tb = new THREE.Vector3().crossVectors(n, ta).normalize();
-  const k = w.size * Math.max(0.45, Math.min(1.3, def.height / 1.6));
+  // (Its parent is scaled with a grown body already: sized for its usual height.)
+  const k = w.size * Math.max(0.45, Math.min(1.3, def.height / (def.scale ?? 1) / 1.6));
   const pos: number[] = [];
   const col: number[] = [];
   const geoPt = new THREE.Vector3();

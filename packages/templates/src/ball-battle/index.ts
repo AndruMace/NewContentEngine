@@ -749,6 +749,7 @@ export const ballBattle: Template<BallBattleParams, State> = {
   id: 'ball-battle',
   name: 'Ball Battle',
   family: 'race',
+  category: 'battles',
   description:
     'Balls armed with weapons fight in a round arena that starts shrinking partway through. Weapons: sword (blade gets longer with every hit), twin daggers (spin faster with every hit), hammer (slow, heavy knockback hits; head grows) and bow (fires arrows when facing an enemy; one more arrow per volley with every hit). Hits freeze the action for a split second, knocked-out balls shatter, and the deciding blow plays in slow motion. Formats: free-for-all, two teams (2v2 or 3v3), one giant ball against a swarm of small ones, or a 4-ball knockout bracket (two semi-finals then a final). Weapons can be mixed (different weapons fight each other) or all the same. Teams are either colours (Red, Blue…) or countries, with the national flag filling each ball.',
   schema: ballBattleSchema,

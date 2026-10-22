@@ -62,6 +62,7 @@ export const nightTrain: Template<NightTrainParams, NightTrainState> = {
   id: 'night-train',
   name: 'Night Train',
   family: 'kinetic',
+  category: 'ambient',
   description: 'Long-form ambient: a sleeper compartment at night, the countryside sliding past the window, rain on the glass.',
   schema: nightTrainSchema,
   format: { width: 1920, height: 1080, fps: 30 },

@@ -20,6 +20,22 @@ async function load(): Promise<KokoroTTS> {
 }
 
 /**
+ * Load the model and voice one throwaway word (server start, in the background), so the first real
+ * voicing doesn't pay for the load or the first inference's setup.
+ */
+export function warmUp(voice: string = KOKORO_VOICES[0]): Promise<void> {
+  return load().then(
+    async (tts) => {
+      await tts.generate('Ready.', { voice: voice as never, speed: 1 });
+    },
+    (e) => {
+      model = null; // let the next voicing try again
+      throw e;
+    },
+  );
+}
+
+/**
  * Kokoro 82M (Apache-2.0): free, local and fine to publish. Runs on the CPU, about as fast as the
  * speech it makes.
  */

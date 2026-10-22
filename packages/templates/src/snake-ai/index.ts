@@ -50,6 +50,7 @@ export const snakeAi: Template<SnakeAiParams, State> = {
   id: 'snake-ai',
   name: 'Snake AI',
   family: 'kinetic',
+  category: 'brainy',
   description:
     'A snake played by an AI eats apples on a grid and grows until it either fills the whole board or traps itself, and the video runs until that happens. It plays it safe (only going for an apple when it can still reach its own tail), so most games come down to the last few cells. It can start already long (startFill) to skip the slow early game; speed and speedUp set how fast it moves and so how long the video is. Bigger boards take far more moves (the late game is long), so pair them with more speed: typical runtimes are 8×8 at speed 12 ≈ 30 s, 10×10 at speed 20 ≈ 36 s, 12×12 at speed 30 with speedUp 1 ≈ 43 s. A big counter shows how much of the board is filled. The ending (filled or trapped) is decided by the seed and must never be given away in the copy.',
   schema: snakeAiSchema,

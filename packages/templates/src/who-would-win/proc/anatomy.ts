@@ -30,6 +30,7 @@ export function strikeParts(def: CreatureDef, m: MoveDef, k: number): StrikePart
     case 'lunge':
     case 'snap':
     case 'maul':
+    case 'frenzy':
       return [{ kind: 'snout' }];
     case 'headbutt':
     case 'charge':
@@ -140,6 +141,28 @@ const SPINE = ['pelvis', 'spine', 'chest', 'neck1', 'neck2'] as const;
 const cache = new Map<string, Anatomy>();
 
 export function anatomyOf(def: CreatureDef): Anatomy {
+  const k = def.scale ?? 1;
+  if (k !== 1) {
+    // Grown (pound for pound): its usual anatomy, k times the size.
+    const key = `${def.id}@${k}`;
+    let g = cache.get(key);
+    if (g) return g;
+    const base = anatomyOf({ ...def, scale: 1 });
+    const s3 = (v: V3): V3 => [v[0] * k, v[1] * k, v[2] * k];
+    g = {
+      ...base,
+      snout: s3(base.snout),
+      brow: s3(base.brow),
+      blade: base.blade * k,
+      spot: (a) => s3(base.spot(a)),
+      striker: (p) => {
+        const s = base.striker(p);
+        return { at: s3(s.at), span: s.span * k, top: s.top === undefined ? undefined : s.top * k };
+      },
+    };
+    cache.set(key, g);
+    return g;
+  }
   let a = cache.get(def.id);
   if (a) return a;
   const spec = SPECIES[def.proc.kind];

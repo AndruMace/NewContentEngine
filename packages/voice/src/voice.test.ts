@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -140,5 +140,37 @@ describe('prepareNarration', () => {
     const { prepareNarration } = await import('./prepare');
     const off = { ...recipe, params: { mode: 'collatz' } };
     expect(await prepareNarration(off, { provider: fake })).toBe(off);
+  });
+});
+
+describe('pruneVoiceCache', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'voice-prune-'));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('keeps referenced and recent clips, deletes old unreferenced ones', async () => {
+    vi.stubEnv('SIM_VOICE_CACHE', dir);
+    vi.resetModules();
+    const { pruneVoiceCache } = await import('./cache');
+    const old = new Date(Date.now() - 30 * 86_400_000);
+    const write = (name: string, bytes: number, mtime?: Date) => {
+      writeFileSync(join(dir, name), Buffer.alloc(bytes));
+      if (mtime) utimesSync(join(dir, name), mtime, mtime);
+    };
+    write('kept-old.wav', 100, old);
+    write('stale.wav', 250, old);
+    write('fresh.wav', 400);
+    write('notes.txt', 50, old);
+    const out = await pruneVoiceCache(new Set(['kept-old.wav']), Date.now() - 7 * 86_400_000);
+    expect(out).toEqual({ deleted: 1, freedBytes: 250 });
+    expect(readdirSync(dir).sort()).toEqual(['fresh.wav', 'kept-old.wav', 'notes.txt']);
+    vi.unstubAllEnvs();
+  });
+
+  it('copes with a cache that was never made', async () => {
+    vi.stubEnv('SIM_VOICE_CACHE', join(dir, 'missing'));
+    vi.resetModules();
+    const { pruneVoiceCache } = await import('./cache');
+    expect(await pruneVoiceCache(new Set(), Date.now())).toEqual({ deleted: 0, freedBytes: 0 });
+    vi.unstubAllEnvs();
   });
 });

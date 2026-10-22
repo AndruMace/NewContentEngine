@@ -3,7 +3,7 @@ import { Rng, Runner, getTheme } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { PATTERNS, patternRates, polygonSides } from './patterns';
 import { FIGURES, buildEpicycles } from './epicycles';
-import { POLYRHYTHM_STYLES, noteName, polyrhythm } from './index';
+import { POLYRHYTHM_STYLES, chordSteps, noteName, pitchDegrees, polyrhythm } from './index';
 
 const run = (params: Record<string, unknown>, seed = 1) =>
   new Runner(polyrhythm, { seed, theme: getTheme('neon-dark'), melody: getMelody('ode-to-joy'), params: { loopSeconds: 12, ...params }, visual: false }).runToEnd();
@@ -99,6 +99,49 @@ describe('polyrhythm', () => {
     expect(e.arms.map((a) => a.freq).reduce(gcd, 0)).toBe(1);
     // Biggest circle first.
     expect(e.arms.map((a) => a.amp)).toEqual([...e.arms.map((a) => a.amp)].sort((a, b) => b - a));
+  });
+
+  it('fits any number of elements into the pitch range, slowest lowest', () => {
+    const ranks = (n: number) => Array.from({ length: n }, (_, i) => i);
+    // Up to the range, one step each, as before.
+    expect(pitchDegrees(ranks(18), 'pentatonic', 3.5, 'scale')).toEqual(ranks(18));
+    expect(pitchDegrees(ranks(25), 'major', 3.5, 'scale')).toEqual(ranks(25));
+    // Beyond it, spread across the range, never going down.
+    const wide = pitchDegrees(ranks(32), 'pentatonic', 3.5, 'scale');
+    expect(Math.max(...wide)).toBe(17);
+    wide.forEach((d, i) => i && expect(d).toBeGreaterThanOrEqual(wide[i - 1]));
+    expect(pitchDegrees(ranks(32), 'major', 2, 'scale').at(-1)).toBe(14);
+    // Every note of a 32-dot video stays within the range above the root.
+    const r = run({ style: 'ripples', count: 32, scale: 'pentatonic', rootNote: 55, pitchRange: 2.5 });
+    const midis = r.events.filter((e) => e.type === 'hit').map((e) => e.midi as number);
+    expect(Math.max(...midis)).toBeLessThanOrEqual(55 + 30);
+  });
+
+  it('can play chord tones only', () => {
+    expect(chordSteps('major', false)).toEqual([0, 2, 4]);
+    expect(chordSteps('minor', true)).toEqual([0, 2, 4, 6]);
+    // Pentatonic has no 7th: its chord stays a triad (root, major 3rd, 5th).
+    expect(chordSteps('pentatonic', true)).toEqual([0, 2, 3]);
+    // C major chord tones, climbing: C E G C E G.
+    const names = pitchDegrees([0, 1, 2, 3, 4, 5], 'major', 3, 'chord').map((d) => noteName('major', 60, d));
+    expect(names).toEqual(['C4', 'E4', 'G4', 'C5', 'E5', 'G5']);
+    const r = run({ style: 'arcs', count: 20, scale: 'dorian', rootNote: 50, notes: 'chord7' });
+    // D dorian's chord tones: D F A C.
+    const classes = new Set(r.events.filter((e) => e.type === 'hit').map((e) => ((e.midi as number) - 50 + 120) % 12));
+    expect([...classes].sort((a, b) => a - b)).toEqual([0, 3, 7, 10]);
+  });
+
+  it('softens high notes by the setting, leaving low ones alone', () => {
+    const hits = (soften: number) => run({ style: 'arcs', count: 24, scale: 'major', rootNote: 55, pitchRange: 4, soften }).events.filter((e) => e.type === 'hit' && e.k === 0);
+    const hard = hits(0);
+    const soft = hits(1);
+    const low = (es: typeof hard) => es.find((e) => (e.midi as number) < 64)!;
+    const high = (es: typeof hard) => es.reduce((a, e) => ((e.midi as number) > (a.midi as number) ? e : a));
+    expect(low(soft).vel).toBe(low(hard).vel);
+    expect(low(soft).bright).toBeUndefined();
+    expect(high(soft).vel as number).toBeLessThan(high(hard).vel as number);
+    expect(high(soft).bright as number).toBeLessThan(1);
+    expect(high(hard).bright).toBeUndefined();
   });
 
   it('uses the chosen instrument, or the theme\'s by default', () => {

@@ -21,6 +21,7 @@ export function pose(rig: ProcRig, f: FighterView, simT: number, horde: boolean,
   if (!f.alive && d.hover) y *= 1 - clamp01((simT - f.diedAt) / 0.6);
   if (!f.alive && horde && f.side === 1) y -= clamp01((simT - f.diedAt - 2.2) / 1.2) * d.height * 1.2;
   rig.root.position.set(f.x, y, f.y);
+  rig.root.scale.setScalar(d.scale ?? 1);
   rig.root.rotation.set(0, Math.atan2(Math.cos(f.heading), Math.sin(f.heading)), 0);
   rig.root.visible = f.alive || !horde || simT - f.diedAt < 3.6;
   const p = PROC_POSES[d.proc.kind](f, simT, all);

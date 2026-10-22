@@ -47,6 +47,7 @@ export const rubeGoldberg: Template<RubeGoldbergParams, State> = {
   id: 'rube-goldberg',
   name: 'Rube Goldberg',
   family: 'kinetic',
+  category: 'machines',
   description:
     'A Rube Goldberg marble machine, different for every seed, simulated with real rigid-body physics (rolling marbles, swinging gates and bells). A gate releases a marble at the top; it runs down wooden channels, clacks into backstops, swirls round catch funnels and works through contraption after contraption (spirals, a coin-funnel vortex, dominoes, a Newton\'s cradle, a paddle wheel, a seesaw catapult, xylophone steps and a zigzag peg drop), zigzagging down the machine until it rings a brass bell at the bottom. The machine is generated and tested so every video runs to its finale.',
   schema: rubeGoldbergSchema,

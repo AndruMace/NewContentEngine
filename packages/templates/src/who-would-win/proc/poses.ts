@@ -658,6 +658,17 @@ export function mammalPose(f: FighterView, simT: number, others: FighterView[]):
     case 'buck':
       kick(pulse(u, 0.25, 0.6, 0.95));
       break;
+    case 'frenzy': {
+      // Snapping again and again, head thrashing side to side.
+      const snaps = m.hits.map((h) => pulse(u, h.at - 0.12, h.at - 0.02, h.at + 0.06));
+      const open = Math.max(...snaps);
+      p.jaw = open;
+      p.neckPitch += 0.3 * Math.max(...m.hits.map((h) => pulse(u, h.at - 0.15, h.at, h.at + 0.1)));
+      p.neckYaw += Math.sin(u * Math.PI * 7) * 0.35;
+      p.y -= 0.08 * spec.rollY;
+      p.tailYaw = Math.sin(simT * 16) * 0.4;
+      break;
+    }
     case 'toss': {
       // Head down and in, then flung up: the horn tossing what it caught.
       const at = m.hits[0].at;
@@ -779,9 +790,9 @@ export function humanPose(f: FighterView, simT: number, others: FighterView[]): 
   const upright = m && ['pummel', 'beat', 'grapple'].includes(m.clip) ? pulse(u, 0, 0.25, 0.95) : 0;
   if (ape) {
     const down = 1 - upright;
-    p.pitch += 0.85 * down;
-    p.y -= 0.3 * down;
-    p.neckPitch -= 0.7 * down;
+    p.pitch += 1.0 * down;
+    p.y -= 0.03 * down;
+    p.neckPitch -= 0.95 * down;
     const g = Math.min(1, Math.abs(f.stepV) / 0.6);
     for (const [limb, sx, off] of [
       ['LA', 1, 0.5],
@@ -791,7 +802,7 @@ export function humanPose(f: FighterView, simT: number, others: FighterView[]): 
       const swing = ph > 0.55;
       const t = swing ? (ph - 0.55) / 0.45 : ph / 0.55;
       const dz = (swing ? -0.5 + t : 0.5 - t) * 0.5 * g;
-      const knuckle: V3 = [sx * 0.34, 0.04 + (swing ? Math.sin(Math.PI * t) * 0.12 * g : 0), 0.5 + dz];
+      const knuckle: V3 = [sx * 0.24, 0.04 + (swing ? Math.sin(Math.PI * t) * 0.12 * g : 0), 0.62 + dz];
       p.legs[limb] = lerpV(knuckle, p.legs[limb] as V3 ?? knuckle, upright);
     }
   }
@@ -904,6 +915,17 @@ export function humanPose(f: FighterView, simT: number, others: FighterView[]): 
       p.pitch += 0.35 * kk;
       p.neckPitch += 0.3 * kk;
       p.jaw = ramp(u, 0, m.hits[0].at - 0.05) * (1 - ramp(u, m.hits[0].at - 0.05, m.hits[0].at + 0.05));
+      break;
+    }
+    case 'whirl': {
+      // Spinning round with the blade held straight out (the sim turns the body): arms wide, leaning in.
+      const on = pulse(u, 0, 0.12, 0.92);
+      p.legs.RA = lerpV(guardR, [-0.7, 1.32, 0.15], on);
+      p.legs.LA = lerpV(guardL, [0.55, 1.3, 0.05], on);
+      p.props.sword = lerpV(bladeGuard, [-1, 0.05, 0.25], on);
+      p.pitch += 0.1 * on;
+      p.roll += 0.12 * on;
+      p.y -= 0.06 * on;
       break;
     }
     case 'charge': {

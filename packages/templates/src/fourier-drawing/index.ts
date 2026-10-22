@@ -107,6 +107,7 @@ export const fourierDrawing: Template<FourierDrawingParams, State> = {
   id: 'fourier-drawing',
   name: 'Fourier Drawing',
   family: 'kinetic',
+  category: 'brainy',
   description:
     'A chain of spinning circles draws a mystery outline (a country, US state, dinosaur, animal or mythical creature). It starts with one circle drawing a blob, then 2, 4, 8… up to hundreds, and the shape sharpens until the reveal. Any closed shape is a sum of circles.',
   schema: fourierDrawingSchema,

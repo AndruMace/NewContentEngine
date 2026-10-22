@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FONT_FAMILY, VOICES, lighten, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type RGB, type Template, type VoiceId } from '@sim/engine';
+import { FONT_FAMILY, FPS, VOICES, lighten, paletteAt, rgbToCss, type Ctx2D, type DramaScore, type RGB, type Template, type VoiceId } from '@sim/engine';
 import { gaussFit } from '../scoring';
 import { SCALES, scaleNote, type ScaleName } from '../music';
 import * as dm from '@sim/physics/math';
@@ -24,9 +24,14 @@ export const polyrhythmSchema = z.object({
   rootNote: z.number().int().min(36).max(72).default(55).meta({ title: 'Root note (MIDI)' }),
   hitVolume: z.number().min(0.1).max(1).default(0.45).meta({ title: 'Note volume', step: 0.05 }),
   voice: z.enum(['theme', ...VOICES]).default('theme').meta({ title: 'Instrument (theme = the theme\'s own)' }),
+  notes: z.enum(['scale', 'chord', 'chord7']).default('scale').meta({ title: 'Notes (chord: root, 3rd and 5th only; chord7 adds the 7th)' }),
+  pitchRange: z.number().min(1).max(5).default(3.5).meta({ title: 'Pitch range (octaves above the root)', step: 0.5 }),
+  soften: z.number().min(0).max(1).default(0.5).meta({ title: 'Soften high notes', step: 0.05 }),
   figure: z.enum(['random', ...FIGURES]).default('random').meta({ title: 'Fourier figure' }),
   orreryStart: z.enum(['aligned', 'scattered']).default('aligned').meta({ title: 'Orrery start (scattered: planets align only at the end)' }),
   rippleLife: z.number().min(1).max(8).default(2.8).meta({ title: 'Ripple lifetime (s)', step: 0.1 }),
+  stringBrightness: z.number().min(0.1).max(2).default(1).meta({ title: 'String art: string brightness', step: 0.05 }),
+  stringLife: z.number().min(0).max(15).default(0).meta({ title: 'String art: string lifetime (s, 0 = build up all loop)', step: 0.5 }),
 });
 
 export type PolyrhythmParams = z.infer<typeof polyrhythmSchema>;
@@ -40,7 +45,10 @@ interface State {
   notesPerLoop: number[];
   /** Polygons: sides of each shape (innermost first). */
   sides: number[];
-  /** Scale degree each element plays (usually its index: slowest lowest). */
+  /**
+   * Scale degree each element plays: slowest lowest, fitted into the pitch range (and onto chord
+   * tones when asked).
+   */
   degree: number[];
   /** Each element's share of the note volume. */
   vel: number[];
@@ -155,6 +163,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
   id: 'polyrhythm',
   name: 'Polyrhythm Sync',
   family: 'kinetic',
+  category: 'machines',
   description: `A polyrhythm visual: every element moves at its own whole-number rate and plays a note on each beat, so they drift into patterns and all line up again exactly at the end; the video loops seamlessly. Styles: ${POLYRHYTHM_STYLES.map((k) => `${k} (${STYLE_TEXT[k]})`).join('; ')}. Speed patterns: linear (even spread), harmonic (multiples, like overtones), primes (few partial lineups, one big one at the end), mirror (slowest in the middle, symmetric twins), random.`,
   schema: polyrhythmSchema,
   lengthParam: { param: 'loopSeconds', offsetS: 0 },
@@ -239,6 +248,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         notesPerLoop = cycles.map((c) => 2 * c); // a note at each end of the swing
     }
     const offsets = beatOffset ?? notesPerLoop.map(() => 0);
+    degree = pitchDegrees(degree, scale, p.pitchRange, p.notes);
     return {
       p,
       scale,
@@ -274,7 +284,10 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         s.hits[i]++;
         s.flash[i] = 1;
         // Slowest element = lowest note.
-        emit({ type: 'hit', i, k: s.hits[i], side: panFor(s, i), midi: scaleNote(s.scale, s.p.rootNote, s.degree[i]), vel: s.p.hitVolume * s.vel[i], ...voice });
+        const midi = scaleNote(s.scale, s.p.rootNote, s.degree[i]);
+        // High notes cut through, so they come in quieter and darker (by the soften setting).
+        const soft = s.p.soften * Math.max(0, Math.min(1, (midi - SOFT_FROM) / SOFT_SPAN));
+        emit({ type: 'hit', i, k: s.hits[i], side: panFor(s, i), midi, vel: s.p.hitVolume * s.vel[i] * (1 - 0.6 * soft), ...(soft > 0 ? { bright: 1 - 0.85 * soft } : {}), ...voice });
       }
       s.flash[i] *= dm.exp(-6 * dt);
     }
@@ -343,7 +356,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
 
   audio(e, { theme }) {
     if (e.type !== 'hit') return [];
-    return [{ kind: 'note', midi: e.midi as number, vel: e.vel as number, voice: (e.voice as VoiceId | undefined) ?? theme.voice, pan: (e.side as number) * 0.35 }];
+    return [{ kind: 'note', midi: e.midi as number, vel: e.vel as number, voice: (e.voice as VoiceId | undefined) ?? theme.voice, pan: (e.side as number) * 0.35, bright: e.bright as number | undefined }];
   },
 
   score(events, { durationS, targetS }): DramaScore {
@@ -354,6 +367,37 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     return { total: durFit * (0.6 + 0.4 * rateFit), parts: { durFit, rateFit }, notes: [`${hits} notes (${rate.toFixed(1)}/s)`] };
   },
 };
+
+/** Softening of high notes starts at E4 and reaches full strength three octaves up. */
+const SOFT_FROM = 64;
+const SOFT_SPAN = 36;
+
+/**
+ * The scale's chord tones as positions in it: root, 3rd and 5th, plus the 7th when asked for and
+ * the scale has one (pentatonic and hirajoshi don't, so they stay triads).
+ */
+export function chordSteps(scale: ScaleName, seventh: boolean): number[] {
+  const iv: readonly number[] = SCALES[scale];
+  const at = (...semis: number[]) => iv.findIndex((x) => semis.includes(x));
+  const steps = [0, at(3, 4), at(7)];
+  if (seventh) steps.push(at(10, 11));
+  return steps.filter((k) => k >= 0);
+}
+
+/**
+ * Scale degrees for elements ranked by pitch (0 = lowest). Up to `range` octaves they climb a step at
+ * a time (a step is a scale note, or a chord tone in chord mode); more elements than that are spread
+ * evenly across the range, neighbours sharing a note, so a big count never runs up into shrill highs.
+ */
+export function pitchDegrees(ranks: number[], scale: ScaleName, range: number, notes: PolyrhythmParams['notes']): number[] {
+  const chord = notes === 'scale' ? null : chordSteps(scale, notes === 'chord7');
+  const perOctave = chord ? chord.length : SCALES[scale].length;
+  const limit = Math.max(1, Math.floor(range * perOctave));
+  const top = Math.max(0, ...ranks);
+  const fitted = top > limit ? ranks.map((r) => Math.round((r * limit) / top)) : ranks;
+  if (!chord) return fitted;
+  return fitted.map((r) => Math.floor(r / perOctave) * SCALES[scale].length + chord[r % perOctave]);
+}
 
 /** Seconds a video with these settings holds its final sync (0: it loops seamlessly). */
 function holdFor(p: PolyrhythmParams): number {
@@ -537,39 +581,69 @@ function drawStringArt(ctx: Ctx2D, s: State, t: number, frame: number, color: Co
   const cy = 1000;
   const rMin = 60;
   const rMax = 455;
-  const pos = (i: number): [number, number] => {
+  const posAt = (i: number, tt: number): [number, number] => {
     const r = rMin + ((rMax - rMin) * i) / Math.max(1, n - 1);
-    const a = -Math.PI / 2 + 2 * Math.PI * frac((s.notesPerLoop[i] * t) / T);
+    const a = -Math.PI / 2 + 2 * Math.PI * frac((s.notesPerLoop[i] * tt) / T);
     return [CX + dm.cos(a) * r, cy + dm.sin(a) * r];
   };
-  let layer = artLayers.get(s);
-  if (!layer || frame < layer.lastFrame) {
-    const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1080, 1920) : Object.assign(document.createElement('canvas'), { width: 1080, height: 1920 });
-    layer = { canvas, lastFrame: -1 };
-    artLayers.set(s, layer);
-  }
-  if (frame !== layer.lastFrame) {
-    const lc = layer.canvas.getContext('2d') as Ctx2D;
-    lc.lineWidth = 1.2;
-    for (let i = 0; i + 1 < n; i++) {
-      const [ax, ay] = pos(i);
-      const [bx, by] = pos(i + 1);
-      // Every string that passes near the middle paints it (the short inner ones and the long ones
-      // between dots on opposite sides), so the centre would burn out: fade strings by how close they
-      // pass to it.
-      const near = distToSegment(CX, cy, ax, ay, bx, by);
-      lc.strokeStyle = rgbToCss(color(i), ART_ALPHA * Math.max(0.14, Math.min(1, near / ART_FALLOFF) ** 1.2));
-      lc.beginPath();
-      lc.moveTo(ax, ay);
-      lc.lineTo(bx, by);
-      lc.stroke();
+  const pos = (i: number) => posAt(i, t);
+  // Every string that passes near the middle paints it (the short inner ones and the long ones
+  // between dots on opposite sides), so the centre would burn out: fade strings by how close they
+  // pass to it. The brightness setting scales them all.
+  const stringAlpha = (ax: number, ay: number, bx: number, by: number) =>
+    ART_ALPHA * s.p.stringBrightness * Math.max(0.14, Math.min(1, distToSegment(CX, cy, ax, ay, bx, by) / ART_FALLOFF) ** 1.2);
+
+  if (s.p.stringLife > 0) {
+    // With a lifetime: the strings laid in the last `stringLife` seconds (one set per frame, as the
+    // build-up draws them), each fading out as it ages. The dots repeat every loop, so the trail at the
+    // start carries on from the end's and the loop stays seamless without a fade.
+    const life = s.p.stringLife;
+    const css = Array.from({ length: n }, (_, i) => rgbToCss(color(i)));
+    ctx.lineWidth = 1.2;
+    for (let k = Math.ceil((t - life) * FPS - 1e-6); k <= Math.floor(t * FPS + 1e-6); k++) {
+      const tau = k / FPS;
+      const fade = 1 - (t - tau) / life;
+      if (fade <= 0) continue;
+      let [ax, ay] = posAt(0, tau);
+      for (let i = 0; i + 1 < n; i++) {
+        const [bx, by] = posAt(i + 1, tau);
+        ctx.strokeStyle = css[i];
+        ctx.globalAlpha = fade * stringAlpha(ax, ay, bx, by);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        [ax, ay] = [bx, by];
+      }
     }
-    layer.lastFrame = frame;
+    ctx.globalAlpha = 1;
+  } else {
+    let layer = artLayers.get(s);
+    if (!layer || frame < layer.lastFrame) {
+      const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1080, 1920) : Object.assign(document.createElement('canvas'), { width: 1080, height: 1920 });
+      layer = { canvas, lastFrame: -1 };
+      artLayers.set(s, layer);
+    }
+    if (frame !== layer.lastFrame) {
+      const lc = layer.canvas.getContext('2d') as Ctx2D;
+      lc.lineWidth = 1.2;
+      for (let i = 0; i + 1 < n; i++) {
+        const [ax, ay] = pos(i);
+        const [bx, by] = pos(i + 1);
+        lc.strokeStyle = rgbToCss(color(i), stringAlpha(ax, ay, bx, by));
+        lc.beginPath();
+        lc.moveTo(ax, ay);
+        lc.lineTo(bx, by);
+        lc.stroke();
+      }
+      layer.lastFrame = frame;
+    }
+    // The build-up fades out at the very end so the last frame matches the first.
+    const fade = Math.min(1, Math.max(0, (T - t) / ART_FADE_S));
+    ctx.globalAlpha = fade;
+    ctx.drawImage(layer.canvas as CanvasImageSource, 0, 0);
+    ctx.globalAlpha = 1;
   }
-  const fade = Math.min(1, Math.max(0, (T - t) / ART_FADE_S));
-  ctx.globalAlpha = fade;
-  ctx.drawImage(layer.canvas as CanvasImageSource, 0, 0);
-  ctx.globalAlpha = 1;
   // Rings and the top trigger.
   for (let i = 0; i < n; i++) {
     const r = rMin + ((rMax - rMin) * i) / Math.max(1, n - 1);
@@ -634,7 +708,7 @@ function drawPiano(ctx: Ctx2D, s: State, t: number, color: ColorFn) {
       ctx.font = `900 ${Math.round(Math.min(30, w * 0.5))}px ${FONT_FAMILY}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(noteName(s.scale, s.p.rootNote, i), x + w / 2, keyTop + press + keyH - 30);
+      ctx.fillText(noteName(s.scale, s.p.rootNote, s.degree[i]), x + w / 2, keyTop + press + keyH - 30);
     }
     // Ball: higher, slower bounces for the slow lanes (height ∝ period², like real bounces).
     const f = frac((s.notesPerLoop[i] * t) / T);

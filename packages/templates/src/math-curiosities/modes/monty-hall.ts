@@ -1,9 +1,10 @@
-import { FONT_FAMILY, lighten, paletteAt, rgbToCss, type Ctx2D, type RGB, type Theme } from '@sim/engine';
+import { FONT_FAMILY, lighten, paletteAt, rgbToCss, type Ctx2D, type NarrationBeat, type RGB, type Theme } from '@sim/engine';
 import * as dm from '@sim/physics/math';
 import { drawCommentPrompt } from '../../guess';
 import { scaleNote } from '../../music';
 import { gaussFit } from '../../scoring';
 import type { MathParams } from '../params';
+import { drawSpoken, fireSays, lineLength, newSpeech, sayAudio, speaking, spokenProgress, type BeatDef, type Speech } from '../speech';
 import { OUTRO_DELAY_S, REVEAL_S, caption, clamp01, drawModeTitle, ev, evName, fireCues, fmtInt, outlined, panel, popIn, smooth, type Cue, type ModeImpl } from '../shared';
 
 /**
@@ -68,18 +69,92 @@ interface State {
   revealAt: number;
   started: boolean;
   revealed: boolean;
+  speech: Speech;
   t: number;
 }
 
 const M = 'monty-hall';
 const COLS = [290, 790];
+/** Where a spoken line goes: under the game's headline, and under the race's chart. */
+const SAY_Y = { game: 575, race: 1590 };
+
+/** Voiceover beats (see speech.ts). Doors are numbered from 1, as on screen. */
+const BEAT: Record<string, BeatDef> = {
+  pick: {
+    about: 'A game show: a car is behind one of {doors} doors, goats behind the others. You pick door {door}.',
+    required: ['doors', 'door'],
+    maxWords: 12,
+    fallback: ['One of {doors} doors hides a car. You pick door {door}.', 'A car, {doors} doors, goats behind the rest. You take door {door}.'],
+  },
+  openOne: {
+    about: 'The host, who knows where the car is, opens one of the other doors to show a goat.',
+    required: [],
+    maxWords: 10,
+    fallback: ['The host knows, and opens a door with a goat.', 'Now the host opens a goat door.'],
+  },
+  openMany: {
+    about: 'The host, who knows where the car is, opens {opened} of the other doors, all goats, leaving one shut.',
+    required: ['opened'],
+    maxWords: 10,
+    fallback: ['The host opens {opened} other doors. All goats.', 'The host knows, and opens {opened} goat doors.'],
+  },
+  ask: {
+    about: 'The choice: stay with door {door}, or switch to door {other}? Ask the viewer to decide. Do not hint at the answer.',
+    required: ['other'],
+    maxWords: 8,
+    fallback: ['Stay with door {door}, or switch to {other}?', 'Now: switch to door {other}, or stay?'],
+  },
+  answerSwitch: {
+    about: 'Both doors open: switching would have won, the car was behind door {car}. Only this one game, so no verdict yet.',
+    required: ['car'],
+    maxWords: 10,
+    fallback: ['Switching wins! The car was behind door {car}.', 'This time, door {car}. Switching wins.'],
+  },
+  answerStay: {
+    about: 'Both doors open: staying would have won, the car was behind door {car}, the first pick. Only this one game, so no verdict yet.',
+    required: ['car'],
+    maxWords: 10,
+    fallback: ['Staying wins, this time. The car was behind door {car}.', 'Door {car}! Your first pick was right. This time.'],
+  },
+  race: {
+    about: 'One game proves nothing, so now {games} games are played always staying and {games} always switching, side by side.',
+    required: ['games'],
+    maxWords: 10,
+    fallback: ["Let's play {games} games each way.", 'Now {games} games of each.'],
+  },
+  reveal: {
+    about: 'After all the games, switching won {pct} percent of the time and staying only {stayPct} percent. Switching is better.',
+    required: ['pct'],
+    maxWords: 12,
+    fallback: ['Switching wins {pct} percent of the time. Staying, only {stayPct}.', 'Switch, and you win {pct} percent of the time!'],
+  },
+};
+
+interface PlannedBeat {
+  id: string;
+  def: BeatDef;
+  facts: Record<string, number>;
+}
+
+/** This run's voiceover (facts from the slow game and the race's totals). */
+function planBeats(p: MathParams, n: number, g: Game, stayWins: number, swapWins: number, played: number): PlannedBeat[] {
+  const car = g.car + 1;
+  return [
+    { id: 'pick', def: BEAT.pick, facts: { doors: n, door: g.pick + 1 } },
+    n === 3 ? { id: 'open', def: BEAT.openOne, facts: {} } : { id: 'open', def: BEAT.openMany, facts: { opened: n - 2 } },
+    { id: 'ask', def: BEAT.ask, facts: { door: g.pick + 1, other: g.other + 1 } },
+    { id: 'answer', def: g.other === g.car ? BEAT.answerSwitch : BEAT.answerStay, facts: { car } },
+    { id: 'race', def: BEAT.race, facts: { games: p.games } },
+    { id: 'reveal', def: BEAT.reveal, facts: { pct: Math.round((100 * swapWins) / Math.max(1, played)), stayPct: Math.round((100 * stayWins) / Math.max(1, played)) } },
+  ];
+}
 
 export const montyHallMode: ModeImpl<State> = {
   copy: () => ({ hook: 'Switch doors or stay? Most people get this wrong', cta: '{result} of the time! Would you have switched? 🚪' }),
   searchBudget: 60,
   glowScale: 0.5,
 
-  init({ params: p, rng }) {
+  init({ params: p, rng, narration }) {
     const n = p.doors;
     const game = playGame(n, rng);
     const stay = new Uint8Array(p.games);
@@ -91,17 +166,43 @@ export const montyHallMode: ModeImpl<State> = {
       swap[i] = b.other === b.car ? 1 : 0;
     }
     let swapTotal = 0;
-    for (let i = 0; i < p.games; i++) swapTotal += swap[i];
-    const revealAt = p.durationS - REVEAL_S;
+    let stayTotal = 0;
+    for (let i = 0; i < p.games; i++) {
+      swapTotal += swap[i];
+      stayTotal += stay[i];
+    }
+    const voiced = p.narration === 'on';
+    // With a voiceover each beat waits for its line (estimated until the lines are voiced).
+    const beats = voiced ? planBeats(p, n, game, stayTotal, swapTotal, p.games) : [];
+    const said = (id: string) => {
+      const b = beats.find((x) => x.id === id);
+      return b ? lineLength(narration, id, b.def) : 0;
+    };
+    const speech = newSpeech(narration);
+    const say = (t: number, beat: string) => beats.some((b) => b.id === beat) && speech.says.push({ t, beat });
+    const revealAt = p.durationS - Math.max(REVEAL_S, said('reveal') + 1);
+    say(revealAt + 0.25, 'reveal');
     // Act 1 (one slow game) takes about 40% of the video, the race the rest.
     const len = Math.max(7, Math.min(13, revealAt * 0.42));
-    const cues: Act1Cue[] = [{ t: len * 0.1, kind: 'pick', door: game.pick }];
-    game.opened.forEach((door, i) => cues.push({ t: len * (0.22 + (0.2 * i) / Math.max(1, game.opened.length)), kind: 'open', door }));
-    cues.push({ t: len * 0.45, kind: 'ask' }, { t: len * 0.78, kind: 'answer' }, { t: len, kind: 'race' });
+    // The door is highlighted as the line names it (near its end).
+    say(0.3, 'pick');
+    const cues: Act1Cue[] = [{ t: Math.max(len * 0.1, voiced ? 0.3 + 0.6 * said('pick') : 0), kind: 'pick', door: game.pick }];
+    const openFrom = Math.max(len * 0.22, voiced ? 0.3 + said('pick') + 0.25 : 0);
+    say(openFrom, 'open');
+    const opened = Math.max(1, game.opened.length);
+    game.opened.forEach((door, i) => cues.push({ t: voiced ? openFrom + (0.6 * said('open') * i) / opened : len * (0.22 + (0.2 * i) / opened), kind: 'open', door }));
+    const askAt = Math.max(len * 0.45, voiced ? openFrom + said('open') + 0.25 : 0);
+    // A moment to decide (the comment prompt is up) before the doors open.
+    const answerAt = Math.max(len * 0.78, voiced ? askAt + said('ask') + 1.2 : 0);
+    const raceAt = Math.max(len, voiced ? answerAt + said('answer') + 0.3 : 0);
+    say(askAt, 'ask');
+    say(answerAt, 'answer');
+    say(raceAt + 0.3, 'race');
+    cues.push({ t: askAt, kind: 'ask' }, { t: answerAt, kind: 'answer' }, { t: raceAt, kind: 'race' });
     return {
       p, n, game, stay, swap, swapTotal, cues, cue: 0, picked: false, pickedAt: -9, openAt: new Array(n).fill(-1), askAt: -9, answerAt: -9,
-      raceAt: len, raceTo: revealAt - 0.4, played: 0, stayWins: 0, swapWins: 0, lastBatchT: -9, batchStay: 0, batchSwap: 0,
-      revealAt, started: false, revealed: false, t: 0,
+      raceAt, raceTo: Math.max(revealAt - 0.4, raceAt + 1), played: 0, stayWins: 0, swapWins: 0, lastBatchT: -9, batchStay: 0, batchSwap: 0,
+      revealAt, started: false, revealed: false, speech: { ...speech, says: speech.says.sort((a, b) => a.t - b.t) }, t: 0,
     };
   },
 
@@ -111,6 +212,7 @@ export const montyHallMode: ModeImpl<State> = {
       s.started = true;
       emit({ type: ev(M, 'start'), doors: s.n });
     }
+    fireSays(s.speech, M, t, emit);
     fireCues(s.cues, s, t, (c) => {
       if (c.kind === 'pick') {
         s.picked = true;
@@ -130,7 +232,8 @@ export const montyHallMode: ModeImpl<State> = {
 
     if (t >= s.raceAt && s.played < s.p.games) {
       // Slow at first (each game readable), hundreds a second by the end.
-      const u = clamp01((t - s.raceAt) / (s.raceTo - s.raceAt));
+      // (A voiceover that overran its estimate can push the race past the reveal: it finishes there.)
+      const u = t >= s.revealAt ? 1 : clamp01((t - s.raceAt) / (s.raceTo - s.raceAt));
       const want = u >= 1 ? s.p.games : Math.min(s.p.games, Math.floor((s.p.games * (dm.exp(4 * u) - 1)) / (dm.exp(4) - 1)) + (u > 0 ? 1 : 0));
       while (s.played < want) {
         s.stayWins += s.stay[s.played];
@@ -178,6 +281,9 @@ export const montyHallMode: ModeImpl<State> = {
       drawRace(ctx, theme, s);
       ctx.restore();
     }
+    // The line being spoken, as a caption: under the game's headline, then under the race's chart.
+    const sp = speaking(s.speech, t);
+    if (sp) drawSpoken(ctx, theme, sp.line.caption, spokenProgress(sp.since, sp.line.durationS), 540, t < s.raceAt ? SAY_Y.game : SAY_Y.race, { size: 38, maxW: 980 });
   },
 
   audio(e) {
@@ -185,6 +291,8 @@ export const montyHallMode: ModeImpl<State> = {
       case 'start':
       case 'race':
         return [{ kind: 'sfx', name: 'whoosh', vel: 0.16 }];
+      case 'say':
+        return sayAudio(e.clip as string);
       case 'pick':
         return [{ kind: 'sfx', name: 'knock', vel: 0.36 }, { kind: 'note', midi: 67, vel: 0.3, voice: 'marimba', dur: 0.5 }];
       case 'open':
@@ -206,6 +314,18 @@ export const montyHallMode: ModeImpl<State> = {
         return [{ kind: 'sfx', name: 'chime', vel: 0.32 }, ...[48, 55, 60, 64].map((midi, i) => ({ kind: 'note' as const, midi, vel: 0.22 + i * 0.02, voice: 'softsine' as const, dur: 3.2 }))];
     }
     return [];
+  },
+
+  beats(p, events) {
+    const n = p.doors;
+    const pick = events.find((e) => e.type === ev(M, 'pick'))?.door as number;
+    const opened = events.filter((e) => e.type === ev(M, 'open')).map((e) => e.door as number);
+    let other = 0;
+    while (other === pick || opened.includes(other)) other++;
+    const switchWins = Boolean(events.find((e) => e.type === ev(M, 'answer'))?.switchWins);
+    const end = events.find((e) => e.type === ev(M, 'reveal'));
+    const game: Game = { car: switchWins ? other : pick, pick, other, opened };
+    return planBeats(p, n, game, (end?.stayWins as number) ?? 0, (end?.swapWins as number) ?? 0, (end?.played as number) ?? p.games).map((b): NarrationBeat => ({ id: b.id, ...b.def, facts: b.facts }));
   },
 
   score(events, { durationS, targetS }) {

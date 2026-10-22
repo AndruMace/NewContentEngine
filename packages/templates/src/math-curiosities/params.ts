@@ -7,7 +7,7 @@ export const CHAOS_RULES = ['triangle', 'square', 'pentagon', 'hexagon', 'carpet
 export type ChaosRule = (typeof CHAOS_RULES)[number];
 
 /** Modes with narration (their openings have explainer beats to voice). */
-export const NARRATED: ModeId[] = ['collatz', 'times-table'];
+export const NARRATED: ModeId[] = ['collatz', 'times-table', 'monty-hall', 'birthday'];
 
 /** Kokoro voices offered (its best-graded; @sim/voice keeps the same list). */
 export const NARRATORS = ['af_heart', 'af_bella', 'am_michael', 'am_fenrir', 'am_puck', 'bf_emma', 'bm_george'] as const;

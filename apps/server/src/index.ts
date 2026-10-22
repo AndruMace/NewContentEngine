@@ -11,7 +11,7 @@ import { LongFormService } from './longform';
 import { getLongFormJob, listLongFormJobs } from './longformJobs';
 import { REWARD_PRESETS, parsePostUrl } from '@sim/analytics';
 import { tasteStatus } from './taste';
-import { VOICE_CACHE, prepareNarration } from '@sim/voice';
+import { VOICE_CACHE, prepareNarration, warmUpKokoro } from '@sim/voice';
 
 // Load .env (ANTHROPIC_API_KEY etc.) before anything reads the environment.
 try {
@@ -504,3 +504,11 @@ review.startAutoExport();
 batches.resumeAll();
 await app.listen({ port: PORT, host: '127.0.0.1' });
 console.log(`Sim server on http://127.0.0.1:${PORT} (Claude ${claudeAvailable() ? 'enabled' : 'not configured'})`);
+// Load the voice model now, in the background, so the first Playground voicing doesn't wait for it.
+if (!process.env.VITEST) {
+  const t0 = Date.now();
+  warmUpKokoro().then(
+    () => console.log(`Kokoro voice model ready in ${((Date.now() - t0) / 1000).toFixed(1)} s`),
+    (e) => console.warn(`Kokoro warm-up failed (it will load on first voicing): ${(e as Error).message}`),
+  );
+}

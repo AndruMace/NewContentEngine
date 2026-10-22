@@ -121,7 +121,7 @@ const view = sceneCache((s: NightTrainState) => {
  * The camera's jolt from the wheels: a short damped shake after each click (sorted click times). The
  * clicks just before the loop's end shake the start too (as they will when it repeats).
  */
-function jolt(clicks: number[], t: number, L: number) {
+export function jolt(clicks: number[], t: number, L: number) {
   return bump(clicks, t) + bump(clicks, t + L);
 }
 

@@ -97,6 +97,7 @@ export const rpsBattle: Template<RpsBattleParams, State> = {
   id: 'rps-battle',
   name: 'Rock Paper Scissors Battle',
   family: 'race',
+  category: 'battles',
   description:
     'Three swarms (rock, paper, scissors; or fire, water, leaf; or three country flags in a rock-paper-scissors cycle) roam a round or square arena. Whenever two different sides touch, the loser switches to the winner\'s side, so swarms grow and collapse in waves. Units hunt their prey and flee their predator; a live bar shows each side\'s share, the last survivor of a side is ringed, and a final rush shrinks the arena. The match ends when one side has taken everyone, or the biggest side wins when time runs out.',
   schema: rpsBattleSchema,

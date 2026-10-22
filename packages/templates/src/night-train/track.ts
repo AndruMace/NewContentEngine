@@ -48,12 +48,12 @@ function dipArea(u: number) {
 
 /**
  * The train's speed and its ring: `speed` (m/s) is the speed asked for; the cruising speed is adjusted
- * slightly so that the loop covers a whole number of RING_STEPs.
+ * slightly so that the loop covers a whole number of `step`s (RING_STEP unless the scenery needs more).
  */
-export function makeMotion(speed: number, L: number, dips: Dip[]): Motion {
+export function makeMotion(speed: number, L: number, dips: Dip[], step = RING_STEP): Motion {
   // Distance lost to the dips, per m/s of cruising speed: each dip removes depth · halfS · v.
   const lost = dips.reduce((a, d) => a + d.depth * d.halfS, 0);
-  const D = Math.max(RING_STEP, Math.round((speed * (L - lost)) / RING_STEP) * RING_STEP);
+  const D = Math.max(step, Math.round((speed * (L - lost)) / step) * step);
   return { D, v: D / (L - lost), dips };
 }
 
@@ -126,6 +126,8 @@ export interface TimetableOptions {
   horn: number;
   /** Which way the train runs across the view (+1 right, -1 left): sides of the clicks and horn. */
   dir?: number;
+  /** The ring is a whole number of these (m; default RING_STEP, a multiple of RAIL). */
+  ringStep?: number;
 }
 
 export const SOUNDS = {
@@ -170,7 +172,7 @@ export function timetable(o: TimetableOptions, L: number, rng: Rng): Timetable {
     if (t - halfS < EDGE || t + halfS > L - EDGE) continue;
     dips.push({ t, depth: rng.range(0.25, 0.45), halfS });
   }
-  const motion = makeMotion(o.speed, L, dips);
+  const motion = makeMotion(o.speed, L, dips, o.ringStep);
   const features: Feature[] = [];
   const at = (t0: number, s0: number, s1: number, kind: FeatureKind) => {
     const t1 = timeAt(motion, s1, L);

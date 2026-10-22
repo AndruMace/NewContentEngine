@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng, Runner, getTheme, hashString, paramsJsonSchema, searchBudgetOf, type VoiceTrack } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { MODES, mathCuriosities } from './index';
+import { NARRATED } from './params';
 import { collatzSequence } from './modes/collatz';
 import { shapeName } from './modes/times-table';
 import { GOLDEN } from './modes/phyllotaxis';
@@ -161,11 +162,21 @@ describe('math curiosities: narration', () => {
   const runVoiced = (params: Record<string, unknown>, voice?: VoiceTrack, seed = 4, visual = false) =>
     new Runner(mathCuriosities, { seed, theme, melody, visual, params, voice, maxSeconds: 90 }).runToEnd();
 
-  it('leaves narrated modes unchanged with narration off, and only voices collatz and times-table', () => {
+  it('leaves narrated modes unchanged with narration off, and only voices the narrated modes', () => {
     for (const mode of TIMED) {
       expect(hash(run({ mode, narration: 'off' }))).toBe(hash(run({ mode })));
-      expect(mathCuriosities.narration!.enabled(mathCuriosities.schema.parse({ mode, narration: 'on' }))).toBe(mode === 'collatz' || mode === 'times-table');
+      expect(mathCuriosities.narration!.enabled(mathCuriosities.schema.parse({ mode, narration: 'on' }))).toBe(NARRATED.includes(mode));
     }
+  });
+
+  it('plays monty hall and birthday exactly as before they had a voiceover, with narration off', () => {
+    // Event logs from before the beats were added (narration off must not move a single event).
+    expect(hash(run({ mode: 'monty-hall', narration: 'off' }))).toBe('0836e312');
+    expect(hash(run({ mode: 'monty-hall', durationS: 20 }))).toBe('0dc7356b');
+    expect(hash(run({ mode: 'monty-hall', doors: 7, games: 1500 }))).toBe('6888d195');
+    expect(hash(run({ mode: 'birthday', narration: 'off' }))).toBe('78d856d8');
+    expect(hash(run({ mode: 'birthday', rooms: 1 }))).toBe('9cac7059');
+    expect(hash(run({ mode: 'birthday', rooms: 6, durationS: 45 }))).toBe('38af70b6');
   });
 
   it('lays out beats with this run’s facts', () => {
@@ -181,9 +192,30 @@ describe('math curiosities: narration', () => {
     const ttBeats = mathCuriosities.narration!.beats(mathCuriosities.schema.parse(tt), run(tt).events);
     expect(ttBeats.map((b) => b.id)).toEqual(['intro', 'demo0', 'demo1', 'wrap', 'fill', 'sweep', 'reveal']);
     expect(ttBeats.find((b) => b.id === 'wrap')!.facts).toEqual({ k: 130, product: 260, last: 199, landed: 60 });
+
+    const mh = { mode: 'monty-hall', narration: 'on' };
+    const mhRun = run(mh);
+    const mhBeats = mathCuriosities.narration!.beats(mathCuriosities.schema.parse(mh), mhRun.events);
+    expect(mhBeats.map((b) => b.id)).toEqual(['pick', 'open', 'ask', 'answer', 'race', 'reveal']);
+    const g = (mhRun.state as any).inner.game;
+    expect(mhBeats[0].facts).toEqual({ doors: 3, door: g.pick + 1 });
+    expect(mhBeats[2].facts).toEqual({ door: g.pick + 1, other: g.other + 1 });
+    expect(mhBeats[3].facts).toEqual({ car: g.car + 1 });
+    const end = mhRun.events.find((e) => e.type === 'monty-hall:reveal')!;
+    expect(mhBeats[5].facts.pct).toBe(Math.round((100 * (end.swapWins as number)) / (end.played as number)));
+    const seven = { ...mh, doors: 7 };
+    expect(mathCuriosities.narration!.beats(mathCuriosities.schema.parse(seven), run(seven).events)[1].facts).toEqual({ opened: 5 });
+
+    const bd = { mode: 'birthday', narration: 'on' };
+    const bdRun = run(bd);
+    const bdBeats = mathCuriosities.narration!.beats(mathCuriosities.schema.parse(bd), bdRun.events);
+    expect(bdBeats.map((b) => b.id)).toEqual(['intro', 'arrivals', 'match', 'reveal']);
+    const counts = (bdRun.state as any).inner.rooms.map((r: number[]) => r.length);
+    expect(bdBeats[2].facts).toEqual({ count: counts[0] });
+    expect(bdBeats[3].facts).toEqual({ rooms: 3, fewest: Math.min(...counts), most: Math.max(...counts), half: 23, odds: 50 });
   });
 
-  it.each(['collatz', 'times-table'])('%s waits for every line, speaks it once, and still ends on time', (mode) => {
+  it.each(['collatz', 'times-table', 'monty-hall', 'birthday'])('%s waits for every line, speaks it once, and still ends on time', (mode) => {
     const params = { mode, narration: 'on', durationS: 40 };
     for (const seconds of [1, 3.5]) {
       const voice = voiceFor(params, seconds);

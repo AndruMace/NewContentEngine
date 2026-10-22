@@ -126,6 +126,7 @@ export const trickShot: Template<TrickShotParams, State> = {
   id: 'trick-shot',
   name: 'Trick Shot',
   family: 'bounce',
+  category: 'bounce',
   description:
     'A 3D glass cabinet: a cannon at the top, tilted boards, rods, pegs, bumpers, spinners and swinging paddles in between, and a cup standing on the floor. In bounce mode one ball ricochets around in 3D (the floor keeps throwing it back up) until it finally drops into the cup, with a bounce counter. In attempts mode an AI cannon fires shot after shot, each miss landing closer (missed shots leave faint ghost trails), until one goes in. In race mode several coloured balls bounce around together and the first to sink {racePoints} cups wins. The camera opens wide, follows the ball, and every success ends with a slow-motion replay from beside the cup. Narrower cups and more obstacles make it take longer.',
   schema: trickShotSchema,

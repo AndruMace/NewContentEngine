@@ -55,6 +55,7 @@ function view(def: (typeof procs)[number], over: Partial<FighterView>): FighterV
     stepV: over.spd ?? 0,
     clinch: null,
     blockT: -10,
+    fury: 0,
     ...over,
   };
 }
@@ -125,7 +126,7 @@ describe('procedural creatures', () => {
   it('blows that land touch: the striking part is on the spot it hit at the impact', () => {
     const misses: number[] = [];
     for (const [a, b] of [['bear', 'lion'], ['horse', 'king'], ['wolf', 'deer'], ['croc', 'unicorn'], ['swordsman', 'brawler']])
-      for (const seed of [1, 2]) {
+      for (const seed of [1, 2, 3]) {
         const w = makeWorld({ mode: 'duel', a: creatureById(a), b: creatureById(b), hpScale: 1, capS: 32, maxSwarm: 30, rng: new Rng(seed) });
         const rigs = new Map(w.fighters.map((f) => [f.idx, new ProcRig(SPECIES[f.def.proc.kind])]));
         let n = 0;

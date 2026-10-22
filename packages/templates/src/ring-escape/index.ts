@@ -140,6 +140,7 @@ export const ringEscape: Template<RingEscapeParams, State> = {
   id: 'ring-escape',
   name: 'Ring Escape',
   family: 'bounce',
+  category: 'bounce',
   description:
     'A ball bounces inside concentric rotating rings, each with a gap. Passing a gap shatters that ring. Every bounce plays the next note of the melody.',
   schema: ringEscapeSchema,

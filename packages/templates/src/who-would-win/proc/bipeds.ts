@@ -41,6 +41,8 @@ export interface BipedOpts {
   /** Arm thickness and length multipliers (a brawler's thick arms; an ape's long ones). */
   arms?: number;
   armLen?: number;
+  /** Leg length multiplier (an ape's short legs): everything above the hips comes down with it. */
+  legLen?: number;
   /** Its own head instead of a person's (a bull's, an ape's, a troll's), on the neck. */
   headBuild?: (b: MeshBuilder) => void;
   /** An iron helmet with a nose guard. */
@@ -216,6 +218,9 @@ export function trollHead(skin: THREE.Color, hair: THREE.Color) {
 
 export function biped(o: BipedOpts): ProcSpec {
   const w = o.build;
+  const L = o.legLen ?? 1;
+  // (Shorter legs bring the hips and everything above them down.)
+  const dy = -0.87 * (1 - L);
   const torso: Ring[] = [
     { c: [0, 0.8, 0], w: 0.12, h: 0.09 },
     { c: [0, 0.9, 0], w: 0.17 * w, h: 0.115 },
@@ -225,9 +230,9 @@ export function biped(o: BipedOpts): ProcSpec {
     { c: [0, 1.44, 0], w: 0.215 * w, h: 0.11 },
     { c: [0, 1.5, 0], w: 0.09, h: 0.07 },
     { c: [0, 1.59, 0.01], w: 0.055, h: 0.055 },
-  ];
+  ].map((r) => ({ ...r, c: [r.c[0], r.c[1] + dy, r.c[2]] as V3 }));
   const torsoColor = (_t: number, a: number, p: V3) => {
-    const y = p[1];
+    const y = p[1] - dy;
     const c = y < 0.93 ? o.pants : y < 0.99 ? o.belt : y > 1.47 ? o.skin : o.shirtTrim && (y > 1.4 || Math.abs(p[0]) < 0.02) && Math.sin(a) > 0 ? o.shirtTrim : o.shirt;
     return shade(c, 1, p, 0.05);
   };
@@ -236,9 +241,9 @@ export function biped(o: BipedOpts): ProcSpec {
     legs.push({
       name: s > 0 ? 'LL' : 'RL',
       bone: 'pelvis',
-      hip: [s * 0.095, 0.9, 0],
+      hip: [s * 0.095, 0.9 + dy, 0],
       home: [s * 0.12, 0, 0.03],
-      lens: [0.44, 0.43],
+      lens: [0.44 * L, 0.43 * L],
       end: { up: 0.07, back: 0.03, segment: false },
       radii: [0.085 * w, 0.06 * w, 0.045],
       pole: [0, 0, 1],
@@ -252,8 +257,8 @@ export function biped(o: BipedOpts): ProcSpec {
     legs.push({
       name: s > 0 ? 'LA' : 'RA',
       bone: 'chest',
-      hip: [s * 0.215 * w, 1.42, 0],
-      home: [s * 0.25 * w, 1.42 - 0.47 * (o.armLen ?? 1), 0.04],
+      hip: [s * 0.215 * w, 1.42 + dy, 0],
+      home: [s * 0.25 * w, 1.42 + dy - 0.47 * (o.armLen ?? 1), 0.04],
       lens: [0.29 * (o.armLen ?? 1), 0.27 * (o.armLen ?? 1)],
       end: { up: 0, back: 0, segment: false },
       radii: [0.05 * arm, 0.042 * arm, 0.035 * arm],
@@ -345,8 +350,8 @@ export function biped(o: BipedOpts): ProcSpec {
     });
   }
   return {
-    bones: { pelvis: [0, 0.95, 0], spine: [0, 1.13, 0], chest: [0, 1.33, 0], neck1: [0, 1.52, 0], neck2: [0, 1.6, 0], tail: [] },
-    rollY: 0.9,
+    bones: { pelvis: [0, 0.95 + dy, 0], spine: [0, 1.13 + dy, 0], chest: [0, 1.33 + dy, 0], neck1: [0, 1.52 + dy, 0], neck2: [0, 1.6 + dy, 0], tail: [] },
+    rollY: 0.9 + dy,
     headScale: 1.15,
     body(b, skin) {
       loft(b, smoothRings(torso, 2), { sides: 12, ref: [0, 0, 1], jitter: o.shaggy ?? 0.02, seed: o.seed, color: torsoColor, capStart: 0.3, capEnd: 0.1, skin });
@@ -429,7 +434,8 @@ export const GORILLA: ProcSpec = {
   feet: GORILLA_SKIN,
   sleeves: [GORILLA_FUR, GORILLA_FUR],
   arms: 2.2,
-  armLen: 1.5,
+  armLen: 1.45,
+  legLen: 0.72,
   headBuild: apeHead(GORILLA_FUR, GORILLA_SKIN),
   shaggy: 0.1,
   }),

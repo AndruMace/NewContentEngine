@@ -23,12 +23,16 @@ export function ParamControls({ schema, values, onChange }: Props) {
           );
         }
         if (prop.enum) {
+          // (A template can name its options for people: `optionLabels` in the field's meta.)
+          const names: Record<string, string> = prop.optionLabels ?? {};
           return (
             <label key={key} className="param">
               <span>{label}</span>
               <select value={String(value)} onChange={(e) => set(key, e.target.value)}>
                 {prop.enum.map((opt: string) => (
-                  <option key={opt}>{opt}</option>
+                  <option key={opt} value={opt}>
+                    {names[opt] ?? opt}
+                  </option>
                 ))}
               </select>
             </label>

@@ -67,6 +67,7 @@ export const marbleMachine: Template<MarbleMachineParams, State> = {
   id: 'marble-machine',
   name: 'Marble Machine',
   family: 'kinetic',
+  category: 'machines',
   description:
     'A mystery tune played by a 3D Rube Goldberg marble machine. Pegs on a turning drum release steel marbles into contraptions (a spiral ramp round a column, a pair of tipping seesaws, a loop-the-loop with a jump, zigzag rails, or a straight drop), and each one leaps onto its vibraphone bar exactly on its note. Spent marbles hop into a trough, turn a paddle wheel and ride a bucket elevator back to the top. Partway through, a lever opens the hopper for heavier bass marbles. The final note\'s marble sets off a domino run that rings a bell as the song\'s title is revealed. The camera (director) opens wide, follows marbles through the contraptions and tracks the dominoes; wide keeps the whole machine in view.',
   schema: marbleMachineSchema,

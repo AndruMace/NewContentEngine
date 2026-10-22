@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TtsProvider } from './provider';
 import { VOICE_CACHE } from './paths';
@@ -18,10 +18,35 @@ export const hasClip = (clip: string) => existsSync(clipPath(clip));
 export async function voiceLine(provider: TtsProvider, voice: string, text: string): Promise<{ clip: string; durationS: number }> {
   const clip = clipName(provider.id, voice, text);
   const path = clipPath(clip);
-  if (existsSync(path)) return { clip, durationS: wavDuration(await readFile(path)) };
+  if (existsSync(path)) {
+    // Reuse counts as use: pruning goes by age, and a Playground recipe may not be saved as a render yet.
+    const now = new Date();
+    await utimes(path, now, now).catch(() => {});
+    return { clip, durationS: wavDuration(await readFile(path)) };
+  }
   const speech = await provider.synthesize(text, voice);
   const wav = encodeWav(trimSilence(speech.samples, speech.sampleRate), speech.sampleRate);
   await mkdir(VOICE_CACHE, { recursive: true });
   await writeFile(path, wav);
   return { clip, durationS: wavDuration(wav) };
+}
+
+/**
+ * Delete cached clips that `keep` doesn't name and that were last voiced or reused before `cutoff`
+ * (ms). Renders keep their own copies under voice/, so only recipes still to render need the cache.
+ */
+export async function pruneVoiceCache(keep: Set<string>, cutoff: number): Promise<{ deleted: number; freedBytes: number }> {
+  let deleted = 0;
+  let freed = 0;
+  const files = await readdir(VOICE_CACHE).catch(() => [] as string[]);
+  for (const f of files) {
+    if (!f.endsWith('.wav') || keep.has(f)) continue;
+    const path = clipPath(f);
+    const s = await stat(path).catch(() => null);
+    if (!s?.isFile() || s.mtimeMs >= cutoff) continue;
+    await rm(path, { force: true });
+    deleted++;
+    freed += s.size;
+  }
+  return { deleted, freedBytes: freed };
 }

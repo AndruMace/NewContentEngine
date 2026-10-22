@@ -99,6 +99,7 @@ export const territoryWar: Template<TerritoryWarParams, State> = {
   id: 'territory-war',
   name: 'Territory War',
   family: 'race',
+  category: 'battles',
   description:
     'Two to four teams (colours, or countries with their flags) each own part of a tiled board. Each team\'s ball bounces around inside its own territory, and every enemy tile it hits flips to its colour and bounces it back, so borders push back and forth. A live bar shows each team\'s share of the board; trailing teams get a small speed boost, and balls speed up in a final rush. When the match timer runs out, the biggest territory wins.',
   schema: territoryWarSchema,

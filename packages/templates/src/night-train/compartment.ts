@@ -7,85 +7,8 @@
  */
 import { THREE, canvasTexture } from '../three-layer';
 import { model, textureMaterial } from '../ambient/assets';
+import { box, curtain, frame, panel, roundedRect } from '../ambient/interior';
 import { BACK, BERTH, CEILING, HALF_W, LAMP, TABLE, WALL, WINDOW } from './layout';
-
-/** A box whose UVs are in metres × `perMetre` (one texture scale across boxes of any size). */
-function worldUvBox(w: number, h: number, d: number, perMetre: number) {
-  const g = new THREE.BoxGeometry(w, h, d);
-  const uv = g.getAttribute('uv') as THREE.BufferAttribute;
-  const spans: [number, number][] = [
-    [d, h],
-    [d, h],
-    [w, d],
-    [w, d],
-    [w, h],
-    [w, h],
-  ];
-  for (let i = 0; i < uv.count; i++) {
-    const [su, sv] = spans[Math.floor(i / 4)];
-    uv.setXY(i, uv.getX(i) * su * perMetre, uv.getY(i) * sv * perMetre);
-  }
-  return g;
-}
-
-function box(w: number, h: number, d: number, mat: THREE.Material, x: number, y: number, z: number, perMetre = 1) {
-  const m = new THREE.Mesh(worldUvBox(w, h, d, perMetre), mat);
-  m.position.set(x, y, z);
-  m.castShadow = m.receiveShadow = true;
-  return m;
-}
-
-function roundedRect(x0: number, y0: number, x1: number, y1: number, r: number) {
-  const s = new THREE.Shape();
-  s.moveTo(x0 + r, y0);
-  s.lineTo(x1 - r, y0);
-  s.quadraticCurveTo(x1, y0, x1, y0 + r);
-  s.lineTo(x1, y1 - r);
-  s.quadraticCurveTo(x1, y1, x1 - r, y1);
-  s.lineTo(x0 + r, y1);
-  s.quadraticCurveTo(x0, y1, x0, y1 - r);
-  s.lineTo(x0, y0 + r);
-  s.quadraticCurveTo(x0, y0, x0 + r, y0);
-  return s;
-}
-
-/** A frame of four bars (a moulding round a panel), in the plane z, facing +z. */
-function frame(group: THREE.Group, mat: THREE.Material, x0: number, y0: number, x1: number, y1: number, z: number, w: number, d: number) {
-  group.add(box(x1 - x0, w, d, mat, (x0 + x1) / 2, y0 + w / 2, z));
-  group.add(box(x1 - x0, w, d, mat, (x0 + x1) / 2, y1 - w / 2, z));
-  group.add(box(w, y1 - y0 - 2 * w, d, mat, x0 + w / 2, (y0 + y1) / 2, z));
-  group.add(box(w, y1 - y0 - 2 * w, d, mat, x1 - w / 2, (y0 + y1) / 2, z));
-}
-
-/** A raised panel on a wall facing +z: a darker moulded frame with a pale inlay line inside it. */
-function panel(group: THREE.Group, mould: THREE.Material, inlay: THREE.Material, x0: number, y0: number, x1: number, y1: number, z: number) {
-  frame(group, mould, x0, y0, x1, y1, z + 0.012, 0.035, 0.024);
-  frame(group, inlay, x0 + 0.07, y0 + 0.07, x1 - 0.07, y1 - 0.07, z + 0.003, 0.008, 0.006);
-}
-
-/**
- * A curtain: a gathered panel hinged at its top edge, drawn back by a tie-back at `tieAt` (fraction
- * of its height from the top) towards `side` (-1 left, +1 right of the window).
- */
-function curtain(width: number, height: number, mat: THREE.Material, side: number, tieAt: number) {
-  const g = new THREE.PlaneGeometry(width, height, 40, 24);
-  const pos = g.getAttribute('position') as THREE.BufferAttribute;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const down = 0.5 - y / height; // 0 at the top, 1 at the bottom
-    // Pinched in at the tie-back, flaring a little below it.
-    const pinch = 1 - 0.28 * Math.exp(-Math.pow((down - tieAt) / 0.3, 2));
-    const xs = side * (width / 2) + (x - side * (width / 2)) * pinch;
-    pos.setX(i, xs);
-    pos.setZ(i, 0.04 * Math.sin((x / width) * Math.PI * 11) * (0.6 + 0.6 * down));
-  }
-  g.computeVertexNormals();
-  g.translate(0, -height / 2, 0);
-  const m = new THREE.Mesh(g, mat);
-  m.castShadow = m.receiveShadow = true;
-  return m;
-}
 
 /** An oil painting of a lake below mountains at dusk (no filters: plain fills and gradients). */
 function paintingTexture() {
@@ -130,13 +53,21 @@ export interface Compartment {
   curtains: THREE.Mesh[];
 }
 
-export function buildCompartment(): Compartment {
+/** How the room is furnished: the sleeper's berth (Night Train) or a day coach's bench seat. */
+export interface CompartmentStyle {
+  /** Upholstery and curtain colours. */
+  cloth?: number;
+  curtain?: number;
+  seat?: 'berth' | 'bench';
+}
+
+export function buildCompartment(style: CompartmentStyle = {}): Compartment {
   const group = new THREE.Group();
   const walnut = textureMaterial('black_walnut_veneer_01', [1, 1], { metalness: 0, roughness: 0.55, color: 0x9a6a48 });
   const mould = textureMaterial('black_walnut_veneer_01', [3, 3], { metalness: 0, roughness: 0.5, color: 0x5a3a26 });
   const inlay = new THREE.MeshStandardMaterial({ color: 0xc8a878, roughness: 0.6 });
-  const velour = textureMaterial('velour_velvet', [3, 3], { metalness: 0, color: 0x5a1a22 });
-  const curtainCloth = textureMaterial('velour_velvet', [4, 4], { metalness: 0, color: 0x6a1e22, side: THREE.DoubleSide });
+  const velour = textureMaterial('velour_velvet', [3, 3], { metalness: 0, color: style.cloth ?? 0x5a1a22 });
+  const curtainCloth = textureMaterial('velour_velvet', [4, 4], { metalness: 0, color: style.curtain ?? 0x6a1e22, side: THREE.DoubleSide });
   const carpet = textureMaterial('dirty_carpet', [2, 2], { metalness: 0, color: 0x6a3a34 });
   const brass = new THREE.MeshStandardMaterial({ color: 0xb08440, metalness: 0.75, roughness: 0.32 });
   const cream = new THREE.MeshStandardMaterial({ color: 0xd8c8a4, roughness: 0.85 });
@@ -312,32 +243,57 @@ export function buildCompartment(): Compartment {
   for (const m of [cup, saucer, pot, spout, handle]) m.castShadow = m.receiveShadow = true;
   group.add(cup, saucer, pot, spout, handle, book, pages);
 
-  // ---- the left berth: a buttoned velour back, a mattress, pillows ----
-  const bw = BERTH.x1 - BERTH.x0;
-  group.add(box(bw, BERTH.top - 0.12, depth - 0.1, walnut, BERTH.x0 + bw / 2, (BERTH.top - 0.12) / 2, (WALL + BACK) / 2));
-  group.add(box(bw, 0.13, depth - 0.12, velour, BERTH.x0 + bw / 2, BERTH.top - 0.06, (WALL + BACK) / 2, 2));
-  group.add(box(0.1, 0.5, depth - 0.2, velour, -HALF_W + 0.05, BERTH.top + 0.25, (WALL + BACK) / 2, 2));
-  const button = new THREE.SphereGeometry(0.01, 8, 6);
-  const buttons = new THREE.InstancedMesh(button, new THREE.MeshStandardMaterial({ color: 0x3a0e12, roughness: 0.6 }), 24);
-  for (let i = 0; i < 24; i++) {
-    tm.makeTranslation(-HALF_W + 0.1, BERTH.top + 0.12 + (i % 3) * 0.14, WALL + 0.2 + Math.floor(i / 3) * 0.26);
-    buttons.setMatrixAt(i, tm);
+  if (style.seat === 'bench') {
+    // ---- the left seat: a day coach's bench, buttoned back, padded headrests ----
+    const bw = BERTH.x1 - BERTH.x0;
+    const seatTop = 0.46;
+    group.add(box(bw, seatTop - 0.12, depth - 0.1, walnut, BERTH.x0 + bw / 2, (seatTop - 0.12) / 2, (WALL + BACK) / 2));
+    group.add(box(bw, 0.13, depth - 0.14, velour, BERTH.x0 + bw / 2, seatTop - 0.06, (WALL + BACK) / 2, 2));
+    group.add(box(0.13, 0.72, depth - 0.18, velour, -HALF_W + 0.065, seatTop + 0.36, (WALL + BACK) / 2, 2));
+    const button = new THREE.SphereGeometry(0.01, 8, 6);
+    const buttons = new THREE.InstancedMesh(button, new THREE.MeshStandardMaterial({ color: 0x101820, roughness: 0.6 }), 24);
+    for (let i = 0; i < 24; i++) {
+      tm.makeTranslation(-HALF_W + 0.135, seatTop + 0.12 + (i % 3) * 0.16, WALL + 0.2 + Math.floor(i / 3) * 0.26);
+      buttons.setMatrixAt(i, tm);
+    }
+    group.add(buttons);
+    // Two padded headrests.
+    for (const hz of [WALL + 0.45, WALL + 1.25]) group.add(box(0.12, 0.2, 0.55, velour, -HALF_W + 0.19, seatTop + 0.82, hz, 2));
+    // An armrest at the window end, walnut-capped.
+    group.add(box(bw - 0.06, 0.2, 0.09, velour, BERTH.x0 + bw / 2 + 0.03, seatTop + 0.1, WALL + 0.12, 2));
+    group.add(box(bw - 0.04, 0.025, 0.11, walnut, BERTH.x0 + bw / 2 + 0.03, seatTop + 0.21, WALL + 0.12, 2));
+    const brassEdge = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, depth - 0.14, 10), brass);
+    brassEdge.rotation.x = Math.PI / 2;
+    brassEdge.position.set(BERTH.x1 + 0.005, seatTop - 0.005, (WALL + BACK) / 2);
+    group.add(brassEdge);
+  } else {
+    // ---- the left berth: a buttoned velour back, a mattress, pillows ----
+    const bw = BERTH.x1 - BERTH.x0;
+    group.add(box(bw, BERTH.top - 0.12, depth - 0.1, walnut, BERTH.x0 + bw / 2, (BERTH.top - 0.12) / 2, (WALL + BACK) / 2));
+    group.add(box(bw, 0.13, depth - 0.12, velour, BERTH.x0 + bw / 2, BERTH.top - 0.06, (WALL + BACK) / 2, 2));
+    group.add(box(0.1, 0.5, depth - 0.2, velour, -HALF_W + 0.05, BERTH.top + 0.25, (WALL + BACK) / 2, 2));
+    const button = new THREE.SphereGeometry(0.01, 8, 6);
+    const buttons = new THREE.InstancedMesh(button, new THREE.MeshStandardMaterial({ color: 0x3a0e12, roughness: 0.6 }), 24);
+    for (let i = 0; i < 24; i++) {
+      tm.makeTranslation(-HALF_W + 0.1, BERTH.top + 0.12 + (i % 3) * 0.14, WALL + 0.2 + Math.floor(i / 3) * 0.26);
+      buttons.setMatrixAt(i, tm);
+    }
+    group.add(buttons);
+    const brassEdge = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, depth - 0.12, 10), brass);
+    brassEdge.rotation.x = Math.PI / 2;
+    brassEdge.position.set(BERTH.x1 + 0.005, BERTH.top - 0.005, (WALL + BACK) / 2);
+    group.add(brassEdge);
+    const pillows = model('throw_pillows_01');
+    pillows.scale.setScalar(0.55);
+    pillows.position.set(BERTH.x0 + bw * 0.5, BERTH.top, WALL + 0.3);
+    pillows.rotation.y = Math.PI * 0.5;
+    // Muted to an old tapestry's colours.
+    pillows.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+      if (m?.color) m.color.setHex(0x8a6a58);
+    });
+    group.add(pillows);
   }
-  group.add(buttons);
-  const brassEdge = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, depth - 0.12, 10), brass);
-  brassEdge.rotation.x = Math.PI / 2;
-  brassEdge.position.set(BERTH.x1 + 0.005, BERTH.top - 0.005, (WALL + BACK) / 2);
-  group.add(brassEdge);
-  const pillows = model('throw_pillows_01');
-  pillows.scale.setScalar(0.55);
-  pillows.position.set(BERTH.x0 + bw * 0.5, BERTH.top, WALL + 0.3);
-  pillows.rotation.y = Math.PI * 0.5;
-  // Muted to an old tapestry's colours.
-  pillows.traverse((o) => {
-    const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-    if (m?.color) m.color.setHex(0x8a6a58);
-  });
-  group.add(pillows);
 
   // ---- curtains with tie-backs under a velour pelmet with a brass trim ----
   const curtains: THREE.Mesh[] = [];

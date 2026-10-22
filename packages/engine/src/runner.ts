@@ -107,7 +107,8 @@ export class Runner<P = any, S = any> {
     this.theme = opts.theme;
     ({ width: this.width, height: this.height, fps: this.fps } = formatOf(template));
     this.loopS = template.longForm ? (opts.loopS ?? loopLengthOf(template)) : 0;
-    this.maxSeconds = this.loopS || (opts.maxSeconds ?? 90);
+    const own = typeof template.maxSeconds === 'function' ? template.maxSeconds(this.params) : template.maxSeconds;
+    this.maxSeconds = this.loopS || Math.max(opts.maxSeconds ?? 90, own ?? 0);
     this.cursor = new MelodyCursor(opts.melody, opts.transpose ?? 0);
     const rng = new Rng(opts.seed);
     const fxRng = rng.fork(1);

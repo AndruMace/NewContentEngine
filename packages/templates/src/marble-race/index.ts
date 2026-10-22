@@ -245,6 +245,7 @@ export const marbleRace: Template<MarbleRaceParams, State> = {
   id: 'marble-race',
   name: 'Marble Race',
   family: 'race',
+  category: 'races',
   description:
     'Marbles race down a procedurally built course of pegs, spinners, ramps, funnels and bumpers. In elimination mode the last marble(s) past each checkpoint are knocked out until one remains.',
   schema: marbleRaceSchema,

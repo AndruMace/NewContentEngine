@@ -88,6 +88,7 @@ export const orbitalViewport: Template<OrbitalViewportParams, OrbitState> = {
   id: 'orbital-viewport',
   name: 'Orbital Viewport',
   family: 'kinetic',
+  category: 'ambient',
   description: 'Long-form ambient: a spaceship viewport over a large planet, clouds drifting, the occasional shooting star.',
   schema: orbitalViewportSchema,
   format: { width: 1920, height: 1080, fps: 30 },

@@ -181,7 +181,7 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
       // Off first: the baseline the learner compares the voiceover against.
       param: 'narration',
       values: ['off', 'on'],
-      when: { param: 'mode', values: ['collatz', 'times-table'] },
+      when: { param: 'mode', values: ['collatz', 'times-table', 'monty-hall', 'birthday'] },
       guide: {
         off: 'Narration: off (fixed for this video). No voiceover; on-screen text explains the idea.',
         on: 'Narration: on (fixed for this video). A voiceover explains the idea step by step as it plays, with matching captions. The on-screen hook still has to work silently (many watch muted). You may mention the explanation in captions ("explained in 30 seconds"), but never give away the answer.',
@@ -347,8 +347,10 @@ export const PLANNED_VARIANTS: Record<string, PlannedVariant[]> = {
   'who-would-win': [
     {
       param: 'mode',
-      values: ['duel', 'horde'],
+      // (Tournaments and gauntlets run several fights, too long to plan by length: they're made by hand.)
+      values: ['duel', 'horde', 'team'],
       guide: {
+        team: 'Mode: teams (fixed for this video). Two pairs fight two on two, from a VS card to a knockout and an instant replay; which four fighters is picked after you write, so don\'t name them. "Which team wins?" and "pick a side" angles work. Never predict the winner. In the CTA, {winner} is the winning pair ("Lion & Tiger").',
         duel: 'Mode: duel (fixed for this video). One on one, from a VS card to a knockout and an instant replay. "Who wins?" and "pick a side" angles work. Never predict or hint at the winner: the fight decides it (favourites usually but not always win). In the CTA, {winner} is the winner\'s name.',
         horde:
           'Mode: horde (fixed for this video). One big fighter against a stream of a smaller kind let in one after another; the question is how many it takes. Invite number guesses ("Guess the number 👇"). Never give or hint at the answer. In the CTA, {count} is how many it took.',

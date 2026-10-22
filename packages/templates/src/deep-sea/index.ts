@@ -65,6 +65,7 @@ export const deepSea: Template<DeepSeaParams, DeepSeaState> = {
   id: 'deep-sea',
   name: 'Deep Sea Submarine',
   family: 'kinetic',
+  category: 'ambient',
   description: 'Long-form ambient: a submarine cockpit cruising through the deep, a big glass dome, sea life passing in the dark.',
   schema: deepSeaSchema,
   format: { width: 1920, height: 1080, fps: 30 },

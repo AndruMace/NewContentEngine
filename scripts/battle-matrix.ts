@@ -1,6 +1,7 @@
 /**
  * Balance check for Who Would Win: runs every curated duel and horde headless over many seeds and
- * prints who wins how often (and how long fights last), and for hordes how many it took.
+ * prints who wins how often (and how long fights last), and for hordes how many it took. Each curated
+ * duel shows who ought to win (DUEL_FAVOURITES), flagged with ! when the result disagrees.
  *
  *   npx tsx scripts/battle-matrix.ts [seeds=200] [fightLength=22]
  *
@@ -10,7 +11,7 @@
  *   npx tsx scripts/battle-matrix.ts horde elephant lion [seeds=200]
  */
 import { Rng } from '@sim/engine';
-import { CREATURE_IDS, DUELS, HORDES, creatureById } from '../packages/templates/src/who-would-win/roster';
+import { CREATURE_IDS, DUELS, DUEL_FAVOURITES, HORDES, creatureById, matchupId } from '../packages/templates/src/who-would-win/roster';
 import { hpScaleFor, MAX_SWARM_DEFAULT } from '../packages/templates/src/who-would-win/balance';
 import { makeWorld, stepWorld } from '../packages/templates/src/who-would-win/sim';
 
@@ -48,7 +49,11 @@ for (const [a, b] of duels) {
   const aw = rs.filter((r) => r.winner === 0).length / SEEDS;
   const ts = rs.map((r) => r.t);
   const close = rs.map((r) => r.hpLeft);
-  console.log(`  ${`${a} vs ${b}`.padEnd(24)} ${a} ${pct(aw)}  time p10/50/90 ${q(ts, 0.1).toFixed(0)}/${q(ts, 0.5).toFixed(0)}/${q(ts, 0.9).toFixed(0)}s  winner hp p50 ${pct(q(close, 0.5))}  timeouts ${rs.filter((r) => r.winner < 0).length}`);
+  // Who ought to win, and whether it does (a favourite 60-97%, a toss-up 30-70%).
+  const fav = DUEL_FAVOURITES[matchupId(a, b)];
+  const [lo, hi] = fav === undefined ? [0, 1] : fav === null ? [0.3, 0.7] : fav === a ? [0.6, 0.97] : [0.03, 0.4];
+  const expect = fav === undefined ? '' : `${aw < lo || aw > hi ? '!' : ' '} ${fav ?? 'toss-up'}`.padEnd(12);
+  console.log(`  ${`${a} vs ${b}`.padEnd(24)} ${a} ${pct(aw)} ${expect} time p10/50/90 ${q(ts, 0.1).toFixed(0)}/${q(ts, 0.5).toFixed(0)}/${q(ts, 0.9).toFixed(0)}s  winner hp p50 ${pct(q(close, 0.5))}  timeouts ${rs.filter((r) => r.winner < 0).length}`);
 }
 if (hordes.length) console.log(`\nHordes (${SEEDS} seeds, up to ${MAX_SWARM_DEFAULT})`);
 for (const [a, b] of hordes) {

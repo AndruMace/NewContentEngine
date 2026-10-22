@@ -3,6 +3,7 @@ import { THEMES, paramsJsonSchema, parseParams, searchBudgetOf, type Recipe } fr
 import { MELODIES } from '@sim/audio';
 import { TEMPLATES, findTemplate, getTemplate } from '@sim/templates';
 import { ParamControls } from './ParamControls';
+import { TemplatePicker } from './TemplatePicker';
 import { NarrationPanel, type VoiceState } from './NarrationPanel';
 import { usePlayer } from './usePlayer';
 import { useAnalysis } from './useAnalysis';
@@ -144,21 +145,19 @@ export function Playground() {
       <aside className="panel left">
         <section>
           <h3>Scene</h3>
-          <label className="param">
+          <div className="param">
             <span>Template</span>
-            <select value={recipe.templateId} onChange={(e) => {
+            <TemplatePicker
+              templates={TEMPLATES}
+              value={recipe.templateId}
+              onChange={(templateId) => {
                 // Custom copy is written for one template, so it goes back to the new template's defaults.
-                update({ templateId: e.target.value, params: {}, copy: {} });
+                update({ templateId, params: {}, copy: {} });
                 stopSearch();
                 setSearch({ progress: 0, results: [], running: false });
-              }}>
-              {TEMPLATES.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              }}
+            />
+          </div>
           <p className="hint">{template.description}</p>
           <label className="param">
             <span>Theme</span>

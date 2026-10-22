@@ -77,6 +77,7 @@ export const sortingRace: Template<SortingRaceParams, State> = {
   id: 'sorting-race',
   name: 'Sorting Race',
   family: 'kinetic',
+  category: 'brainy',
   description:
     'Two to four sorting algorithms sort the same shuffled bars side by side at the same speed. Every comparison plays a tone pitched by the bar’s height. First to finish wins.',
   schema: sortingRaceSchema,
