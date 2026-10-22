@@ -21,7 +21,7 @@ Claude writes the title, description, hashtags, captions, cover text and a pinne
 YouTube Shorts, TikTok, Instagram Reels and X (add optional notes for Claude first). Each field
 has a copy button, can be edited in place (with an emoji picker), and each platform can be
 regenerated on its own. The video is tracked in the day's Manual batch as approved, so you can
-paste post links and it counts in analytics. The equivalent CLI command is shown underneath.
+paste post links to keep track of where it went. The equivalent CLI command is shown underneath.
 
 ## Daily workflow: batches and review
 
@@ -38,7 +38,7 @@ paste post links and it counts in analytics. The equivalent CLI command is shown
 4. **Export for upload** writes `data/exports/<date>/<slug>/` (video, cover, `youtube.txt`,
    `tiktok.txt`, `instagram.txt`, `x.txt`, `bundle.zip`) and opens the same upload page, with
    every platform's text ready to copy.
-5. After posting, paste the post URLs into the upload page or the card (used by analytics).
+5. After posting, paste the post URLs into the upload page or the card, to keep track of where each video went.
 
 From the terminal: `npm run batch` (uses the running server if there is one, so the UI sees
 it), with flags like `--posts 2 --factor 2 --templates ring-escape,marble-race --min 20 --max 35`.
@@ -107,8 +107,8 @@ Output goes to `data/renders/<date>/<id>/`:
 
 Hours-long background videos (study, work, sleep): 1920×1080 at 30 fps, mastered quietly to
 −21 LUFS. A long-form template renders a seamless **master loop** (20–60 min, default 30), which
-is repeated to the final length without re-encoding. These templates are kept out of batches, the
-planner and analytics entirely (long uploads on the channel are ignored by the YouTube sync).
+is repeated to the final length without re-encoding. These templates are kept out of batches and
+the planner entirely.
 
 | Template | What happens |
 |---|---|
@@ -127,8 +127,8 @@ Mac awake while they run (`caffeinate`). Each one shows its stage, progress and 
 restart resumes on its own. While it renders, Claude writes the YouTube title, description, tags
 and thumbnail text (plain copy without an API key). Each field can be copied, edited, or rewritten
 with new notes. When it's done the card has the video, its thumbnail, the QC result and size, and
-**Show in Finder**. Uploading is manual for now (YouTube only); the YouTube sync ignores these
-videos. They also appear under **All renders** with a *Long-form* label.
+**Show in Finder**. Uploading is manual (YouTube only). They also appear under **All renders**
+with a *Long-form* label.
 
 ```bash
 npm run render -- --template cabin-storm --loop 30m --length 3h
