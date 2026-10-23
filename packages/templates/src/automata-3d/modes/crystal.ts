@@ -1,236 +1,233 @@
 /**
- * Crystal growth: a small symmetric seed at the centre of an n³ cube grows under a 3D rule into a
- * gem, a snowflake or a coral. The whole run is simulated once up front (cheap), so the growth is
- * paced to land on the video's length and the camera knows how big it will get.
+ * Crystal growth: a small symmetric seed grows under a 3D rule into a gem, a snowflake or a coral,
+ * with no walls: it grows until it dies, settles, reaches the generation count, or gets too big to go
+ * on (a memory budget).
+ *
+ * The run is simulated once up front, recording each generation's numbers: that's all the events
+ * (and so headless runs and seed search) need, and it paces the growth to the video's length and
+ * tells the camera how big it will get. The picture replays its own copy as it plays.
  */
 import type { DramaScore } from '@sim/engine';
 import { gaussFit } from '../../scoring';
 import { THREE, sceneCache } from '../../three-layer';
-import { CycleWatch, Grid3, type GenStats } from '../grid';
+import { CycleWatch, Grid3, IntList } from '../grid';
 import { CRYSTAL_PRESETS, CRYSTAL_PRESET_IDS, describeRule3, parseRule3, type CrystalPresetId, type Rule3 } from '../rules';
 import { symmetricSeed } from '../seeds';
 import type { AutomataParams } from '../params';
-import { Palette, Voxels, drawStage, fitDistance, makeStage, orbit, voxelMaterial } from '../view';
-import { EXPLAIN_LIFT, clamp01, drawCounter, durationFit, drawExplainer, ev, evName, fmtInt, panOf, smooth, velOf, type ModeImpl } from '../shared';
+import { Dots, Palette, Voxels, detailFor, drawStage, fitDistance, makeStage, orbit, voxelMaterial } from '../view';
+import { EXPLAIN_LIFT, budgetFor, clamp01, drawCounter, durationFit, manualCap, drawExplainer, ev, evName, fmtInt, genSchedule, panOf, smooth, velOf, type ModeImpl } from '../shared';
 
 const INTRO_S = 1.4;
 const OUTRO_S = 4.5;
-/** Most generations a run shows (and the fastest pace), so a rule that never settles still ends. */
-const MAX_GENS = 220;
-const MAX_RATE = 9;
+/** Seeds are made in a box this big and centred on the origin. */
+const SEED_BOX = 64;
+/** Most generations a run shows when the count isn't set by hand, and the fastest pace for it. */
+const AUTO_GENS = 400;
+const MAX_RATE = 20;
+/** Generations per second at the start (later ones speed up to fit). */
+const START_RATE = 3;
 /** Slowest pace: a run with few generations isn't stretched to fill the length, it ends early. */
 const MIN_RATE = 2.5;
+/**
+ * Past this radius (cells) a cell is a few pixels across: the crystal is drawn as dots from then on,
+ * and cells no longer animate in and out one by one.
+ */
+const DOT_REACH = 90;
+/** Or once this many cubes are showing. */
+const MAX_CUBES = 200_000;
+/** Most cells a run may make room for (about 6 bytes each, twice over in the preview). */
+export const CELL_BUDGET = 16_000_000;
+/**
+ * Most cell changes an automatic run may take (about 3 s): rules that churn their whole volume get
+ * costly fast as they grow (work ~ radius⁴). A generation count set by hand isn't held to it.
+ */
+const WORK_BUDGET = 30_000_000;
 
-type EndKind = 'edge' | 'still' | 'cycle' | 'dead' | 'cap';
+type EndKind = 'still' | 'cycle' | 'dead' | 'cap';
 
 interface Plan {
   /** Generations shown. */
   gens: number;
   end: EndKind;
-  /** Furthest live cell from the centre after each generation (index 0 = the seed). */
+  /** Per generation (index 0 = the seed). */
   radius: number[];
   alive: number[];
+  births: number[];
+  deaths: number[];
+  /** Mean x of the births (cells from the centre), for panning. */
+  bx: number[];
 }
 
 interface State {
   p: AutomataParams;
   preset: CrystalPresetId;
   rule: Rule3;
-  n: number;
   symmetry: AutomataParams['symmetry'];
-  grid: Grid3;
-  /** The previous generation's states, for animating cells in and out (visual runs only). */
-  prev: Uint8Array | null;
+  /** The seed's cells (world coordinates): the picture replays from these. */
+  cells: [number, number, number][];
   plan: Plan;
-  /** Largest radius so far, after each generation. */
+  /** Largest radius so far, after each generation, and at the end. */
   reach: number[];
+  finalReach: number;
+  /** Current generation. */
+  gen: number;
   /** Sim time of each generation. */
   times: number[];
   growEnd: number;
   endT: number;
   ended: boolean;
-  last: GenStats | null;
   t: number;
-  visual: boolean;
 }
 
-function seedGrid(n: number, cells: [number, number, number][]): Grid3 {
-  const g = new Grid3(n);
+function seedGrid(rule: Rule3, cells: [number, number, number][]): Grid3 {
+  const g = new Grid3(rule.nb);
   for (const [x, y, z] of cells) g.set(x, y, z, 1);
   return g;
 }
 
-/** Run the rule to its end (the edge, a still life or cycle, nothing left, or the cap). */
-function planRun(g: Grid3, rule: Rule3, cap: number): Plan {
-  const radius = [initialRadius(g)];
-  const alive = [countAlive(g)];
+/** Run the rule to its end (a still life or cycle, nothing left, the generation cap, or the memory or work budget). */
+function planRun(g: Grid3, rule: Rule3, cap: number, workBudget: number): Plan {
+  const plan: Plan = { gens: 0, end: 'cap', radius: [g.radius], alive: [g.alive], births: [0], deaths: [0], bx: [0] };
+  const done = (gens: number, end: EndKind) => Object.assign(plan, { gens, end });
   const watch = new CycleWatch(4);
+  let work = 0;
   for (let k = 1; k <= cap; k++) {
     const st = g.step(rule);
-    // Growth clipped by the cube's walls looks wrong: stop the generation before it touches.
-    if (st.atEdge) return { gens: k - 1, end: 'edge', radius, alive };
-    radius.push(st.radius);
-    alive.push(st.alive);
-    if (g.empty) return { gens: k, end: 'dead', radius, alive };
+    work += g.changed.n;
+    plan.radius.push(st.radius);
+    plan.alive.push(st.alive);
+    plan.births.push(st.births);
+    plan.deaths.push(st.deaths);
+    plan.bx.push(st.bx);
+    if (g.empty) return done(k, 'dead');
     watch.push(g.hash());
     const period = watch.period();
-    if (period) return { gens: Math.max(1, k - period * 2), end: period === 1 ? 'still' : 'cycle', radius, alive };
+    if (period) return done(Math.max(1, k - period * 2), period === 1 ? 'still' : 'cycle');
+    if (g.capacity > CELL_BUDGET || work > workBudget) return done(k, 'cap');
   }
-  return { gens: cap, end: 'cap', radius, alive };
-}
-
-function countAlive(g: Grid3) {
-  let a = 0;
-  for (const v of g.state) if (v === 1) a++;
-  return a;
-}
-
-function initialRadius(g: Grid3) {
-  const c = (g.n - 1) / 2;
-  let r2 = 0;
-  for (let z = 0; z < g.n; z++) for (let y = 0; y < g.n; y++) for (let x = 0; x < g.n; x++) if (g.get(x, y, z) === 1) r2 = Math.max(r2, (x - c) ** 2 + (y - c) ** 2 + (z - c) ** 2);
-  return Math.sqrt(r2);
+  return done(cap, 'cap');
 }
 
 const SYMMETRY_LABEL = { none: 'no symmetry', mirror: '8-fold', cubic: '48-fold' } as const;
 
 export const crystalMode: ModeImpl<State> = {
   copy: () => ({ hook: 'Guess what this grows into 👀', cta: '{result} What did you see?' }),
-  searchBudget: 160,
+  // Automatic runs take up to about 3 s each.
+  searchBudget: (p) => (p.generations ? budgetFor(12, p.generations, 100, 2, 3) : 12),
 
-  init({ params: p, rng, visual }) {
+  init({ params: p, rng }) {
     const preset = p.preset === 'random' ? rng.pick(CRYSTAL_PRESET_IDS) : p.preset;
-    const rule = parseRule3(CRYSTAL_PRESETS[preset].rule);
-    const n = p.size - (p.size % 2);
     const def = CRYSTAL_PRESETS[preset];
-    const cells = symmetricSeed(n, rng, { size: def.seedSize, density: def.density, symmetry: p.symmetry, ball: def.seed === 'ball' });
+    const rule = parseRule3(def.rule);
+    const cells = symmetricSeed(SEED_BOX, rng, { size: def.seedSize, density: def.density, symmetry: p.symmetry, ball: def.seed === 'ball' }).map(
+      ([x, y, z]) => [x - SEED_BOX / 2, y - SEED_BOX / 2, z - SEED_BOX / 2] as [number, number, number],
+    );
     const growS = p.durationS - INTRO_S - OUTRO_S;
-    // The same seed twice: once to plan the run, once to play it.
-    const plan = planRun(seedGrid(n, cells), rule, Math.min(MAX_GENS, Math.floor(MAX_RATE * growS)));
-    const grid = seedGrid(n, cells);
-    const span = Math.min(growS, plan.gens / MIN_RATE);
-    const times = Array.from({ length: plan.gens + 1 }, (_, g) => INTRO_S + (plan.gens ? (g / plan.gens) * span : 0));
+    // Generations and pace can be set by hand; otherwise the run is fitted to the length.
+    const rate = p.genRate;
+    let cap = p.generations || (rate ? AUTO_GENS : Math.min(AUTO_GENS, Math.floor(MAX_RATE * growS)));
+    if (rate) cap = Math.min(cap, manualCap(rate, INTRO_S + OUTRO_S));
+    const plan = planRun(seedGrid(rule, cells), rule, cap, p.generations ? Infinity : WORK_BUDGET);
+    const span = rate ? plan.gens / rate : Math.min(growS, plan.gens / MIN_RATE);
+    const schedule = rate ? (g: number) => g / rate : genSchedule(plan.gens, span, START_RATE);
+    const times = Array.from({ length: plan.gens + 1 }, (_, g) => INTRO_S + schedule(g));
     const growEnd = INTRO_S + span;
+    let most = 0;
+    const reach = plan.radius.map((r) => (most = Math.max(most, r)));
     return {
       p,
       preset,
       rule,
-      n,
       symmetry: p.symmetry,
-      grid,
-      prev: visual ? grid.state.slice() : null,
+      cells,
       plan,
-      reach: plan.radius.map((_, g) => Math.max(...plan.radius.slice(0, g + 1))),
+      reach,
+      finalReach: Math.max(3, reach[plan.gens] ?? most),
+      gen: 0,
       times,
       growEnd,
       endT: growEnd + OUTRO_S,
       ended: false,
-      last: null,
       t: 0,
-      visual,
     };
   },
 
   step(s, { dt, t, emit }) {
     s.t = t + dt;
-    const { grid, plan } = s;
-    while (grid.gen < plan.gens && s.t >= s.times[grid.gen + 1]) {
-      if (s.prev) s.prev.set(grid.state);
-      const st = grid.step(s.rule);
-      s.last = st;
-      const half = s.n / 2;
-      emit({ type: ev('crystal', 'gen'), gen: grid.gen, births: st.births, deaths: st.deaths, alive: st.alive, radius: st.radius / half, x: st.bx / half });
-      // A chime each time the crystal grows past another quarter of the way to the walls.
-      const before = Math.floor((plan.radius[grid.gen - 1] / half) * 4);
-      const after = Math.floor((st.radius / half) * 4);
+    const { plan } = s;
+    while (s.gen < plan.gens && s.t >= s.times[s.gen + 1]) {
+      const g = ++s.gen;
+      const size = s.finalReach;
+      emit({ type: ev('crystal', 'gen'), gen: g, births: plan.births[g], deaths: plan.deaths[g], alive: plan.alive[g], radius: plan.radius[g] / size, x: plan.bx[g] / size });
+      // A chime each time the crystal grows past another quarter of its final size.
+      const before = Math.floor((s.reach[g - 1] / size) * 4);
+      const after = Math.floor((s.reach[g] / size) * 4);
       if (after > before && after < 4) emit({ type: ev('crystal', 'ring'), ring: after });
     }
     if (!s.ended && s.t >= s.growEnd) {
       s.ended = true;
       const r = plan.radius[plan.gens] ?? 0;
+      const alive = plan.alive[plan.gens] ?? 0;
       // How much of its bounding ball the crystal fills: lacy (low) or a solid lump (high).
-      const fill = r > 0 ? (s.last?.alive ?? 0) / ((4 / 3) * Math.PI * r ** 3) : 1;
-      emit({ type: ev('crystal', 'end'), gen: grid.gen, kind: plan.end, alive: s.last?.alive ?? 0, radius: r / (s.n / 2), fill, preset: s.preset });
+      const fill = r > 0 ? alive / ((4 / 3) * Math.PI * r ** 3) : 1;
+      emit({ type: ev('crystal', 'end'), gen: plan.gens, kind: plan.end, alive, radius: r, fill, preset: s.preset });
     }
   },
 
   isDone: (s) => s.t >= s.endT,
 
   hud(s) {
-    return { gen: s.grid.gen, cells: s.last?.alive ?? 0, result: s.ended ? resultLine(s) : '', outro: s.ended };
+    return { gen: s.gen, cells: s.plan.alive[s.gen], result: s.ended ? resultLine(s) : '', outro: s.ended };
   },
 
   render({ ctx, theme }, s) {
     const v = view(s, theme);
-    const { grid } = s;
-    const prev = s.prev ?? grid.state;
+    const { grid } = v;
+    // Replay up to now (the log of changed cells keeps the visible-cube list current).
+    while (grid.gen < s.gen) grid.step(s.rule);
     const genT = s.times[grid.gen] ?? 0;
     const nextT = s.times[grid.gen + 1] ?? genT + 1;
     // How far into the current generation's transition we are: cells grow in / shrink away over it.
     const u = grid.gen === 0 ? 1 : smooth(clamp01((s.t - genT) / Math.max(0.12, Math.min(0.6, (nextT - genT) * 0.9))));
-    const { n, p: P } = { n: grid.n, p: grid.p };
-    const c = (n - 1) / 2;
-    const states = s.rule.states;
-    const gens = Math.max(1, s.plan.gens);
-    const col = v.rgb;
-    const gf = Math.min(gens, grid.gen + u);
-    const invR = 1 / Math.max(3, sizeAt(s, gf));
-    v.voxels.begin();
-    if (!grid.empty || s.prev) {
-      // Union of this generation's box and the last one's (cells that just died still shrink away).
-      const lo = [0, 0, 0];
-      const hi = [n - 1, n - 1, n - 1];
-      if (!grid.empty) for (let a = 0; a < 3; a++) [lo[a], hi[a]] = [Math.max(0, grid.lo[a] - 1), Math.min(n - 1, grid.hi[a] + 1)];
-      const st = grid.state;
-      const offs = [1, -1, P, -P, P * P, -P * P];
-      for (let z = lo[2]; z <= hi[2]; z++)
-        for (let y = lo[1]; y <= hi[1]; y++) {
-          let i = grid.idx(lo[0], y, z);
-          for (let x = lo[0]; x <= hi[0]; x++, i++) {
-            const cur = st[i];
-            const was = prev[i];
-            if (!cur && !was) continue;
-            if (cur && was) {
-              // Buried: every face neighbour is filled now and was before.
-              let buried = true;
-              for (const o of offs)
-                if (!st[i + o] || !prev[i + o]) {
-                  buried = false;
-                  break;
-                }
-              if (buried) continue;
-            }
-            let scale = 1;
-            let glow = 0;
-            let k = 1;
-            if (cur === 1 && was !== 1) {
-              scale = u;
-              glow = 0.18 * (1 - u) * (1 - u);
-            } else if (!cur) scale = 1 - u;
-            const st0 = cur || was;
-            if (st0 > 1) {
-              // Decaying: shrinks and darkens through its states.
-              const d = (st0 - 1) / (states - 1);
-              scale *= 1 - 0.35 * d;
-              k = 1 - 0.65 * d;
-            }
-            if (scale <= 0.02) continue;
-            // Coloured by distance from the centre against the crystal's current size (spikes and
-            // valleys differ), drifting with age so the core keeps its own colour.
-            const d = Math.sqrt((x - c) ** 2 + (y - c) ** 2 + (z - c) ** 2) * invR;
-            v.palette.write(col, 0, 0.85 * clamp01((d - 0.35) / 0.65) + 0.15 * (grid.born[i] / gens), k);
-            v.voxels.push(x - c, y - c, z - c, scale, col[0], col[1], col[2], glow);
-          }
-        }
-    }
-    v.voxels.end();
 
     // Camera: frames the size the crystal is about to reach, orbiting slowly.
+    const gf = Math.min(s.plan.gens, grid.gen + u);
     const r = Math.max(4, sizeAt(s, gf + 2));
     const dist = fitDistance(v.stage.camera, r, 0.86);
     const az = 0.6 + s.t * 0.28;
     const el = 0.42 + 0.08 * Math.sin(s.t * 0.4);
     orbit(v.stage, new THREE.Vector3(0, 0, 0), az, el, dist);
+
+    // Grown past cube size (or too many cubes to draw smoothly): switch to dots for good.
+    if (!v.dots && (sizeAt(s, grid.gen) > DOT_REACH || v.list.n > MAX_CUBES)) toDots(v, s);
+    syncExposed(v, s);
+    if (v.dots) {
+      // The key light's direction in view space, for the dots' shading.
+      const light = v.stage.key.position.clone().sub(v.stage.key.target.position).normalize().transformDirection(v.stage.camera.matrixWorldInverse);
+      v.dots.flush(v.stage.camera, light);
+    } else {
+      // Cells born this generation grow in; cells that just emptied shrink away. Only those at the
+      // surface (picked once a generation: some rules change most of their volume every time).
+      if (v.animGen !== grid.gen) {
+        v.animGen = grid.gen;
+        v.animIds.length = 0;
+        const ch = grid.changed;
+        for (let k = 0; grid.gen > 0 && k < ch.n; k++) {
+          const id = ch.a[k];
+          const now = grid.state(id);
+          if (now === 1 && grid.wasAt(k) !== 1 && isExposed(v, id)) v.animIds.push(id, 0);
+          else if (!now && grid.faceOpen(id)) v.animIds.push(id, grid.wasAt(k));
+        }
+      }
+      v.anim.begin();
+      for (let k = 0; k < v.animIds.length; k += 2) {
+        const id = v.animIds[k];
+        const was = v.animIds[k + 1];
+        if (!was) cube(v, s, id, u, 1, 0.18 * (1 - u) * (1 - u), (...a) => v.anim.push(...a));
+        else cube(v, s, id, 1 - u, was, 0, (...a) => v.anim.push(...a));
+      }
+      v.anim.end();
+    }
     // The whole crystal pulses once at the end.
     v.root.scale.setScalar(1 + (s.ended ? 0.03 * Math.exp(-(s.t - s.growEnd) * 3) * Math.sin((s.t - s.growEnd) * 18) : 0));
     drawStage(ctx, v.stage);
@@ -238,13 +235,13 @@ export const crystalMode: ModeImpl<State> = {
 
   renderTop({ ctx, theme }, s) {
     const def = CRYSTAL_PRESETS[s.preset];
-    const since = s.last ? s.t - s.times[s.grid.gen] : 1;
+    const since = s.gen ? s.t - s.times[s.gen] : 1;
     const top = s.p.explain ? drawExplainer(ctx, crystalMode.explain(s), s.t) : null;
     drawCounter(ctx, theme, {
       t: s.t,
       title: `${def.label} · ${SYMMETRY_LABEL[s.symmetry]}`,
-      gen: s.grid.gen,
-      line: `${fmtInt(s.last?.alive ?? s.plan.alive[0] ?? 0)} cells`,
+      gen: s.gen,
+      line: `${fmtInt(s.plan.alive[s.gen] ?? 0)} cells`,
       flash: s.ended ? Math.exp(-(s.t - s.growEnd) * 4) : Math.exp(-since * 10) * 0.3,
       endAt: s.ended ? s.growEnd : undefined,
       y: top === null ? undefined : top - 130,
@@ -286,16 +283,17 @@ export const crystalMode: ModeImpl<State> = {
     const durFit = durationFit(durationS, targetS);
     if (!end || !gens.length) return { total: 0.01, parts: { durFit }, notes: ['nothing grew'] };
     if (end.kind === 'dead') return { total: 0.03 * durFit, parts: { durFit }, notes: ['died out'] };
-    // Grew to fill the frame (not a speck), with a full run of generations to watch.
-    const growth = clamp01(((end.radius as number) - 0.15) / 0.6);
-    const lengthFit = clamp01(gens.length / 45);
+    // Grew big, with a long run of generations to watch.
+    const growth = clamp01((end.radius as number) / 80);
+    const lengthFit = clamp01(gens.length / 120);
     // Intricate beats solid: a lattice, not a lump.
     const lacy = gaussFit(end.fill as number, 0.22, 0.2);
     // Something new happening throughout: few generations with no births at all.
     const busy = gens.filter((e) => (e.births as number) > 0).length / gens.length;
     // Changing shape: births and deaths both, not just a solid blob filling in.
     const churn = clamp01(gens.reduce((a, e) => a + Math.min(e.births as number, e.deaths as number), 0) / Math.max(1, gens.reduce((a, e) => a + (e.births as number), 0)) / 0.6);
-    const endFit = end.kind === 'edge' ? 1 : end.kind === 'cap' ? 0.8 : 0.6;
+    // Still growing at the end is the open ending; settling down is fine too.
+    const endFit = end.kind === 'cap' ? 1 : 0.7;
     const total = durFit * (0.1 + 0.2 * growth + 0.15 * lengthFit + 0.1 * busy + 0.15 * churn + 0.1 * endFit + 0.2 * lacy);
     return { total, parts: { durFit, growth, lengthFit, busy, churn, endFit, lacy }, notes: [`${end.preset}`, `${gens.length} generations`, `${end.kind}`, `fill ${((end.fill as number) * 100).toFixed(0)}%`] };
   },
@@ -317,7 +315,7 @@ function resultLine(s: State): string {
     case 'cycle':
       return `Pulsing forever from ${g}.`;
     default:
-      return `${g} generations.`;
+      return `Still growing after ${g} generations.`;
   }
 }
 
@@ -334,6 +332,158 @@ const view = sceneCache((s: State, theme) => {
   stage.lift = s.p.explain ? EXPLAIN_LIFT : 0;
   const root = new THREE.Group();
   stage.scene.add(root);
-  const voxels = new Voxels(root, voxelMaterial(s.p.look), s.p.look, 16384);
-  return { scene: stage.scene, stage, root, voxels, palette: new Palette(theme.palette), rgb: new Float32Array(3) };
+  const mat = voxelMaterial(s.p.look);
+  const detail = detailFor(2 * s.finalReach);
+  const grid = seedGrid(s.rule, s.cells);
+  // Every changed cell is logged, so the visible-cube list is kept current around the changes.
+  grid.log = new IntList();
+  return {
+    scene: stage.scene,
+    stage,
+    root,
+    /** The picture's own copy of the run, replayed generation by generation. */
+    grid,
+    /**
+     * Every visible cube (one per cell in `list`, same order), and the ones animating this
+     * generation (rebuilt every frame).
+     */
+    stat: new Voxels(root, mat, s.p.look, 16384, detail),
+    anim: new Voxels(root, mat, s.p.look, 4096, detail),
+    /** This generation's animating cells, as (cell, its state before: 0 = just born) pairs. */
+    animIds: [] as number[],
+    animGen: -1,
+    /** Once the crystal is big: every visible cell as a dot (replacing both of the above). */
+    dots: null as Dots | null,
+    normal: new Float32Array(3),
+    /**
+     * Non-empty cells with at least one open face, as a list, with each one's place in it per chunk
+     * (-1 = not in it). Kept in step with `stat`.
+     */
+    list: new IntList(),
+    pos: [] as Int32Array[],
+    /** Cubes born last generation are drawn at full size from the next one on. */
+    grownIn: [] as number[],
+    synced: false,
+    palette: new Palette(theme.palette),
+    rgb: new Float32Array(3),
+    xyz: new Int32Array(3),
+  };
 });
+
+type View = ReturnType<typeof view>;
+
+const isExposed = (v: View, id: number) => (v.pos[id >> 12]?.[id & 4095] ?? -1) >= 0;
+
+/** A cell's cube, handed to `out` as (x, y, z, scale, r, g, b, glow). */
+function cube(v: View, s: State, id: number, scale: number, st: number, glow: number, out: (x: number, y: number, z: number, s: number, r: number, g: number, b: number, glow: number) => void) {
+  let k = 1;
+  if (st > 1) {
+    // Decaying: shrinks and darkens through its states.
+    const d = (st - 1) / (s.rule.states - 1);
+    scale *= 1 - 0.35 * d;
+    k = 1 - 0.65 * d;
+  }
+  v.grid.xyz(id, v.xyz);
+  // The centre is between cells, at -½.
+  const x = v.xyz[0] + 0.5;
+  const y = v.xyz[1] + 0.5;
+  const z = v.xyz[2] + 0.5;
+  // Coloured by distance from the centre against the crystal's final size, so a cube's colour holds
+  // while it lives and the crystal works its way through the palette as it grows.
+  const d = Math.sqrt(x * x + y * y + z * z) / s.finalReach;
+  v.palette.write(v.rgb, 0, 0.85 * clamp01(d) ** 0.7 + 0.15 * (v.grid.born(id) / Math.max(1, s.plan.gens)), k);
+  out(x, y, z, scale, v.rgb[0], v.rgb[1], v.rgb[2], glow);
+}
+
+/** Keep the visible-cube list and its buffer current: all of it the first time, then around each logged change. */
+function syncExposed(v: View, s: State) {
+  const { grid, list, pos } = v;
+  while (pos.length < grid.chunks.length) pos.push(new Int32Array(4096).fill(-1));
+  const put = (id: number) => putCell(v, s, id);
+  const refresh = (id: number, own: boolean) => {
+    const e = grid.state(id) !== 0 && grid.faceOpen(id);
+    const p = pos[id >> 12];
+    const was = p[id & 4095] >= 0;
+    if (e && !was) {
+      p[id & 4095] = list.n;
+      list.push(id);
+      put(id);
+    } else if (!e && was) {
+      // Swap-remove: the last cube takes this one's place.
+      const k = p[id & 4095];
+      const last = list.a[--list.n];
+      list.a[k] = last;
+      pos[last >> 12][last & 4095] = k;
+      p[id & 4095] = -1;
+      if (k !== list.n) (v.dots ?? v.stat).move(list.n, k);
+    } else if (e && own) put(id);
+  };
+  const log = grid.log!;
+  if (!v.synced) {
+    v.synced = true;
+    log.n = 0;
+    grid.chunks.forEach((c, ci) => {
+      for (let l = 0; l < 4096; l++) if (c.state[l]) refresh(ci * 4096 + l, true);
+    });
+  } else if (log.n) {
+    // Last generation's newborns are full grown now.
+    for (const id of v.grownIn.splice(0)) if (isExposed(v, id)) put(id);
+    while (pos.length < grid.chunks.length) pos.push(new Int32Array(4096).fill(-1));
+    for (let k = 0; k < log.n; k++) {
+      const e = log.a[k];
+      if (e < 0) {
+        // Only its state moved on (still non-empty): its own cube changes, if it's showing.
+        if (isExposed(v, ~e)) put(~e);
+        continue;
+      }
+      refresh(e, true);
+      for (const [dx, dy, dz] of FACES) {
+        const n = grid.neighbour(e, dx, dy, dz, false);
+        if (n >= 0) refresh(n, false);
+      }
+    }
+    log.n = 0;
+  }
+  if (v.dots) v.dots.setCount(list.n);
+  else {
+    v.stat.setCount(list.n);
+    v.stat.flush();
+  }
+}
+
+/** Write a visible cell into its slot (as a cube, or a dot once the crystal is big). */
+function putCell(v: View, s: State, id: number) {
+  const { grid } = v;
+  const slot = v.pos[id >> 12][id & 4095];
+  if (v.dots) {
+    const dots = v.dots;
+    grid.openDirection(id, v.normal);
+    const [nx, ny, nz] = v.normal;
+    cube(v, s, id, 1, grid.state(id), 0, (x, y, z, sc, r, g, b, glow) => dots.put(slot, x, y, z, sc * 1.15, r, g, b, glow, nx, ny, nz));
+    return;
+  }
+  // Born this generation: drawn by the animation until next generation.
+  const newborn = grid.gen > 0 && grid.state(id) === 1 && grid.born(id) === grid.gen;
+  cube(v, s, id, newborn ? 0 : 1, grid.state(id), 0, (...a) => v.stat.put(slot, ...a));
+  if (newborn) v.grownIn.push(id);
+}
+
+/** Switch to dots: every visible cell moves over, the cubes are hidden (and ambient occlusion, which needs them, is off). */
+function toDots(v: View, s: State) {
+  v.dots = new Dots(v.root, s.p.look, Math.max(4096, v.list.n));
+  for (let k = 0; k < v.list.n; k++) putCell(v, s, v.list.a[k]);
+  v.dots.setCount(v.list.n);
+  v.stat.mesh.visible = false;
+  v.anim.mesh.visible = false;
+  v.grownIn.length = 0;
+  v.stage.noAo = true;
+}
+
+const FACES: [number, number, number][] = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];

@@ -27,11 +27,6 @@ function naiveStep(n: number, cells: Uint8Array, rule: Rule3): Uint8Array<ArrayB
   return out;
 }
 
-const dump = (g: Grid3) => {
-  const out = new Uint8Array(g.n ** 3);
-  for (let z = 0; z < g.n; z++) for (let y = 0; y < g.n; y++) for (let x = 0; x < g.n; x++) out[x + g.n * (y + g.n * z)] = g.get(x, y, z);
-  return out;
-};
 
 describe('rules', () => {
   it('parses 3D rule strings', () => {
@@ -54,41 +49,65 @@ describe('rules', () => {
 });
 
 describe('Grid3', () => {
+  /** The unbounded grid's states over a naive grid's box (offset so world 0 sits at index `off`). */
+  const dump = (g: Grid3, n: number, off: number) => {
+    const out = new Uint8Array(n ** 3);
+    for (let z = 0; z < n; z++)
+      for (let y = 0; y < n; y++)
+        for (let x = 0; x < n; x++) {
+          const id = g.cellAt(x - off, y - off, z - off);
+          out[x + n * (y + n * z)] = id < 0 ? 0 : g.state(id);
+        }
+    return out;
+  };
+
   for (const [name, src] of [
     ['445', '4/4/5/M'],
     ['crystal', '0-6/1,3/2/VN'],
     ['builder', '2,6,9/4,6,8-9/10/M'],
   ] as const) {
-    it(`matches a reference step (${name}), including at the cube's faces`, () => {
+    it(`matches a reference step (${name}), across chunk edges and negative coordinates`, () => {
       const rule = parseRule3(src);
-      const n = 9;
+      // A random 9³ block round the origin; 12 generations can't reach the reference's walls.
+      const n = 37;
+      const off = 18;
       const rng = new Rng(11);
-      const g = new Grid3(n);
-      for (let z = 0; z < n; z++) for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (rng.chance(0.3)) g.set(x, y, z, 1);
-      let ref: Uint8Array<ArrayBufferLike> = dump(g);
+      const g = new Grid3(rule.nb);
+      const ref0 = new Uint8Array(n ** 3);
+      for (let z = -4; z <= 4; z++)
+        for (let y = -4; y <= 4; y++)
+          for (let x = -4; x <= 4; x++)
+            if (rng.chance(0.3)) {
+              g.set(x, y, z, 1);
+              ref0[x + off + n * (y + off + n * (z + off))] = 1;
+            }
+      let ref: Uint8Array<ArrayBufferLike> = ref0;
       for (let k = 0; k < 12; k++) {
         g.step(rule);
         ref = naiveStep(n, ref, rule);
-        expect(dump(g)).toEqual(ref);
+        expect(dump(g, n, off)).toEqual(ref);
       }
     });
   }
 
   it('keeps a symmetric seed symmetric', () => {
-    const preset = CRYSTAL_PRESETS.shells;
-    const rule = parseRule3(preset.rule);
-    const n = 32;
-    const g = new Grid3(n);
-    for (const [x, y, z] of symmetricSeed(n, new Rng(3), { size: 3, density: 0.4, symmetry: 'cubic' })) g.set(x, y, z, 1);
+    const rule = parseRule3(CRYSTAL_PRESETS.shells.rule);
+    const g = new Grid3(rule.nb);
+    // Mirror images about the centre (-½) are x and -1 - x.
+    for (const [x, y, z] of symmetricSeed(32, new Rng(3), { size: 3, density: 0.4, symmetry: 'cubic' })) g.set(x - 16, y - 16, z - 16, 1);
     for (let k = 0; k < 15; k++) g.step(rule);
     expect(g.empty).toBe(false);
-    for (let z = 0; z < n; z++)
-      for (let y = 0; y < n; y++)
-        for (let x = 0; x < n; x++) {
-          const v = g.get(x, y, z);
-          expect(g.get(n - 1 - x, y, z)).toBe(v);
-          expect(g.get(y, x, z)).toBe(v);
-          expect(g.get(z, y, x)).toBe(v);
+    const at = (x: number, y: number, z: number) => {
+      const id = g.cellAt(x, y, z);
+      return id < 0 ? 0 : g.state(id);
+    };
+    for (let z = -20; z < 20; z++)
+      for (let y = -20; y < 20; y++)
+        for (let x = -20; x < 20; x++) {
+          const v = at(x, y, z);
+          expect(at(-1 - x, y, z)).toBe(v);
+          expect(at(y, x, z)).toBe(v);
+          expect(at(z, y, x)).toBe(v);
         }
   });
 });
@@ -150,19 +169,44 @@ describe('modes', () => {
     });
   }
 
-  it('plays the crystal it planned', () => {
-    // The run is planned on one copy of the seed and played on another: they must be the same seed.
-    const r = run({ mode: 'crystal', preset: 'frost', size: 40 }, 9);
+  it('grows a crystal with no walls', () => {
+    // Frost grows about a cell a generation: 60 generations take it well past the old 64-cell cube.
+    const r = run({ mode: 'crystal', preset: 'frost', generations: 60 }, 9);
     const end = r.events.find((e) => e.type === 'crystal:end')!;
-    const last = r.events.filter((e) => e.type === 'crystal:gen').at(-1)!;
-    expect(end.kind).toBe('edge');
-    expect(last.gen).toBe(end.gen);
-    expect(last.alive).toBeGreaterThan(0);
+    const gens = r.events.filter((e) => e.type === 'crystal:gen');
+    expect([end.kind, end.gen, gens.length]).toEqual(['cap', 60, 60]);
+    expect(end.radius).toBeGreaterThan(50);
+    expect(gens.at(-1)!.alive).toBeGreaterThan(0);
+  });
+
+  it('runs the R-pentomino to its true end on an endless board', () => {
+    // On an infinite plane it settles after 1,103 generations, throwing off six gliders that fly on.
+    const end = run({ mode: 'tower', pattern: 'r-pentomino' }, 1).events.find((e) => e.type === 'tower:end')!;
+    expect(end.kind).toBe('escape');
+    expect(end.gen).toBeGreaterThanOrEqual(1103);
+    expect(end.gen).toBeLessThanOrEqual(1110);
   });
 
   it('lasts as long as Diehard should', () => {
     const end = run({ mode: 'tower', pattern: 'diehard' }, 1).events.find((e) => e.type === 'tower:end')!;
     expect([end.kind, end.gen]).toEqual(['dead', 130]);
+  });
+
+  it('follows a hand-set generation count and pace', () => {
+    // Diehard at 5 a second: 130 generations take 26 s, after the 1.4 s intro.
+    const slow = run({ mode: 'tower', pattern: 'diehard', genRate: 5 }, 1).events.find((e) => e.type === 'tower:end')!;
+    expect(slow.gen).toBe(130);
+    expect(slow.t).toBeCloseTo(1.4 + 26, 1);
+    // Cut short at 50: still going.
+    const cut = run({ mode: 'tower', pattern: 'diehard', generations: 50 }, 1).events.find((e) => e.type === 'tower:end')!;
+    expect([cut.kind, cut.gen]).toEqual(['cap', 50]);
+    const crystal = run({ mode: 'crystal', preset: 'frost', generations: 12, genRate: 4 }, 1).events.filter((e) => e.type === 'crystal:gen');
+    expect(crystal.length).toBe(12);
+    expect(crystal[11].t).toBeCloseTo(1.4 + 3, 1);
+    // War: 60 generations at 20 a second is a 3 s match.
+    const war = run({ mode: 'war', warSize: 28, generations: 60, genRate: 20 }, 1).events;
+    expect(war.filter((e) => e.type === 'war:gen').length).toBeLessThanOrEqual(60);
+    expect(war.find((e) => e.type === 'war:end')!.t).toBeLessThan(3.1);
   });
 
   it('keeps colony counts equal to the cells they hold', () => {

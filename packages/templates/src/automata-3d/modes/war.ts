@@ -12,8 +12,9 @@ import { drawClock, drawShareBar } from '../../hud';
 import { gaussFit } from '../../scoring';
 import { THREE, sceneCache } from '../../three-layer';
 import type { AutomataParams } from '../params';
-import { Voxels, drawStage, fitDistance, linear, makeStage, orbit, voxelMaterial } from '../view';
-import { EXPLAIN_LIFT, clamp01, drawExplainer, ev, evName, outlined, smooth, velOf, type ModeImpl } from '../shared';
+import { IntList } from '../grid';
+import { Voxels, detailFor, drawStage, fitDistance, linear, makeStage, orbit, voxelMaterial } from '../view';
+import { EXPLAIN_LIFT, MANUAL_MAX_S, budgetFor, clamp01, drawExplainer, ev, evName, outlined, smooth, velOf, type ModeImpl } from '../shared';
 
 const GEN_RATE = 10;
 const OUTRO_S = 3;
@@ -66,10 +67,26 @@ interface State {
   /** Owners before the last generation, for animating (visual runs only). */
   prev: Uint8Array | null;
   counts: Int32Array;
-  /** Neighbour counts per colony (scratch). */
-  nb: Uint8Array[];
   offs: Int32Array;
+  /** Each padded cell's place in `cells` (-1 outside the arena). */
+  jOf: Int32Array;
+  /**
+   * Cells on a front: a neighbour belongs to another colony (or, for an empty cell, to any). Only
+   * these can change, so only these are looked at; in the same order as all of them would be, so
+   * the random draws (and the run) are the same.
+   */
+  front: Uint32Array;
+  /** Arena cells from the outside in (by distance, in steps of an eighth of a cell), for the rush. */
+  outward: Int32Array;
+  /** Where each eighth-of-a-cell distance step starts in `outward`, and how far the rush has got. */
+  outStart: Int32Array;
+  rushStep: number;
+  /** Neighbours each cell has in each colony, kept up to date as cells change hands. */
+  nb: Uint8Array[];
   r: number;
+  /** Generations per second, and when the match ends (the buzzer). */
+  rate: number;
+  matchS: number;
   /** Current arena radius (shrinks in the final rush). */
   radius: number;
   gen: number;
@@ -119,7 +136,7 @@ function spots(k: number, r: number, rng: Rng): [number, number, number][] {
 
 export const warMode: ModeImpl<State> = {
   copy: (p) => ({ hook: `Pick a ${p.sides === 'countries' ? 'side' : 'colour'}. Who takes over? 👀`, cta: '{result} Did you call it?' }),
-  searchBudget: 80,
+  searchBudget: (p) => budgetFor(80, p.warSize, 40, 2.5, 8),
 
   init({ params: p, rng }) {
     const cyclic = p.warRule === 'cyclic';
@@ -156,6 +173,24 @@ export const warMode: ModeImpl<State> = {
             }
           }
     });
+    const rate = p.genRate || GEN_RATE;
+    const offs = Int32Array.from(DIRS.map(([dx, dy, dz]) => dx + pd * (dy + pd * dz)));
+    const jOf = new Int32Array(pd ** 3).fill(-1);
+    list.forEach((i, j) => (jOf[i] = j));
+    const nb = teams.map(() => new Uint8Array(pd ** 3));
+    for (const i of list) if (owner[i]) for (let q = 0; q < offs.length; q++) nb[owner[i] - 1][i + offs[q]]++;
+    const front = new Uint32Array(Math.ceil(list.length / 32));
+    list.forEach((i, j) => setFront(front, j, onFront(nb, owner[i], i)));
+    // Cells grouped by distance step, outermost first (a counting sort: there are millions).
+    let far = 0;
+    for (const d of dist) far = Math.max(far, d);
+    const steps = Math.ceil(far * 8) + 1;
+    const outStart = new Int32Array(steps + 1);
+    for (const d of dist) outStart[steps - 1 - Math.floor(d * 8) + 1]++;
+    for (let b = 0; b < steps; b++) outStart[b + 1] += outStart[b];
+    const fill = outStart.slice(0, steps);
+    const outward = new Int32Array(list.length);
+    dist.forEach((d, j) => (outward[fill[steps - 1 - Math.floor(d * 8)]++] = j));
     const colonies = teams.map(() => ({ phase: rng.range(0, Math.PI * 2), omega: rng.range(0.25, 0.6), amp: rng.range(0.2, 0.4) }));
     return {
       p,
@@ -171,9 +206,17 @@ export const warMode: ModeImpl<State> = {
       changed: new Uint16Array(pd ** 3),
       prev: null,
       counts,
-      nb: teams.map(() => new Uint8Array(pd ** 3)),
-      offs: Int32Array.from(DIRS.map(([dx, dy, dz]) => dx + pd * (dy + pd * dz))),
+      offs,
+      jOf,
+      front,
+      outward,
+      outStart,
+      rushStep: 0,
+      nb,
       r,
+      rate,
+      // A hand-set generation count sets the match length at this pace (instead of the video length).
+      matchS: p.generations ? Math.min(p.generations / rate, MANUAL_MAX_S - OUTRO_S) : p.durationS - OUTRO_S,
       radius: r + 1,
       gen: 0,
       lastGenT: 0,
@@ -194,14 +237,14 @@ export const warMode: ModeImpl<State> = {
   step(s, { dt, t, emit }) {
     s.t = t + dt;
     if (s.endAt !== null) return;
-    const matchS = s.p.durationS - OUTRO_S;
+    const { matchS } = s;
     const rush = s.p.finalRush && t >= matchS - RUSH_S;
     if (rush && !s.rushOn) {
       s.rushOn = true;
       emit({ type: ev('war', 'rush') });
     }
     if (rush) s.radius = s.r * (1 - (1 - RUSH_R) * smooth((t - (matchS - RUSH_S)) / RUSH_S)) + 0.5;
-    if (s.t >= (s.gen + 1) / GEN_RATE) {
+    if (s.t >= (s.gen + 1) / s.rate && (!s.p.generations || s.gen < s.p.generations)) {
       generation(s, s.t, emit);
       s.lastGenT = s.t;
     }
@@ -223,7 +266,7 @@ export const warMode: ModeImpl<State> = {
       s.lastTick = Math.ceil(left);
       emit({ type: ev('war', 'tick'), left: s.lastTick });
     }
-    if (alive === 1 || t >= matchS) {
+    if (alive === 1 || t >= matchS || (s.p.generations > 0 && s.gen >= s.p.generations)) {
       s.endAt = t;
       s.winner = lead;
       const total = counts.reduce((a, b) => a + b, 0) || 1;
@@ -244,35 +287,24 @@ export const warMode: ModeImpl<State> = {
     const { n, pd, owner } = s;
     const prev = s.prev ?? owner;
     const c = (n - 1) / 2;
-    const u = smooth(clamp01((s.t - s.lastGenT) * GEN_RATE * 1.4));
+    const u = smooth(clamp01((s.t - s.lastGenT) * Math.max(s.rate, 2.5) * 1.4));
     // A wedge of the upper half facing the camera is cut away (it turns with the camera), so the
     // fronts inside show.
     const az = 0.6 + s.t * 0.2;
     const cut = s.p.cutaway;
+    const { upper, azimuth } = v;
     const cutAt = (i: number) => {
-      if (!cut || !v.upper[i]) return false;
-      let d = v.azimuth[i] - az;
+      if (!upper[i]) return false;
+      let d = azimuth[i] - az;
       d -= Math.PI * 2 * Math.round(d / (Math.PI * 2));
-      return Math.abs(d) < CUT_HALF;
+      return d < CUT_HALF && d > -CUT_HALF;
     };
-    const face = [1, -1, pd, -pd, pd * pd, -pd * pd];
-    v.voxels.begin();
+    if (v.shellGen !== s.gen) buildShell(v, s);
     const ended = s.endAt !== null;
-    for (let j = 0; j < s.cells.length; j++) {
-      const i = s.cells[j];
+    const winGlow = ended ? 0.25 * Math.exp(-(s.t - s.endAt!) * 1.5) : 0;
+    const draw = (i: number) => {
       const o = owner[i];
       const was = prev[i];
-      if (!o && !was) continue;
-      if (cutAt(i)) continue;
-      // Buried: all six faces covered (by cells not cut away).
-      let buried = o !== 0 && was !== 0;
-      if (buried)
-        for (const f of face)
-          if (!owner[i + f] || !prev[i + f] || cutAt(i + f)) {
-            buried = false;
-            break;
-          }
-      if (buried) continue;
       let scale = 1;
       let rgb = v.colors[(o || was) - 1];
       let glow = 0;
@@ -286,12 +318,26 @@ export const warMode: ModeImpl<State> = {
         for (let q = 0; q < 3; q++) rgb[q] = a[q] + (b[q] - a[q]) * u;
         glow = 0.5 * (1 - u);
       }
-      if (ended && o - 1 === s.winner) glow += 0.25 * Math.exp(-(s.t - s.endAt!) * 1.5);
-      if (scale <= 0.02) continue;
-      const x = (i % pd) - 1;
-      const y = (Math.floor(i / pd) % pd) - 1;
-      const z = Math.floor(i / (pd * pd)) - 1;
-      v.voxels.push(x - c, y - c, z - c, scale, rgb[0], rgb[1], rgb[2], glow);
+      if (ended && o - 1 === s.winner) glow += winGlow;
+      if (scale <= 0.02) return;
+      v.voxels.push((i % pd) - 1 - c, (Math.floor(i / pd) % pd) - 1 - c, Math.floor(i / (pd * pd)) - 1 - c, scale, rgb[0], rgb[1], rgb[2], glow);
+    };
+    v.voxels.begin();
+    // The outer skin (and every front with a gap in it), less the cut.
+    const sh = v.shellList;
+    for (let k = 0; k < sh.n; k++) if (!cut || !cutAt(sh.a[k])) draw(sh.a[k]);
+    if (cut) {
+      // The cut's faces: buried cells next to a cut-away one. Only cells near the wedge's two walls,
+      // under its floor or by the axis can be, and those are found by bearing.
+      const p2 = pd * pd;
+      const inner = (i: number) => {
+        if (v.shellFlag[i] || !(owner[i] || prev[i]) || cutAt(i)) return;
+        if (cutAt(i + 1) || cutAt(i - 1) || cutAt(i + pd) || cutAt(i - pd) || cutAt(i + p2) || cutAt(i - p2)) draw(i);
+      };
+      visitBearings(v.walls, az - CUT_HALF - WALL_MARGIN, az - CUT_HALF + WALL_MARGIN, inner);
+      visitBearings(v.walls, az + CUT_HALF - WALL_MARGIN, az + CUT_HALF + WALL_MARGIN, inner);
+      visitBearings(v.floor, az - CUT_HALF - WALL_MARGIN, az + CUT_HALF + WALL_MARGIN, inner);
+      for (let k = 0; k < v.axis.length; k++) inner(v.axis[k]);
     }
     v.voxels.end();
     // The arena's outline shrinks with the rush.
@@ -306,10 +352,10 @@ export const warMode: ModeImpl<State> = {
 
   renderTop({ ctx, theme }, s) {
     const ended = s.endAt !== null;
-    const precise = ended || s.p.durationS - OUTRO_S - s.t <= 5;
+    const precise = ended || s.matchS - s.t <= 5;
     drawShareBar(ctx, { x: 70, y: 1920 * 0.2, w: 940, h: 68, teams: s.teams, counts: Array.from(s.counts), leader: ended ? s.winner : s.leader, precise });
     const top = s.p.explain ? drawExplainer(ctx, warMode.explain(s), s.t) : null;
-    drawClock(ctx, { left: s.p.durationS - OUTRO_S - s.t, rush: s.rushOn, ended, labelY: top === null ? 1920 * 0.8 : top - 60, bigY: 1920 * 0.5 - (top === null ? 0 : EXPLAIN_LIFT), text: theme.text, stroke: theme.textStroke });
+    drawClock(ctx, { left: s.matchS - s.t, rush: s.rushOn, ended, labelY: top === null ? 1920 * 0.8 : top - 60, bigY: 1920 * 0.5 - (top === null ? 0 : EXPLAIN_LIFT), text: theme.text, stroke: theme.textStroke });
     // The one-line reminder of the rule, unless the explainer already says it.
     if (!ended && s.t > 2.9 && top === null) {
       const label = s.cyclic ? 'Each colour beats the next' : 'Outnumber to take a cell';
@@ -389,65 +435,97 @@ export const warMode: ModeImpl<State> = {
 };
 
 /** One generation: spread into empty cells, fight at the borders, lose cells outside a shrinking arena. */
+function setFront(front: Uint32Array, j: number, on: boolean) {
+  if (on) front[j >>> 5] |= 1 << (j & 31);
+  else front[j >>> 5] &= ~(1 << (j & 31));
+}
+
+/** Whether a cell (owned by o, 0 = empty) has a neighbour of another colony. */
+function onFront(nb: Uint8Array[], o: number, i: number): boolean {
+  for (let q = 0; q < nb.length; q++) if (q !== o - 1 && nb[q][i]) return true;
+  return false;
+}
+
+/** One generation: spread into empty cells, fight at the borders, lose cells outside a shrinking arena. */
 function generation(s: State, t: number, emit: StepCtx['emit']) {
-  const { owner, cells, nb, offs, k, rng, counts } = s;
+  const { owner, cells, offs, k, rng, counts, front, nb, jOf } = s;
   const gen = ++s.gen;
   if (s.prev) s.prev.set(owner);
-  // Neighbour counts per colony.
-  for (const a of nb) a.fill(0);
-  for (let j = 0; j < cells.length; j++) {
-    const i = cells[j];
-    const o = owner[i];
-    if (!o) continue;
-    const a = nb[o - 1];
-    for (let q = 0; q < offs.length; q++) a[i + offs[q]]++;
-  }
   // Rich get richer, more and more as the match goes on: early surges swing it, late ones settle it.
   const mean = counts.reduce((a, b) => a + b, 0) / Math.max(1, s.out.filter((o) => !o).length);
-  const greed = s.cyclic ? 0 : GREED * clamp01(t / (s.p.durationS - OUTRO_S)) ** 2;
+  const greed = s.cyclic ? 0 : GREED * clamp01(t / s.matchS) ** 2;
   const str = s.colonies.map((c, q) => strength(c, t) * (counts[q] > 0 && mean > 0 ? (counts[q] / mean) ** greed : 1));
-  const next = new Uint8Array(cells.length);
-  let flips = 0;
-  for (let j = 0; j < cells.length; j++) {
-    const i = cells[j];
-    const o = owner[i];
-    if (s.dist[j] > s.radius) {
-      next[j] = 0;
-      continue;
-    }
-    // The strongest neighbouring colony other than this cell's own (ties broken at random).
-    let best = -1;
-    let bestN = 0;
-    for (let q = 0; q < k; q++) {
-      if (q === o - 1) continue;
-      // Cyclic: only a cell's predator can take it (anyone, once its predator is gone).
-      if (s.cyclic && o && q !== o % 3 && !s.out[o % 3]) continue;
-      const m = nb[q][i];
-      if (m > bestN || (m === bestN && m > 0 && rng.chance(0.5))) {
-        best = q;
-        bestN = m;
+  // Work out every change first (from this generation's owners), then apply them.
+  const moves: number[] = [];
+  // Front cells in index order, 32 at a time (most words are empty).
+  for (let w = 0; w < front.length; w++) {
+    let bits = front[w];
+    while (bits) {
+      const low = bits & -bits;
+      bits ^= low;
+      const j = w * 32 + 31 - Math.clz32(low);
+      if (s.dist[j] > s.radius) continue;
+      const i = cells[j];
+      const o = owner[i];
+      // The strongest neighbouring colony other than this cell's own (ties broken at random).
+      let best = -1;
+      let bestN = 0;
+      for (let q = 0; q < k; q++) {
+        if (q === o - 1) continue;
+        // Cyclic: only a cell's predator can take it (anyone, once its predator is gone).
+        if (s.cyclic && o && q !== o % 3 && !s.out[o % 3]) continue;
+        const m = nb[q][i];
+        if (m > bestN || (m === bestN && m > 0 && rng.chance(0.5))) {
+          best = q;
+          bestN = m;
+        }
       }
+      if (best < 0) continue;
+      if (!o) {
+        if (rng.chance(GROW * str[best] * Math.min(1, bestN / 3))) moves.push(j, best + 1);
+        continue;
+      }
+      const own = nb[o - 1][i];
+      const ratio = str[best] / str[o - 1];
+      const p = s.cyclic && !s.out[o % 3] ? 0.3 * FIGHT * clamp01((bestN - 3) / 10) * ratio : FIGHT * clamp01((bestN - own + 5) / 16) * ratio ** 2;
+      if (rng.chance(p)) moves.push(j, best + 1);
     }
-    next[j] = o;
-    if (best < 0) continue;
-    if (!o) {
-      if (rng.chance(GROW * str[best] * Math.min(1, bestN / 3))) next[j] = best + 1;
-      continue;
-    }
-    const own = nb[o - 1][i];
-    const ratio = str[best] / str[o - 1];
-    const p = s.cyclic && !s.out[o % 3] ? 0.3 * FIGHT * clamp01((bestN - 3) / 10) * ratio : FIGHT * clamp01((bestN - own + 5) / 16) * ratio ** 2;
-    if (rng.chance(p)) next[j] = best + 1;
   }
-  counts.fill(0);
-  for (let j = 0; j < cells.length; j++) {
-    const i = cells[j];
-    if (next[j] !== owner[i]) {
-      if (owner[i] && next[j]) flips++;
-      owner[i] = next[j];
-      s.changed[i] = gen;
+  // The final rush: cells outside the shrinking arena are lost (from the outside in; nothing is
+  // won back out there, so each step is cleared once, the one the edge is in each generation).
+  const { outward, outStart } = s;
+  for (let b = s.rushStep; b < outStart.length - 1; b++) {
+    let passed = true;
+    for (let q = outStart[b]; q < outStart[b + 1]; q++) {
+      const j = outward[q];
+      if (s.dist[j] <= s.radius) passed = false;
+      else if (owner[cells[j]]) moves.push(j, 0);
     }
-    if (next[j]) counts[next[j] - 1]++;
+    if (!passed) break;
+    s.rushStep = b + 1;
+  }
+  let flips = 0;
+  for (let m = 0; m < moves.length; m += 2) {
+    const j0 = moves[m];
+    const i = cells[j0];
+    const was = owner[i];
+    const now = moves[m + 1];
+    if (was && now) flips++;
+    if (was) counts[was - 1]--;
+    if (now) counts[now - 1]++;
+    owner[i] = now;
+    s.changed[i] = gen;
+    setFront(front, j0, onFront(nb, now, i));
+    // Its neighbours' counts move, and with them whether they're on a front.
+    const from = was ? nb[was - 1] : null;
+    const to = now ? nb[now - 1] : null;
+    for (let q = 0; q < offs.length; q++) {
+      const n = i + offs[q];
+      if (from) from[n]--;
+      if (to) to[n]++;
+      const jn = jOf[n];
+      if (jn >= 0) setFront(front, jn, onFront(nb, owner[n], n));
+    }
   }
   s.flips = flips;
   emit({ type: ev('war', 'gen'), gen, flips, leader: s.leader, counts: Array.from(counts) });
@@ -470,7 +548,7 @@ function generation(s: State, t: number, emit: StepCtx['emit']) {
 const view = sceneCache((s: State, theme) => {
   const stage = makeStage(theme, s.p.look);
   stage.lift = s.p.explain ? EXPLAIN_LIFT : 0;
-  const voxels = new Voxels(stage.scene, voxelMaterial(s.p.look), s.p.look, 16384);
+  const voxels = new Voxels(stage.scene, voxelMaterial(s.p.look), s.p.look, 16384, detailFor(s.n));
   s.prev = s.owner.slice();
   // Each cell's bearing round the vertical axis, and whether it's in the upper half (for the cut).
   const c = (s.n - 1) / 2;
@@ -482,6 +560,19 @@ const view = sceneCache((s: State, theme) => {
     const z = Math.floor(i / (s.pd * s.pd)) - 1 - c;
     azimuth[i] = Math.atan2(x, z);
     upper[i] = y > -1 ? 1 : 0;
+  }
+  // Arena cells that can border the cut, sorted by bearing: the upper half (for its two walls), the
+  // layer just under it (for its floor), and those too close to the axis for bearings to mean much.
+  const walls: number[] = [];
+  const floor: number[] = [];
+  const axis: number[] = [];
+  for (const i of s.cells) {
+    const x = (i % s.pd) - 1 - c;
+    const z = Math.floor(i / (s.pd * s.pd)) - 1 - c;
+    const underCut = !upper[i] && upper[i + s.pd];
+    if (!upper[i] && !underCut) continue;
+    if (x * x + z * z < AXIS_R * AXIS_R) axis.push(i);
+    else (upper[i] ? walls : floor).push(i);
   }
   // Arena outline: three great circles for a sphere, the edges of a box for a cube.
   let shell: THREE.LineSegments | THREE.Group;
@@ -501,5 +592,77 @@ const view = sceneCache((s: State, theme) => {
   }
   stage.scene.add(shell);
   const colors = s.teams.map((tm) => linear(rgbToCss(lighten(hexToRgb(tm.color), 0.08))));
-  return { scene: stage.scene, stage, voxels, shell: shell as THREE.LineSegments, colors, mix: [0, 0, 0] as [number, number, number], azimuth, upper };
+  return {
+    scene: stage.scene,
+    stage,
+    voxels,
+    shell: shell as THREE.LineSegments,
+    colors,
+    mix: [0, 0, 0] as [number, number, number],
+    azimuth,
+    upper,
+    walls: byBearing(walls, azimuth),
+    floor: byBearing(floor, azimuth),
+    axis: Int32Array.from(axis),
+    /** Occupied cells with a face open (now or last generation), rebuilt each generation. */
+    shellFlag: new Uint8Array(s.pd ** 3),
+    shellList: new IntList(),
+    shellGen: -1,
+  };
 });
+
+type View = ReturnType<typeof view>;
+
+const BEARING_BINS = 256;
+/** Cells closer than this to the vertical axis are always checked against the cut. */
+const AXIS_R = 3;
+/** Beyond AXIS_R, a cell and its face neighbour differ in bearing by less than this. */
+const WALL_MARGIN = 0.55;
+
+interface Bearings {
+  /** Cells grouped by bearing bin: bin b holds cells[start[b] .. start[b + 1]). */
+  start: Int32Array;
+  cells: Int32Array;
+}
+
+function byBearing(list: number[], azimuth: Float32Array): Bearings {
+  const bin = (i: number) => Math.min(BEARING_BINS - 1, Math.floor(((azimuth[i] + Math.PI) / (Math.PI * 2)) * BEARING_BINS));
+  const start = new Int32Array(BEARING_BINS + 1);
+  for (const i of list) start[bin(i) + 1]++;
+  for (let b = 0; b < BEARING_BINS; b++) start[b + 1] += start[b];
+  const fill = start.slice(0, BEARING_BINS);
+  const cells = new Int32Array(list.length);
+  for (const i of list) cells[fill[bin(i)]++] = i;
+  return { start, cells };
+}
+
+/** Every cell with a bearing between a0 and a1 (radians, any range that's under a full turn). */
+function visitBearings(b: Bearings, a0: number, a1: number, fn: (i: number) => void) {
+  const toBin = (a: number) => Math.floor(((a + Math.PI) / (Math.PI * 2)) * BEARING_BINS);
+  const b0 = toBin(a0);
+  const b1 = toBin(a1);
+  for (let k = b0; k <= b1; k++) {
+    const bb = ((k % BEARING_BINS) + BEARING_BINS) % BEARING_BINS;
+    for (let q = b.start[bb]; q < b.start[bb + 1]; q++) fn(b.cells[q]);
+  }
+}
+
+/** The occupied cells (now or last generation) with an open face: the ones drawn even without the cut. */
+function buildShell(v: View, s: State) {
+  const { owner, pd, cells } = s;
+  const prev = s.prev ?? owner;
+  const p2 = pd * pd;
+  const full = (i: number) => owner[i] !== 0 && prev[i] !== 0;
+  v.shellList.n = 0;
+  for (let j = 0; j < cells.length; j++) {
+    const i = cells[j];
+    if (!owner[i] && !prev[i]) {
+      v.shellFlag[i] = 0;
+      continue;
+    }
+    const buried = full(i) && full(i + 1) && full(i - 1) && full(i + pd) && full(i - pd) && full(i + p2) && full(i - p2);
+    v.shellFlag[i] = buried ? 0 : 1;
+    if (!buried) v.shellList.push(i);
+  }
+  v.shellGen = s.gen;
+}

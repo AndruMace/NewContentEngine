@@ -11,7 +11,8 @@ export interface ScoreInfo {
 export interface ModeImpl<S = any> {
   /** On-screen copy used when the video still has the template's default copy. */
   copy(p: AutomataParams): { hook: string; cta: string };
-  searchBudget: number;
+  /** Seeds a search tries: fewer for bigger grids, so a search takes about as long at any size. */
+  searchBudget(p: AutomataParams): number;
   init(ctx: InitCtx<AutomataParams>): S;
   step(s: S, ctx: StepCtx): void;
   isDone(s: S): boolean;
@@ -51,6 +52,15 @@ export const popIn = (u: number) => {
  * at their own pace on purpose, not stretched to fill), running long more firmly.
  */
 export const durationFit = (durationS: number, targetS: number) => Math.exp(-(((durationS - targetS) / (targetS * (durationS < targetS ? 0.55 : 0.2))) ** 2));
+
+/** Longest video when generations are set by hand (count or speed), instead of fitted to the length. */
+export const MANUAL_MAX_S = 600;
+
+/** The most generations that fit in a hand-set pace before the manual time limit. */
+export const manualCap = (rate: number, overheadS: number) => Math.max(1, Math.floor(rate * (MANUAL_MAX_S - overheadS)));
+
+/** A search budget scaled down as a run's cost grows with grid size (cost ~ size^power), within limits. */
+export const budgetFor = (base: number, size: number, baseSize: number, power: number, min: number) => Math.max(min, Math.min(base, Math.round(base * (baseSize / size) ** power)));
 
 export const fmtInt = (n: number) => Math.round(n).toLocaleString('en-US');
 

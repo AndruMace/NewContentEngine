@@ -40,6 +40,8 @@ export function parseRule3(src: string): Rule3 {
   const nb = n?.trim().toUpperCase() === 'VN' ? 'vn' : 'moore';
   const max = nb === 'vn' ? 6 : 26;
   const states = parseInt(c, 10);
+  // Grid3 only looks at cells near ones that changed, so birth from nothing can't be supported.
+  if (countMask(b, max) & 1) throw new Error(`Rules with birth on 0 neighbours aren't supported ("${src}")`);
   if (!(states >= 2 && states <= 250)) throw new Error(`Bad state count in "${src}"`);
   return { survive: countMask(s, max), birth: countMask(b, max), states, nb };
 }

@@ -107,7 +107,8 @@ export function lifeStart(id: LifePatternId, w: number, rng: Rng): [number, numb
   if (id === 'gliders') {
     // Gliders on a ring, each aimed roughly at the centre, so they collide there.
     const count = rng.int(6, 10);
-    const ring = w * 0.36;
+    // Sized for an 80-cell board at most: on a huge board they'd take thousands of generations to meet.
+    const ring = Math.min(w, 80) * 0.36;
     for (let k = 0; k < count; k++) {
       const a = (k / count) * Math.PI * 2 + rng.range(-0.2, 0.2);
       const gx = Math.round(c + Math.cos(a) * ring);
@@ -116,8 +117,8 @@ export function lifeStart(id: LifePatternId, w: number, rng: Rng): [number, numb
     }
     return out;
   }
-  // Soup: a disc a third of the board across.
-  const r = w * 0.17;
+  // Soup: a disc a third of the board across (of an 80-cell board at most).
+  const r = Math.min(w, 80) * 0.17;
   for (let y = Math.floor(c - r); y <= c + r; y++) for (let x = Math.floor(c - r); x <= c + r; x++) if ((x - c) ** 2 + (y - c) ** 2 <= r * r && rng.chance(0.38)) out.push([x, y]);
   return out;
 }

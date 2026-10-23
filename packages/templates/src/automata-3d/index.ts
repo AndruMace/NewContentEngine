@@ -1,6 +1,6 @@
 import type { Template } from '@sim/engine';
 import { automataSchema, type AutomataParams, type ModeId } from './params';
-import { modeOfEvent, type ModeImpl } from './shared';
+import { MANUAL_MAX_S, modeOfEvent, type ModeImpl } from './shared';
 import { crystalMode } from './modes/crystal';
 import { towerMode } from './modes/tower';
 import { warMode } from './modes/war';
@@ -27,10 +27,11 @@ export const automata3d: Template<AutomataParams, State> = {
   family: 'kinetic',
   category: 'brainy',
   description:
-    'Emergent structures from simple cell rules, in 3D voxels (the mode). Crystal growth: a tiny symmetric seed grows under a 3D rule (Crystal Growth, Frost, Snowflake, 445, Builder, Shells, Expanding Shell, Coral, Amoeba, Pyroclastic) into a gem, snowflake or coral, coloured by when each cell was born. Life tower: Conway\'s Game of Life (or HighLife, Day & Night, Mazectric) from a famous pattern (R-pentomino, Acorn, Diehard, glider gun…), every generation stacked on the last so the history becomes a sculpture; how long does it last? Colony war: 2–4 coloured colonies spread through a 3D arena and fight for every cell at their borders (majority, or rock-paper-scissors), with a live share bar; one takes everything or the biggest wins at the buzzer. CTAs may use {result} and {gen}.',
+    'Emergent structures from simple cell rules, in 3D voxels (the mode). Crystal growth: a tiny symmetric seed grows under a 3D rule (Crystal Growth, Frost, Snowflake, 445, Builder, Shells, Expanding Shell, Coral, Amoeba, Pyroclastic) into a gem, snowflake or coral, with no walls: it grows for hundreds of generations, until it dies, settles or the run ends. Life tower: Conway\'s Game of Life (or HighLife, Day & Night, Mazectric) from a famous pattern (R-pentomino, Acorn, Diehard, glider gun…) on an endless board, every generation stacked on the last so the history becomes a sculpture; how long does it last (Acorn: 5,206 generations)? Colony war: 2–4 coloured colonies spread through a 3D arena (up to 256 cells across) and fight for every cell at their borders (majority, or rock-paper-scissors), with a live share bar; one takes everything or the biggest wins at the buzzer. CTAs may use {result} and {gen}.',
   schema: automataSchema,
   substeps: 1,
-  searchBudget: (p) => MODE_IMPLS[p.mode].searchBudget,
+  maxSeconds: (p) => (p.genRate > 0 || p.generations > 0 ? MANUAL_MAX_S + 5 : 90),
+  searchBudget: (p) => MODE_IMPLS[p.mode].searchBudget(p),
   glowScale: 0.3,
   lengthParam: { param: 'durationS', offsetS: 0 },
   defaultCopy: { hook: DEFAULT_HOOK, cta: DEFAULT_CTA },

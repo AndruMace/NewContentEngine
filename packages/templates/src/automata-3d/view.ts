@@ -54,6 +54,9 @@ export class Palette {
   }
 }
 
+/** Cube detail for a grid this many cells across: the bigger the grid, the smaller each cube on screen. */
+export const detailFor = (cells: number): 0 | 1 | 2 => (cells <= 72 ? 2 : cells <= 120 ? 1 : 0);
+
 /** sRGB hex → linear [r, g, b]. */
 export function linear(hex: string): [number, number, number] {
   const c = new THREE.Color(hex);
@@ -70,6 +73,9 @@ export class Voxels {
   private colors: Float32Array;
   private glows: Float32Array;
   private n = 0;
+  /** Slot mode: cubes written since the last flush, and whether the buffers were reallocated. */
+  private dirty: number[] = [];
+  private regrown = false;
   /** First cube changed since the last upload. */
   private from = 0;
   private capacity = 0;
@@ -80,14 +86,14 @@ export class Voxels {
     private readonly material: THREE.Material,
     look: LookId,
     capacity = 4096,
-    /** Plain boxes (a twelfth of the triangles) for scenes with very many cubes. */
-    plain = false,
+    /** Bevel detail: 2 fully rounded (300 triangles), 1 lighter (108), 0 plain boxes (12) for very many cubes. */
+    detail: 0 | 1 | 2 = 2,
     /** Gap between cubes, instead of the look's. */
     gap?: number,
   ) {
     const l = LOOK[look];
     const side = 1 - (gap ?? l.gap);
-    this.geometry = plain ? new THREE.BoxGeometry(side, side, side) : new RoundedBoxGeometry(side, side, side, 2, l.bevel * side);
+    this.geometry = detail ? new RoundedBoxGeometry(side, side, side, detail, l.bevel * side) : new THREE.BoxGeometry(side, side, side);
     this.mesh = this.build(capacity);
     this.matrices = this.mesh.instanceMatrix.array as Float32Array;
     this.colors = this.mesh.instanceColor!.array as Float32Array;
@@ -119,9 +125,13 @@ export class Voxels {
 
   /** A cube at (x, y, z) scaled by s, with colour (r, g, b) in linear light and glow g. */
   push(x: number, y: number, z: number, s: number, r: number, g: number, b: number, glow: number) {
-    if (this.n >= this.capacity) this.grow(this.capacity * 2);
+    this.write(this.n++, x, y, z, s, r, g, b, glow);
+  }
+
+  private write(k: number, x: number, y: number, z: number, s: number, r: number, g: number, b: number, glow: number) {
+    if (k >= this.capacity) this.grow(Math.max(k + 1, this.capacity * 2));
     const m = this.matrices;
-    const o = this.n * 16;
+    const o = k * 16;
     m[o] = s;
     m[o + 5] = s;
     m[o + 10] = s;
@@ -129,12 +139,68 @@ export class Voxels {
     m[o + 13] = y;
     m[o + 14] = z;
     m[o + 15] = 1;
-    const c = this.n * 3;
+    const c = k * 3;
     this.colors[c] = r;
     this.colors[c + 1] = g;
     this.colors[c + 2] = b;
-    this.glows[this.n] = glow;
-    this.n++;
+    this.glows[k] = glow;
+  }
+
+  /**
+   * Slot mode, for a buffer kept in step with a list elsewhere: write cube k, move one cube over
+   * another, set how many are drawn, then `flush()` uploads just the cubes that changed.
+   */
+  put(k: number, x: number, y: number, z: number, s: number, r: number, g: number, b: number, glow: number) {
+    this.write(k, x, y, z, s, r, g, b, glow);
+    this.dirty.push(k);
+  }
+
+  move(from: number, to: number) {
+    this.matrices.copyWithin(to * 16, from * 16, from * 16 + 16);
+    this.colors.copyWithin(to * 3, from * 3, from * 3 + 3);
+    this.glows[to] = this.glows[from];
+    this.dirty.push(to);
+  }
+
+  setCount(n: number) {
+    this.n = n;
+  }
+
+  flush() {
+    this.mesh.count = this.n;
+    const d = this.dirty;
+    if (!d.length && !this.regrown) return;
+    const glow = this.geometry.getAttribute('aGlow') as THREE.InstancedBufferAttribute;
+    const attrs: [THREE.BufferAttribute, number][] = [
+      [this.mesh.instanceMatrix, 16],
+      [this.mesh.instanceColor!, 3],
+      [glow, 1],
+    ];
+    for (const [a] of attrs) {
+      a.needsUpdate = true;
+      a.clearUpdateRanges();
+    }
+    if (this.regrown || d.length > this.n / 8) {
+      for (const [a, w] of attrs) a.addUpdateRange(0, this.n * w);
+    } else {
+      // Changed cubes as a few runs (gaps under 256 cubes are uploaded rather than split on).
+      d.sort((a, b) => a - b);
+      let lo = d[0];
+      let hi = d[0];
+      const emit = () => {
+        for (const [a, w] of attrs) a.addUpdateRange(lo * w, (hi - lo + 1) * w);
+      };
+      for (let q = 1; q < d.length; q++) {
+        if (d[q] - hi > 256) {
+          emit();
+          lo = d[q];
+        }
+        hi = Math.max(hi, d[q]);
+      }
+      emit();
+    }
+    this.dirty.length = 0;
+    this.regrown = false;
   }
 
   end() {
@@ -161,17 +227,19 @@ export class Voxels {
 
   private grow(capacity: number) {
     const old = this.mesh;
-    const [m, c, g, n] = [this.matrices, this.colors, this.glows, this.n];
+    // All of the old buffers (in slot mode, cubes past the count may hold data too).
+    const [m, c, g] = [this.matrices, this.colors, this.glows];
     this.parent.remove(old);
     old.dispose();
     this.mesh = this.build(capacity);
     this.matrices = this.mesh.instanceMatrix.array as Float32Array;
     this.colors = this.mesh.instanceColor!.array as Float32Array;
     this.glows = (this.geometry.getAttribute('aGlow') as THREE.InstancedBufferAttribute).array as Float32Array;
-    this.matrices.set(m.subarray(0, n * 16));
-    this.colors.set(c.subarray(0, n * 3));
-    this.glows.set(g.subarray(0, n));
+    this.matrices.set(m);
+    this.colors.set(c);
+    this.glows.set(g);
     this.from = 0;
+    this.regrown = true;
   }
 }
 
@@ -208,6 +276,8 @@ export interface Stage {
   lift: number;
   /** Key light's bearing from the camera's, radians (to the left). */
   keyTurn: number;
+  /** Skip ambient occlusion (it needs real geometry; dots have none). */
+  noAo: boolean;
 }
 
 /** Scene, camera and lights for a look (the theme's background shows through). */
@@ -224,7 +294,7 @@ export function makeStage(theme: Theme, look: LookId): Stage {
   const rim = new THREE.DirectionalLight(accent, l.key * 0.3);
   rim.position.set(-1, 0.4, -1.2);
   scene.add(rim);
-  return { scene, camera, key, look, cell: 1, lift: 0, keyTurn: 0.8 };
+  return { scene, camera, key, look, cell: 1, lift: 0, keyTurn: 0.8, noAo: false };
 }
 
 /** Point the camera from an orbit (azimuth, elevation in radians, distance) round a target. */
@@ -251,5 +321,134 @@ export function fitDistance(camera: THREE.PerspectiveCamera, r: number, fill = 0
 
 export function drawStage(ctx: Ctx2D, st: Stage) {
   const l = LOOK[st.look];
-  draw3DComposed(ctx, st.scene, st.camera, { exposure: l.exposure, bloom: l.bloom, ao: l.ao ? { radius: l.ao * st.cell } : undefined });
+  draw3DComposed(ctx, st.scene, st.camera, { exposure: l.exposure, bloom: l.bloom, ao: l.ao && !st.noAo ? { radius: l.ao * st.cell } : undefined });
+}
+
+/**
+ * Cells drawn as one shaded square dot each instead of a 12-triangle cube: for patterns so big a cell
+ * is a few pixels across, where a million cubes would be wasted work. Each dot is lit by its own
+ * normal (the way its open faces point), so faceted surfaces still read. Same slot interface as
+ * Voxels' (put / move / setCount / flush).
+ */
+export class Dots {
+  readonly points: THREE.Points;
+  readonly material: THREE.ShaderMaterial;
+  private readonly geometry = new THREE.BufferGeometry();
+  private capacity = 0;
+  private n = 0;
+  private dirty: number[] = [];
+  private regrown = false;
+  private pos!: Float32Array;
+  private col!: Float32Array;
+  private nrm!: Float32Array;
+  private size!: Float32Array;
+  private glow!: Float32Array;
+
+  constructor(parent: THREE.Object3D, look: LookId, capacity: number) {
+    const l = LOOK[look];
+    this.material = new THREE.ShaderMaterial({
+      uniforms: { uScale: { value: 1 }, uLight: { value: new THREE.Vector3(0, 0, 1) }, uAmbient: { value: 0.32 }, uKey: { value: 0.8 }, uGlowBase: { value: l.glowBase } },
+      vertexShader: `
+        attribute vec3 aColor; attribute float aSize; attribute float aGlow;
+        uniform float uScale;
+        varying vec3 vColor; varying vec3 vNormal; varying float vGlow;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = max(1.0, uScale * aSize / -mv.z);
+          vColor = aColor; vGlow = aGlow;
+          vNormal = length(normal) > 0.0 ? normalize(normalMatrix * normal) : vec3(0.0, 0.0, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 uLight; uniform float uAmbient; uniform float uKey; uniform float uGlowBase;
+        varying vec3 vColor; varying vec3 vNormal; varying float vGlow;
+        void main() {
+          float lit = uAmbient + uKey * max(0.0, dot(vNormal, uLight));
+          gl_FragColor = vec4(vColor * (lit + vGlow + uGlowBase), 1.0);
+        }`,
+    });
+    this.points = new THREE.Points(this.geometry, this.material);
+    this.points.frustumCulled = false;
+    this.alloc(capacity);
+    parent.add(this.points);
+  }
+
+  private alloc(capacity: number) {
+    const old = this.capacity ? [this.pos, this.col, this.nrm, this.size, this.glow] : null;
+    this.capacity = capacity;
+    this.pos = new Float32Array(capacity * 3);
+    this.col = new Float32Array(capacity * 3);
+    this.nrm = new Float32Array(capacity * 3);
+    this.size = new Float32Array(capacity);
+    this.glow = new Float32Array(capacity);
+    if (old) [this.pos, this.col, this.nrm, this.size, this.glow].forEach((a, q) => a.set(old[q]));
+    const attr = (a: Float32Array, w: number) => new THREE.BufferAttribute(a, w).setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('position', attr(this.pos, 3));
+    this.geometry.setAttribute('aColor', attr(this.col, 3));
+    this.geometry.setAttribute('normal', attr(this.nrm, 3));
+    this.geometry.setAttribute('aSize', attr(this.size, 1));
+    this.geometry.setAttribute('aGlow', attr(this.glow, 1));
+    this.regrown = true;
+  }
+
+  /** Dot k at (x, y, z), s cells across, colour (r, g, b), glow, lit as if facing (nx, ny, nz). */
+  put(k: number, x: number, y: number, z: number, s: number, r: number, g: number, b: number, glow: number, nx: number, ny: number, nz: number) {
+    if (k >= this.capacity) this.alloc(Math.max(k + 1, this.capacity * 2));
+    const o = k * 3;
+    this.pos[o] = x;
+    this.pos[o + 1] = y;
+    this.pos[o + 2] = z;
+    this.col[o] = r;
+    this.col[o + 1] = g;
+    this.col[o + 2] = b;
+    this.nrm[o] = nx;
+    this.nrm[o + 1] = ny;
+    this.nrm[o + 2] = nz;
+    this.size[k] = s;
+    this.glow[k] = glow;
+    this.dirty.push(k);
+  }
+
+  move(from: number, to: number) {
+    for (const [a, w] of [[this.pos, 3], [this.col, 3], [this.nrm, 3], [this.size, 1], [this.glow, 1]] as [Float32Array, number][]) a.copyWithin(to * w, from * w, from * w + w);
+    this.dirty.push(to);
+  }
+
+  setCount(n: number) {
+    this.n = n;
+  }
+
+  /** Upload what changed, and aim the light and size the dots for this camera. */
+  flush(camera?: THREE.PerspectiveCamera, light?: THREE.Vector3) {
+    this.geometry.setDrawRange(0, this.n);
+    if (camera) this.material.uniforms.uScale.value = (1920 / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.15;
+    if (light) (this.material.uniforms.uLight.value as THREE.Vector3).copy(light);
+    const d = this.dirty;
+    if (!d.length && !this.regrown) return;
+    const attrs = (['position', 'aColor', 'normal', 'aSize', 'aGlow'] as const).map((name) => this.geometry.getAttribute(name) as THREE.BufferAttribute);
+    for (const a of attrs) {
+      a.needsUpdate = true;
+      a.clearUpdateRanges();
+    }
+    // Many changes: one upload of everything beats sorting them.
+    if (this.regrown || d.length > this.n / 8) for (const a of attrs) a.addUpdateRange(0, this.n * a.itemSize);
+    else {
+      d.sort((a, b) => a - b);
+      let lo = d[0];
+      let hi = d[0];
+      const emit = () => {
+        for (const a of attrs) a.addUpdateRange(lo * a.itemSize, (hi - lo + 1) * a.itemSize);
+      };
+      for (let q = 1; q < d.length; q++) {
+        if (d[q] - hi > 256) {
+          emit();
+          lo = d[q];
+        }
+        hi = Math.max(hi, d[q]);
+      }
+      emit();
+    }
+    this.dirty.length = 0;
+    this.regrown = false;
+  }
 }

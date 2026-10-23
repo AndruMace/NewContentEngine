@@ -1,11 +1,13 @@
 /**
  * Voxel grids for the automata. Integer-only, so a run is identical everywhere.
  *
- * Grid3 is an n³ cube stored with a one-cell border of always-empty padding, so neighbour counting
- * never needs bounds checks (counts spill into the padding, which is never updated). Only the box
- * around the non-empty cells is visited each generation.
+ * Grid3 is unbounded (see the class). It keeps every cell's live-neighbour count up to date as cells
+ * change, and each generation only looks at cells that changed or have a neighbour that did: a cell
+ * whose state and count are both unchanged can't change (decaying cells change every generation, so
+ * they are always looked at). The cost follows the growth front, not the size of the pattern. Totals,
+ * the radius and the state hash are kept the same way, so nothing scans the whole grid.
  */
-import type { Rule2, Rule3 } from './rules';
+import type { Neighbourhood, Rule2, Rule3 } from './rules';
 
 export interface GenStats {
   /** Cells that came alive / stopped being alive this generation. */
@@ -14,8 +16,6 @@ export interface GenStats {
   alive: number;
   /** Alive plus decaying. */
   nonzero: number;
-  /** A live cell sits on the cube's outer face. */
-  atEdge: boolean;
   /** Furthest live cell from the centre (cells). */
   radius: number;
   /** Mean position of the births (cells, from the centre), for panning. */
@@ -34,154 +34,335 @@ const VN: [number, number, number][] = [
   [0, 0, -1],
 ];
 
-export class Grid3 {
-  readonly n: number;
-  /** Padded side (n + 2). */
-  readonly p: number;
+/** A random-looking 32-bit key per (cell, state), XORed together into the state hash (Zobrist). */
+function key(i: number, s: number): number {
+  let x = Math.imul(i, 0x9e3779b1) ^ Math.imul(s + 1, 0x85ebca77);
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x85ebca6b);
+  x ^= x >>> 13;
+  x = Math.imul(x, 0xc2b2ae35);
+  return x ^ (x >>> 16);
+}
+
+/** A growable list of cell indices. */
+export class IntList {
+  a = new Int32Array(4096);
+  n = 0;
+  push(v: number) {
+    if (this.n === this.a.length) {
+      const b = new Int32Array(this.a.length * 2);
+      b.set(this.a);
+      this.a = b;
+    }
+    this.a[this.n++] = v;
+  }
+}
+
+const B = 16;
+const B3 = B * B * B;
+/** Chunk coordinates are kept within ±CHUNK_LIMIT (cells within ±16k): far beyond any real run. */
+const CHUNK_LIMIT = 1024;
+const chunkKey = (cx: number, cy: number, cz: number) => ((cx + CHUNK_LIMIT) * 2048 + (cy + CHUNK_LIMIT)) * 2048 + (cz + CHUNK_LIMIT);
+
+/** A 16³ block of cells. */
+interface Chunk {
+  cx: number;
+  cy: number;
+  cz: number;
   /** 0 empty, 1 alive, 2.. decaying. */
-  readonly state: Uint8Array;
+  state: Uint8Array;
+  /** Live neighbours. */
+  count: Uint8Array;
   /** The generation each cell last came alive (for colouring by age). */
-  readonly born: Uint16Array;
-  private readonly count: Uint8Array;
+  born: Uint16Array;
+  /** Dedupes the cells to look at next generation. */
+  stamp: Uint16Array;
+  /** The 27 chunks around this one (13 = itself), by (dx + 1) + 3·(dy + 1) + 9·(dz + 1); -1 if not made yet. */
+  nbr: Int32Array;
+}
+
+/**
+ * An unbounded 3D grid: 16³ chunks made as cells reach them, so memory follows what the pattern
+ * touches, with no walls. A cell is a number, chunk · 4096 + its place in the chunk.
+ */
+export class Grid3 {
+  readonly chunks: Chunk[] = [];
+  private readonly byKey = new Map<number, number>();
+  /** Neighbour offsets: (dx, dy, dz) and, for a cell inside its chunk, the plain index step. */
+  private readonly dirs: Int32Array;
+  private readonly steps: Int32Array;
+  /** Cells to look at next generation. */
+  private cand = new IntList();
+  private spare = new IntList();
+  /** The last generation's changes: each cell and the state it had before. */
+  readonly changed = new IntList();
+  private was = new Uint8Array(4096);
+  /**
+   * When set (visual runs), every cell that changes is also appended here until the renderer drains
+   * it: as the cell when it filled or emptied, as ~cell (negative) when it only went from one
+   * non-empty state to another (which can't change what its neighbours show).
+   */
+  log: IntList | null = null;
   gen = 0;
-  /** Inclusive box of the non-empty cells (lo > hi when empty). */
-  lo: [number, number, number];
-  hi: [number, number, number];
+  alive = 0;
+  nonzero = 0;
+  /** Live cells at each squared distance from the centre (in half-cells, so it stays whole). */
+  private r2Count = new Int32Array(1024);
+  private r2Max = 0;
+  private h = 0;
+  /** Pending new states during a step. */
+  private next = new IntList();
 
-  constructor(n: number) {
-    this.n = n;
-    this.p = n + 2;
-    const size = this.p ** 3;
-    this.state = new Uint8Array(size);
-    this.born = new Uint16Array(size);
-    this.count = new Uint8Array(size);
-    this.lo = [n, n, n];
-    this.hi = [-1, -1, -1];
+  constructor(nb: Neighbourhood) {
+    const d = nb === 'vn' ? VN : MOORE;
+    this.dirs = Int32Array.from(d.flat());
+    this.steps = Int32Array.from(d.map(([dx, dy, dz]) => dx + B * dy + B * B * dz));
   }
 
-  idx(x: number, y: number, z: number): number {
-    return x + 1 + this.p * (y + 1 + this.p * (z + 1));
+  /** Cells the chunks made so far can hold (the memory a run is using). */
+  get capacity(): number {
+    return this.chunks.length * B3;
   }
 
-  get(x: number, y: number, z: number): number {
-    return this.state[this.idx(x, y, z)];
+  /** The chunk at chunk coordinates, made if asked and missing (-1 otherwise). */
+  private chunkAt(cx: number, cy: number, cz: number, make: boolean): number {
+    const k = chunkKey(cx, cy, cz);
+    const found = this.byKey.get(k);
+    if (found !== undefined) return found;
+    if (!make) return -1;
+    if (Math.abs(cx) >= CHUNK_LIMIT || Math.abs(cy) >= CHUNK_LIMIT || Math.abs(cz) >= CHUNK_LIMIT) throw new Error('Grid3: pattern grew too far');
+    const id = this.chunks.length;
+    const c: Chunk = { cx, cy, cz, state: new Uint8Array(B3), count: new Uint8Array(B3), born: new Uint16Array(B3), stamp: new Uint16Array(B3), nbr: new Int32Array(27).fill(-1) };
+    c.nbr[13] = id;
+    this.chunks.push(c);
+    this.byKey.set(k, id);
+    // Link with the chunks already around it, both ways.
+    for (let dz = -1; dz <= 1; dz++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy && !dz) continue;
+          const o = this.byKey.get(chunkKey(cx + dx, cy + dy, cz + dz));
+          if (o === undefined) continue;
+          c.nbr[dx + 1 + 3 * (dy + 1) + 9 * (dz + 1)] = o;
+          this.chunks[o].nbr[1 - dx + 3 * (1 - dy) + 9 * (1 - dz)] = id;
+        }
+    return id;
   }
 
-  set(x: number, y: number, z: number, v: number) {
-    this.state[this.idx(x, y, z)] = v;
-    this.born[this.idx(x, y, z)] = this.gen;
-    if (v) {
-      this.lo = [Math.min(this.lo[0], x), Math.min(this.lo[1], y), Math.min(this.lo[2], z)];
-      this.hi = [Math.max(this.hi[0], x), Math.max(this.hi[1], y), Math.max(this.hi[2], z)];
+  /** The cell at world coordinates (made if asked; -1 if missing otherwise). */
+  cellAt(x: number, y: number, z: number, make = false): number {
+    const c = this.chunkAt(x >> 4, y >> 4, z >> 4, make);
+    return c < 0 ? -1 : c * B3 + (x & 15) + B * (y & 15) + B * B * (z & 15);
+  }
+
+  /** The cell one step (dx, dy, dz) from a cell: -1 if its chunk doesn't exist and `make` is off. */
+  neighbour(id: number, dx: number, dy: number, dz: number, make: boolean): number {
+    const ci = id >> 12;
+    const l = id & 4095;
+    const x = (l & 15) + dx;
+    const y = ((l >> 4) & 15) + dy;
+    const z = (l >> 8) + dz;
+    if ((x | y | z) >= 0 && x < B && y < B && z < B) return id + dx + B * dy + B * B * dz;
+    const sx = x < 0 ? -1 : x >= B ? 1 : 0;
+    const sy = y < 0 ? -1 : y >= B ? 1 : 0;
+    const sz = z < 0 ? -1 : z >= B ? 1 : 0;
+    let nc = this.chunks[ci].nbr[sx + 1 + 3 * (sy + 1) + 9 * (sz + 1)];
+    if (nc < 0) {
+      if (!make) return -1;
+      const c = this.chunks[ci];
+      nc = this.chunkAt(c.cx + sx, c.cy + sy, c.cz + sz, true);
+    }
+    return nc * B3 + (x & 15) + B * (y & 15) + B * B * (z & 15);
+  }
+
+  /** World coordinates of a cell. */
+  xyz(id: number, out: Int32Array) {
+    const c = this.chunks[id >> 12];
+    const l = id & 4095;
+    out[0] = c.cx * B + (l & 15);
+    out[1] = c.cy * B + ((l >> 4) & 15);
+    out[2] = c.cz * B + (l >> 8);
+  }
+
+  state(id: number): number {
+    return this.chunks[id >> 12].state[id & 4095];
+  }
+
+  born(id: number): number {
+    return this.chunks[id >> 12].born[id & 4095];
+  }
+
+  /** The sum of the directions of a cell's open faces (a rough outward normal), into out. */
+  openDirection(id: number, out: Float32Array) {
+    out.fill(0);
+    for (const [dx, dy, dz] of VN) {
+      const n = this.neighbour(id, dx, dy, dz, false);
+      if (n >= 0 && this.state(n)) continue;
+      out[0] += dx;
+      out[1] += dy;
+      out[2] += dz;
     }
   }
 
+  /** Whether any of a cell's six faces is open (its face neighbour empty or not made). */
+  faceOpen(id: number): boolean {
+    const l = id & 4095;
+    const x = l & 15;
+    const y = (l >> 4) & 15;
+    const z = l >> 8;
+    if (x > 0 && x < B - 1 && y > 0 && y < B - 1 && z > 0 && z < B - 1) {
+      const st = this.chunks[id >> 12].state;
+      return !st[l + 1] || !st[l - 1] || !st[l + B] || !st[l - B] || !st[l + B * B] || !st[l - B * B];
+    }
+    for (const [dx, dy, dz] of VN) {
+      const n = this.neighbour(id, dx, dy, dz, false);
+      if (n < 0 || !this.state(n)) return true;
+    }
+    return false;
+  }
+
+  /** Set a cell directly (seeding), at world coordinates. */
+  set(x: number, y: number, z: number, v: number) {
+    const id = this.cellAt(x, y, z, true);
+    this.change(id, v);
+    if (v === 1) this.chunks[id >> 12].born[id & 4095] = this.gen;
+  }
+
   get empty(): boolean {
-    return this.lo[0] > this.hi[0];
+    return this.nonzero === 0;
+  }
+
+  /** Furthest live cell from the centre (cells). The centre is between cells, at (-½, -½, -½). */
+  get radius(): number {
+    return Math.sqrt(this.r2Max) / 2;
+  }
+
+  /** The state hash: equal states give equal hashes, to spot a pattern that has stopped changing or cycles. */
+  hash(): number {
+    return this.h >>> 0;
+  }
+
+  /** The state a cell of the last generation's `changed` list had before it (by position in the list). */
+  wasAt(k: number): number {
+    return this.was[k];
+  }
+
+  private addCand(id: number) {
+    const c = this.chunks[id >> 12];
+    const tag = (this.gen + 1) & 0xffff;
+    if (c.stamp[id & 4095] === tag) return;
+    c.stamp[id & 4095] = tag;
+    this.cand.push(id);
+  }
+
+  /** Set a cell's state, keeping counts, totals, the hash and next generation's cells to look at. */
+  private change(id: number, v: number) {
+    const ch = this.chunks[id >> 12];
+    const l = id & 4095;
+    const s = ch.state[l];
+    if (s === v) return;
+    ch.state[l] = v;
+    if (s) this.h ^= key(id, s);
+    if (v) this.h ^= key(id, v);
+    if (!s) this.nonzero++;
+    if (!v) this.nonzero--;
+    this.log?.push(s && v ? ~id : id);
+    this.addCand(id);
+    if ((s === 1) === (v === 1)) return;
+    // Live status changed: every neighbour's count moves, and they may change next.
+    const d = v === 1 ? 1 : -1;
+    const x = l & 15;
+    const y = (l >> 4) & 15;
+    const z = l >> 8;
+    const { steps, dirs } = this;
+    if (x > 0 && x < B - 1 && y > 0 && y < B - 1 && z > 0 && z < B - 1) {
+      // Inside the chunk: plain index steps, and the candidate dedupe inlined (this is the hot path).
+      const { count, stamp } = ch;
+      const tag = (this.gen + 1) & 0xffff;
+      const cand = this.cand;
+      for (let q = 0; q < steps.length; q++) {
+        const n = l + steps[q];
+        count[n] += d;
+        if (stamp[n] !== tag) {
+          stamp[n] = tag;
+          if (cand.n === cand.a.length) cand.push(id + steps[q]);
+          else cand.a[cand.n++] = id + steps[q];
+        }
+      }
+    } else {
+      for (let q = 0; q < steps.length; q++) {
+        const n = this.neighbour(id, dirs[3 * q], dirs[3 * q + 1], dirs[3 * q + 2], true);
+        this.chunks[n >> 12].count[n & 4095] += d;
+        this.addCand(n);
+      }
+    }
+    this.alive += d;
+    const wx = ch.cx * B + x;
+    const wy = ch.cy * B + y;
+    const wz = ch.cz * B + z;
+    const r2 = (2 * wx + 1) ** 2 + (2 * wy + 1) ** 2 + (2 * wz + 1) ** 2;
+    if (r2 >= this.r2Count.length) {
+      const bigger = new Int32Array(Math.max(r2 + 1, this.r2Count.length * 2));
+      bigger.set(this.r2Count);
+      this.r2Count = bigger;
+    }
+    if (d > 0) {
+      this.r2Count[r2]++;
+      if (r2 > this.r2Max) this.r2Max = r2;
+    } else {
+      this.r2Count[r2]--;
+      while (this.r2Max > 0 && this.r2Count[this.r2Max] === 0) this.r2Max--;
+    }
   }
 
   /** Advance one generation. */
   step(rule: Rule3): GenStats {
-    const { n, p, state, count, born } = this;
     const gen = ++this.gen;
-    const stats: GenStats = { births: 0, deaths: 0, alive: 0, nonzero: 0, atEdge: false, radius: 0, bx: 0, by: 0 };
-    if (this.empty) return stats;
-    const offs = (rule.nb === 'vn' ? VN : MOORE).map(([dx, dy, dz]) => dx + p * (dy + p * dz));
-    const [lx, ly, lz] = this.lo;
-    const [hx, hy, hz] = this.hi;
-    // Scatter: every live cell adds one to each neighbour.
-    for (let z = lz; z <= hz; z++)
-      for (let y = ly; y <= hy; y++) {
-        let i = this.idx(lx, y, z);
-        for (let x = lx; x <= hx; x++, i++) if (state[i] === 1) for (const o of offs) count[i + o]++;
-      }
-    const x0 = Math.max(0, lx - 1);
-    const y0 = Math.max(0, ly - 1);
-    const z0 = Math.max(0, lz - 1);
-    const x1 = Math.min(n - 1, hx + 1);
-    const y1 = Math.min(n - 1, hy + 1);
-    const z1 = Math.min(n - 1, hz + 1);
-    const lo: [number, number, number] = [n, n, n];
-    const hi: [number, number, number] = [-1, -1, -1];
-    const c = (n - 1) / 2;
-    let r2 = 0;
+    const stats: GenStats = { births: 0, deaths: 0, alive: 0, nonzero: 0, radius: 0, bx: 0, by: 0 };
+    // Work out every candidate's new state first (all at once), then apply the changes.
+    const list = this.cand;
+    this.cand = this.spare;
+    this.cand.n = 0;
+    this.spare = list;
     const { survive, birth, states } = rule;
-    for (let z = z0; z <= z1; z++)
-      for (let y = y0; y <= y1; y++) {
-        let i = this.idx(x0, y, z);
-        for (let x = x0; x <= x1; x++, i++) {
-          const s = state[i];
-          const k = count[i];
-          count[i] = 0;
-          let v: number;
-          if (s === 0) v = (birth >>> k) & 1;
-          else if (s === 1) v = (survive >>> k) & 1 ? 1 : states > 2 ? 2 : 0;
-          else v = s + 1 < states ? s + 1 : 0;
-          if (v !== s) {
-            state[i] = v;
-            if (v === 1) {
-              born[i] = gen;
-              stats.births++;
-              stats.bx += x - c;
-              stats.by += y - c;
-            } else if (s === 1) stats.deaths++;
-          }
-          if (v === 0) continue;
-          stats.nonzero++;
-          if (x < lo[0]) lo[0] = x;
-          if (y < lo[1]) lo[1] = y;
-          if (z < lo[2]) lo[2] = z;
-          if (x > hi[0]) hi[0] = x;
-          if (y > hi[1]) hi[1] = y;
-          if (z > hi[2]) hi[2] = z;
-          if (v !== 1) continue;
-          stats.alive++;
-          if (x === 0 || y === 0 || z === 0 || x === n - 1 || y === n - 1 || z === n - 1) stats.atEdge = true;
-          const d2 = (x - c) ** 2 + (y - c) ** 2 + (z - c) ** 2;
-          if (d2 > r2) r2 = d2;
-        }
+    const { next, changed, chunks } = this;
+    next.n = 0;
+    changed.n = 0;
+    for (let k = 0; k < list.n; k++) {
+      const id = list.a[k];
+      const ch = chunks[id >> 12];
+      const s = ch.state[id & 4095];
+      const c = ch.count[id & 4095];
+      const v = s === 0 ? (birth >>> c) & 1 : s === 1 ? ((survive >>> c) & 1 ? 1 : states > 2 ? 2 : 0) : s + 1 < states ? s + 1 : 0;
+      if (v !== s) {
+        changed.push(id);
+        next.push(v);
       }
-    // Where the box was clamped at the cube's face, counts spilled into the padding: clear them.
-    this.clearRing(x0 - 1, y0 - 1, z0 - 1, x1 + 1, y1 + 1, z1 + 1);
-    this.lo = lo;
-    this.hi = hi;
-    stats.radius = Math.sqrt(r2);
+    }
+    if (this.was.length < changed.n) this.was = new Uint8Array(changed.a.length);
+    const at = new Int32Array(3);
+    for (let k = 0; k < changed.n; k++) {
+      const id = changed.a[k];
+      const s = this.state(id);
+      const v = next.a[k];
+      this.was[k] = s;
+      this.change(id, v);
+      if (v === 1) {
+        chunks[id >> 12].born[id & 4095] = gen;
+        stats.births++;
+        this.xyz(id, at);
+        stats.bx += at[0] + 0.5;
+        stats.by += at[1] + 0.5;
+      } else if (s === 1) stats.deaths++;
+    }
+    stats.alive = this.alive;
+    stats.nonzero = this.nonzero;
+    stats.radius = this.radius;
     if (stats.births) {
       stats.bx /= stats.births;
       stats.by /= stats.births;
     }
     return stats;
-  }
-
-  /** Zero the counts on the outer shell of a box (padded coordinates may be -1 or n). */
-  private clearRing(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) {
-    const { count } = this;
-    for (let z = z0; z <= z1; z++)
-      for (let y = y0; y <= y1; y++) {
-        const face = z === z0 || z === z1 || y === y0 || y === y1;
-        if (face) count.fill(0, this.idx(x0, y, z), this.idx(x1, y, z) + 1);
-        else {
-          count[this.idx(x0, y, z)] = 0;
-          count[this.idx(x1, y, z)] = 0;
-        }
-      }
-  }
-
-  /** Hash of the non-empty region, to spot a pattern that has stopped changing or cycles. */
-  hash(): number {
-    let h = 0x811c9dc5;
-    const mix = (v: number) => {
-      h ^= v;
-      h = Math.imul(h, 0x01000193) >>> 0;
-    };
-    for (const v of [...this.lo, ...this.hi]) mix(v & 0xff);
-    if (this.empty) return h;
-    for (let z = this.lo[2]; z <= this.hi[2]; z++)
-      for (let y = this.lo[1]; y <= this.hi[1]; y++) {
-        let i = this.idx(this.lo[0], y, z);
-        for (let x = this.lo[0]; x <= this.hi[0]; x++, i++) mix(this.state[i]);
-      }
-    return h;
   }
 }
 
@@ -215,67 +396,213 @@ export interface LifeStats {
   alive: number;
 }
 
-/** A 2D Life-like board (w × w), optionally wrapping round its edges (a torus). */
+/** Side of the tiles a Life board is split into: only tiles with recent changes are recomputed. */
+const TILE = 8;
+/** An unbounded board never grows beyond this (its edge is then a wall). */
+export const MAX_LIFE_BOARD = 8192;
+
+/**
+ * A 2D Life-like board. Unbounded: it starts w × w and grows by half (re-centred) whenever live cells get
+ * near an edge, so patterns run as on an infinite plane. Or a torus of fixed size (`wrap`).
+ *
+ * Cells are stored with a one-cell border (empty, or holding the wrapped-round cells), so neighbour
+ * sums need no edge cases. Only tiles where something changed last generation, or next to one, are
+ * recomputed: elsewhere nothing can change, and the other buffer already holds the same cells (they
+ * didn't change last time either). Empty space costs nothing.
+ *
+ * Positions outside are "world" coordinates: where the starting cells were set, however far the
+ * board has grown since.
+ */
 export class Life2 {
-  readonly w: number;
+  w: number;
   readonly wrap: boolean;
-  cells: Uint8Array;
-  private nextCells: Uint8Array;
+  /** World (x, y) is board cell (x + off, y + off). */
+  off = 0;
+  /** Padded side (w + 2). */
+  private pw: number;
+  private cur: Uint8Array;
+  private nxt: Uint8Array;
+  private tw: number;
+  /** Tiles that changed last generation. */
+  private active: IntList = new IntList();
+  private nextActive: IntList = new IntList();
+  private dirtyStamp: Uint32Array;
+  /** Live cells per tile. */
+  private tileAlive: Int32Array;
+  private h = 0;
+  private alive = 0;
   gen = 0;
 
   constructor(w: number, wrap: boolean) {
-    this.w = w;
     this.wrap = wrap;
-    this.cells = new Uint8Array(w * w);
-    this.nextCells = new Uint8Array(w * w);
+    this.w = w;
+    this.pw = w + 2;
+    this.cur = new Uint8Array(this.pw * this.pw);
+    this.nxt = new Uint8Array(this.pw * this.pw);
+    this.tw = Math.ceil(w / TILE);
+    this.dirtyStamp = new Uint32Array(this.tw * this.tw);
+    this.tileAlive = new Int32Array(this.tw * this.tw);
   }
 
-  get(x: number, y: number): number {
-    return this.cells[x + y * this.w];
+  get population(): number {
+    return this.alive;
   }
 
-  set(x: number, y: number, v: number) {
+  /** Set a cell (world coordinates; ignored off a torus or a full-grown board). */
+  set(wx: number, wy: number, v: number) {
+    const x = wx + this.off;
+    const y = wy + this.off;
     if (x < 0 || y < 0 || x >= this.w || y >= this.w) return;
-    this.cells[x + y * this.w] = v;
+    const i = x + 1 + (y + 1) * this.pw;
+    if (this.cur[i] === v) return;
+    this.h ^= key(x + y * this.w, 0);
+    const d = v ? 1 : -1;
+    this.alive += d;
+    this.cur[i] = v;
+    const t = Math.floor(y / TILE) * this.tw + Math.floor(x / TILE);
+    this.tileAlive[t] += d;
+    this.active.push(t);
+    if (this.wrap) this.syncBorder(this.cur);
+  }
+
+  /** Live cells in world coordinates, as x, y pairs. */
+  liveCells(): Int32Array {
+    const { w, pw, tw, cur, tileAlive, off } = this;
+    const out = new Int32Array(this.alive * 2);
+    let n = 0;
+    for (let t = 0; t < tileAlive.length; t++) {
+      if (!tileAlive[t]) continue;
+      const x0 = (t % tw) * TILE;
+      const y0 = Math.floor(t / tw) * TILE;
+      for (let y = y0; y < Math.min(w, y0 + TILE); y++)
+        for (let x = x0, i = x0 + 1 + (y + 1) * pw; x < Math.min(w, x0 + TILE); x++, i++)
+          if (cur[i]) {
+            out[n++] = x - off;
+            out[n++] = y - off;
+          }
+    }
+    return out;
+  }
+
+  /** Copy the opposite edges (and corners) into the border, for a wrapping board. */
+  private syncBorder(b: Uint8Array) {
+    const { w, pw } = this;
+    for (let y = 1; y <= w; y++) {
+      b[y * pw] = b[y * pw + w];
+      b[y * pw + w + 1] = b[y * pw + 1];
+    }
+    b.copyWithin(0, w * pw, w * pw + pw);
+    b.copyWithin((w + 1) * pw, pw, 2 * pw);
+  }
+
+  /** Whether a live tile sits in the outer ring of tiles (time to grow). */
+  private nearEdge(): boolean {
+    const { tw, tileAlive } = this;
+    for (let k = 0; k < tw; k++)
+      if (tileAlive[k] || tileAlive[(tw - 1) * tw + k] || tileAlive[k * tw] || tileAlive[k * tw + tw - 1]) return true;
+    return false;
+  }
+
+  /** Grow the board by half, keeping the cells centred. */
+  private grow() {
+    const { w: ow, pw: opw, cur } = this;
+    const w = Math.min(MAX_LIFE_BOARD, Math.ceil((ow * 1.5) / TILE) * TILE);
+    const shift = Math.floor((w - ow) / 2);
+    const pw = w + 2;
+    const next = new Uint8Array(pw * pw);
+    for (let y = 0; y < ow; y++) next.set(cur.subarray((y + 1) * opw + 1, (y + 1) * opw + 1 + ow), (y + 1 + shift) * pw + 1 + shift);
+    this.w = w;
+    this.pw = pw;
+    this.off += shift;
+    this.cur = next;
+    this.nxt = new Uint8Array(pw * pw);
+    this.tw = Math.ceil(w / TILE);
+    this.dirtyStamp = new Uint32Array(this.tw * this.tw);
+    this.tileAlive = new Int32Array(this.tw * this.tw);
+    // Recount the tiles and the hash for the new layout; every live tile is looked at next step.
+    this.active.n = 0;
+    this.h = 0;
+    for (let y = 0; y < w; y++)
+      for (let x = 0, i = (y + 1) * pw + 1; x < w; x++, i++)
+        if (next[i]) {
+          const t = Math.floor(y / TILE) * this.tw + Math.floor(x / TILE);
+          if (!this.tileAlive[t]++) this.active.push(t);
+          this.h ^= key(x + y * w, 0);
+        }
   }
 
   step(rule: Rule2): LifeStats {
-    const { w, wrap, cells, nextCells } = this;
-    const stats: LifeStats = { births: 0, deaths: 0, alive: 0 };
-    for (let y = 0; y < w; y++) {
-      const ym = y === 0 ? (wrap ? w - 1 : -1) : y - 1;
-      const yp = y === w - 1 ? (wrap ? 0 : -1) : y + 1;
-      for (let x = 0; x < w; x++) {
-        const xm = x === 0 ? (wrap ? w - 1 : -1) : x - 1;
-        const xp = x === w - 1 ? (wrap ? 0 : -1) : x + 1;
-        let k = 0;
-        for (const yy of [ym, y, yp]) {
-          if (yy < 0) continue;
-          const row = yy * w;
-          if (xm >= 0) k += cells[row + xm];
-          if (yy !== y) k += cells[row + x];
-          if (xp >= 0) k += cells[row + xp];
+    if (!this.wrap && this.w < MAX_LIFE_BOARD && this.nearEdge()) this.grow();
+    const { w, pw, tw, wrap, cur, nxt, tileAlive } = this;
+    const { birth, survive } = rule;
+    const tag = ++this.gen;
+    // Tiles to recompute: every tile that changed last generation and the eight around it.
+    const dirty: number[] = [];
+    const act = this.active;
+    for (let k = 0; k < act.n; k++) {
+      const t = act.a[k];
+      const tx = t % tw;
+      const ty = Math.floor(t / tw);
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          let x = tx + dx;
+          let y = ty + dy;
+          if (x < 0 || y < 0 || x >= tw || y >= tw) {
+            if (!wrap) continue;
+            x = (x + tw) % tw;
+            y = (y + tw) % tw;
+          }
+          const u = y * tw + x;
+          if (this.dirtyStamp[u] === tag) continue;
+          this.dirtyStamp[u] = tag;
+          dirty.push(u);
         }
-        const s = cells[x + y * w];
-        const v = s ? (rule.survive >>> k) & 1 : (rule.birth >>> k) & 1;
-        nextCells[x + y * w] = v;
-        if (v && !s) stats.births++;
-        else if (s && !v) stats.deaths++;
-        stats.alive += v;
-      }
     }
-    this.cells = nextCells;
-    this.nextCells = cells;
-    this.gen++;
-    return stats;
+    const nextActive = this.nextActive;
+    nextActive.n = 0;
+    let births = 0;
+    let deaths = 0;
+    let h = this.h;
+    for (const t of dirty) {
+      const x0 = (t % tw) * TILE;
+      const y0 = Math.floor(t / tw) * TILE;
+      const x1 = Math.min(w, x0 + TILE);
+      const y1 = Math.min(w, y0 + TILE);
+      let changed = false;
+      let live = 0;
+      for (let y = y0; y < y1; y++) {
+        let mid = x0 + 1 + (y + 1) * pw;
+        for (let x = x0; x < x1; x++, mid++) {
+          const up = mid - pw;
+          const dn = mid + pw;
+          const k = cur[up - 1] + cur[up] + cur[up + 1] + cur[mid - 1] + cur[mid + 1] + cur[dn - 1] + cur[dn] + cur[dn + 1];
+          const s = cur[mid];
+          const v = s ? (survive >>> k) & 1 : (birth >>> k) & 1;
+          nxt[mid] = v;
+          live += v;
+          if (v !== s) {
+            changed = true;
+            h ^= key(x + y * w, 0);
+            if (v) births++;
+            else deaths++;
+          }
+        }
+      }
+      tileAlive[t] = live;
+      if (changed) nextActive.push(t);
+    }
+    if (wrap) this.syncBorder(nxt);
+    this.h = h;
+    this.alive += births - deaths;
+    this.cur = nxt;
+    this.nxt = cur;
+    this.nextActive = act;
+    this.active = nextActive;
+    return { births, deaths, alive: this.alive };
   }
 
+  /** The state hash: equal boards (of the same size) give equal hashes. */
   hash(): number {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < this.cells.length; i++) {
-      h ^= this.cells[i];
-      h = Math.imul(h, 0x01000193) >>> 0;
-    }
-    return h;
+    return this.h >>> 0;
   }
 }
