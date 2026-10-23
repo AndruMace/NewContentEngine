@@ -82,9 +82,11 @@ export class Voxels {
     capacity = 4096,
     /** Plain boxes (a twelfth of the triangles) for scenes with very many cubes. */
     plain = false,
+    /** Gap between cubes, instead of the look's. */
+    gap?: number,
   ) {
     const l = LOOK[look];
-    const side = 1 - l.gap;
+    const side = 1 - (gap ?? l.gap);
     this.geometry = plain ? new THREE.BoxGeometry(side, side, side) : new RoundedBoxGeometry(side, side, side, 2, l.bevel * side);
     this.mesh = this.build(capacity);
     this.matrices = this.mesh.instanceMatrix.array as Float32Array;
@@ -202,6 +204,10 @@ export interface Stage {
   look: LookId;
   /** World size of a cell (AO radius scales with it). */
   cell: number;
+  /** Pixels the picture is shifted up (to clear text at the bottom). */
+  lift: number;
+  /** Key light's bearing from the camera's, radians (to the left). */
+  keyTurn: number;
 }
 
 /** Scene, camera and lights for a look (the theme's background shows through). */
@@ -218,7 +224,7 @@ export function makeStage(theme: Theme, look: LookId): Stage {
   const rim = new THREE.DirectionalLight(accent, l.key * 0.3);
   rim.position.set(-1, 0.4, -1.2);
   scene.add(rim);
-  return { scene, camera, key, look, cell: 1 };
+  return { scene, camera, key, look, cell: 1, lift: 0, keyTurn: 0.8 };
 }
 
 /** Point the camera from an orbit (azimuth, elevation in radians, distance) round a target. */
@@ -227,10 +233,12 @@ export function orbit(st: Stage, target: THREE.Vector3, az: number, el: number, 
   camera.position.set(target.x + Math.cos(el) * Math.sin(az) * dist, target.y + Math.sin(el) * dist, target.z + Math.cos(el) * Math.cos(az) * dist);
   camera.near = Math.max(0.5, dist * 0.05);
   camera.far = dist * 6;
+  if (st.lift) camera.setViewOffset(1080, 1920, 0, st.lift, 1080, 1920);
+  else camera.clearViewOffset();
   camera.updateProjectionMatrix();
   camera.lookAt(target);
   // The key light rides with the camera, up and to the left, so the lit side always faces the viewer.
-  key.position.set(target.x + Math.sin(az - 0.8) * dist, target.y + dist * 0.9, target.z + Math.cos(az - 0.8) * dist);
+  key.position.set(target.x + Math.sin(az - st.keyTurn) * dist, target.y + dist * 0.9, target.z + Math.cos(az - st.keyTurn) * dist);
   key.target.position.copy(target);
 }
 

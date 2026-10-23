@@ -6,19 +6,20 @@
  * end to show the whole tower.
  */
 import type { DramaScore } from '@sim/engine';
-import { gaussFit } from '../../scoring';
 import { THREE, sceneCache } from '../../three-layer';
 import { CycleWatch, Life2, type LifeStats } from '../grid';
-import { LIFE_RULES, parseRule2, type LifeRuleId, type Rule2 } from '../rules';
+import { LIFE_RULES, describeRule2, parseRule2, type LifeRuleId, type Rule2 } from '../rules';
 import { LIFE_PATTERNS, LIFE_PATTERN_IDS, lifeStart, type LifePatternId } from '../seeds';
 import type { AutomataParams } from '../params';
 import { Palette, Voxels, drawStage, fitDistance, makeStage, orbit, voxelMaterial } from '../view';
-import { clamp01, drawCounter, ev, evName, fmtInt, genSchedule, lerp, smooth, velOf, type ModeImpl } from '../shared';
+import { EXPLAIN_LIFT, clamp01, drawCounter, durationFit, drawExplainer, ev, evName, fmtInt, genSchedule, lerp, smooth, velOf, type ModeImpl } from '../shared';
 
 const INTRO_S = 1.4;
 const OUTRO_S = 5;
 /** Generations per second at the start (later ones speed up to fit). */
 const START_RATE = 7;
+/** Slowest pace (generations per second) for a pattern that ends early. */
+const MIN_RATE = 10;
 const MAX_GENS = 2400;
 /** At most this many layers stacked per second (faster runs stack every few generations). */
 const LAYER_RATE = 14;
@@ -98,8 +99,9 @@ export const towerMode: ModeImpl<State> = {
     const plan = planRun(startBoard(w, p.wrap, cells), rule);
     const board = startBoard(w, p.wrap, cells);
     const span = Math.max(4, p.durationS - INTRO_S - OUTRO_S);
-    // A short-lived pattern isn't stretched out: it plays at a watchable pace and the video is shorter.
-    const used = Math.min(span, Math.max(plan.gens / 2.5, 4));
+    // A short-lived pattern isn't stretched out to fill the length: it plays at least this fast and
+    // the video is shorter.
+    const used = Math.min(span, Math.max(plan.gens / MIN_RATE, 2));
     const schedule = genSchedule(plan.gens, used, START_RATE);
     const start = cells.length;
     return {
@@ -165,8 +167,7 @@ export const towerMode: ModeImpl<State> = {
     v.history.keep(v.drawnCells);
     for (let j = v.drawnLayers; j < s.layers.length; j++) {
       const layer = s.layers[j];
-      const u = layer.gen / Math.max(1, s.gens);
-      v.palette.write(col, 0, u);
+      historyColor(v.palette, col, layer.gen, s.gens);
       for (const i of layer.cells) v.history.push((i % w) - half, j + 0.5, Math.floor(i / w) - half, 1, col[0], col[1], col[2], 0);
     }
     v.history.end();
@@ -202,15 +203,20 @@ export const towerMode: ModeImpl<State> = {
 
   renderTop({ ctx, theme }, s) {
     const label = `${LIFE_PATTERNS[s.pattern].label} · ${LIFE_RULES[s.ruleId].label}`;
+    const top = s.p.explain ? drawExplainer(ctx, towerMode.explain(s), s.t) : null;
     drawCounter(ctx, theme, {
       t: s.t,
       title: label,
       gen: s.board.gen,
       line: `${fmtInt(s.alive)} cells`,
       flash: s.ended ? Math.exp(-(s.t - s.growEnd) * 4) : 0,
-      y: 1920 * 0.83,
+      y: top === null ? 1920 * 0.83 : top - 130,
       endAt: s.ended ? s.growEnd : undefined,
     });
+  },
+
+  explain(s) {
+    return `${LIFE_RULES[s.ruleId].label}: ${describeRule2(s.rule)} Each generation is stacked on the last, so the tower is the pattern's whole history.`;
   },
 
   audio(e, { melody, theme, lastNoteT }) {
@@ -237,7 +243,7 @@ export const towerMode: ModeImpl<State> = {
 
   score(events, { durationS, targetS }): DramaScore {
     const end = events.find((e) => evName(e) === 'end');
-    const durFit = gaussFit(durationS, targetS, targetS * 0.2);
+    const durFit = durationFit(durationS, targetS);
     if (!end) return { total: 0.01, parts: { durFit }, notes: ['no end'] };
     const gens = end.gen as number;
     // Long enough to build a tower worth seeing.
@@ -270,9 +276,30 @@ function resultLine(s: State): string {
   }
 }
 
+/** Generations per colour band in the tower: a round number giving about 15 bands. */
+function bandOf(gens: number): number {
+  const raw = Math.max(1, gens / 15);
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map((m) => m * pow).find((b) => b >= raw) ?? raw;
+}
+
+/**
+ * A history layer's colour: the palette along the run, toned down (darker, less saturated) so the
+ * shapes read rather than glare, with every other band of generations a shade darker to mark time.
+ */
+function historyColor(palette: Palette, out: Float32Array, gen: number, gens: number) {
+  palette.write(out, 0, gen / Math.max(1, gens));
+  const k = Math.floor(gen / bandOf(gens)) % 2 ? 0.26 : 0.36;
+  const luma = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+  for (let q = 0; q < 3; q++) out[q] = (luma + (out[q] - luma) * 0.55) * k;
+}
+
 const view = sceneCache((s: State, theme) => {
   const stage = makeStage(theme, s.p.look);
-  const history = new Voxels(stage.scene, voxelMaterial(s.p.look), s.p.look, 32768, true);
+  stage.lift = s.p.explain ? EXPLAIN_LIFT : 0;
+  const history = new Voxels(stage.scene, voxelMaterial(s.p.look), s.p.look, 32768, true, 0.16);
+  // Lit from the side, so a cube's top and sides differ and the shapes read.
+  stage.keyTurn = 1.4;
   const live = new Voxels(stage.scene, voxelMaterial(s.p.look), s.p.look, 2048);
   // A dark plate under the board.
   const plate = new THREE.Mesh(new THREE.BoxGeometry(s.w + 2, 0.4, s.w + 2), new THREE.MeshStandardMaterial({ color: new THREE.Color(theme.bg[1]).multiplyScalar(1.6), roughness: 0.7 }));

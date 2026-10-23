@@ -3,7 +3,7 @@ import { Rng, Runner, getTheme, hashString } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { automata3d } from './index';
 import { CycleWatch, Grid3, Life2 } from './grid';
-import { CRYSTAL_PRESETS, parseRule2, parseRule3, type Rule3 } from './rules';
+import { CRYSTAL_PRESETS, countsText, describeRule2, parseRule2, parseRule3, type Rule3 } from './rules';
 import { lifeStart, symmetricSeed } from './seeds';
 
 /** Straightforward reference step (no bounding box, no padding tricks). */
@@ -38,6 +38,14 @@ describe('rules', () => {
     const r = parseRule3('0-2,5/1,3/4/VN');
     expect(r).toEqual({ survive: 0b100111, birth: 0b1010, states: 4, nb: 'vn' });
     expect(() => parseRule3('0-9/1/2/VN')).toThrow();
+  });
+
+  it('describes neighbour counts in words', () => {
+    expect(countsText(parseRule3('4/4/5/M').birth, 26)).toBe('exactly 4');
+    expect(countsText(parseRule3('0/1,3/2/VN').birth, 6)).toBe('1 or 3');
+    expect(countsText(parseRule3('9-26/5-7,12-13,15/5/M').birth, 26)).toBe('5 to 7, 12, 13 or 15');
+    expect(countsText(parseRule3('9-26/5/5/M').survive, 26)).toBe('9 or more');
+    expect(describeRule2(parseRule2('B3/S23'))).toContain('exactly 3 live neighbours comes alive; a live one survives with 2 or 3');
   });
 
   it('parses 2D rule strings', () => {

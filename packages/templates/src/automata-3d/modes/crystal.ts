@@ -7,19 +7,19 @@ import type { DramaScore } from '@sim/engine';
 import { gaussFit } from '../../scoring';
 import { THREE, sceneCache } from '../../three-layer';
 import { CycleWatch, Grid3, type GenStats } from '../grid';
-import { CRYSTAL_PRESETS, CRYSTAL_PRESET_IDS, parseRule3, type CrystalPresetId, type Rule3 } from '../rules';
+import { CRYSTAL_PRESETS, CRYSTAL_PRESET_IDS, describeRule3, parseRule3, type CrystalPresetId, type Rule3 } from '../rules';
 import { symmetricSeed } from '../seeds';
 import type { AutomataParams } from '../params';
 import { Palette, Voxels, drawStage, fitDistance, makeStage, orbit, voxelMaterial } from '../view';
-import { clamp01, drawCounter, ev, evName, fmtInt, panOf, smooth, velOf, type ModeImpl } from '../shared';
+import { EXPLAIN_LIFT, clamp01, drawCounter, durationFit, drawExplainer, ev, evName, fmtInt, panOf, smooth, velOf, type ModeImpl } from '../shared';
 
 const INTRO_S = 1.4;
 const OUTRO_S = 4.5;
 /** Most generations a run shows (and the fastest pace), so a rule that never settles still ends. */
 const MAX_GENS = 220;
 const MAX_RATE = 9;
-/** Slowest pace: a run that settles early ends early (and scores lower on length). */
-const MIN_RATE = 0.9;
+/** Slowest pace: a run with few generations isn't stretched to fill the length, it ends early. */
+const MIN_RATE = 2.5;
 
 type EndKind = 'edge' | 'still' | 'cycle' | 'dead' | 'cap';
 
@@ -239,6 +239,7 @@ export const crystalMode: ModeImpl<State> = {
   renderTop({ ctx, theme }, s) {
     const def = CRYSTAL_PRESETS[s.preset];
     const since = s.last ? s.t - s.times[s.grid.gen] : 1;
+    const top = s.p.explain ? drawExplainer(ctx, crystalMode.explain(s), s.t) : null;
     drawCounter(ctx, theme, {
       t: s.t,
       title: `${def.label} · ${SYMMETRY_LABEL[s.symmetry]}`,
@@ -246,7 +247,13 @@ export const crystalMode: ModeImpl<State> = {
       line: `${fmtInt(s.last?.alive ?? s.plan.alive[0] ?? 0)} cells`,
       flash: s.ended ? Math.exp(-(s.t - s.growEnd) * 4) : Math.exp(-since * 10) * 0.3,
       endAt: s.ended ? s.growEnd : undefined,
+      y: top === null ? undefined : top - 130,
     });
+  },
+
+  explain(s) {
+    const seed = { none: 'a handful of random cells', mirror: 'a handful of cells mirrored 8 ways', cubic: 'a handful of cells copied 48 ways (every mirror and turn of a cube)' }[s.symmetry];
+    return `${describeRule3(s.rule)} It grew from ${seed}.`;
   },
 
   audio(e, { melody, theme, lastNoteT }) {
@@ -276,7 +283,7 @@ export const crystalMode: ModeImpl<State> = {
   score(events, { durationS, targetS }): DramaScore {
     const end = events.find((e) => evName(e) === 'end');
     const gens = events.filter((e) => evName(e) === 'gen');
-    const durFit = gaussFit(durationS, targetS, targetS * 0.2);
+    const durFit = durationFit(durationS, targetS);
     if (!end || !gens.length) return { total: 0.01, parts: { durFit }, notes: ['nothing grew'] };
     if (end.kind === 'dead') return { total: 0.03 * durFit, parts: { durFit }, notes: ['died out'] };
     // Grew to fill the frame (not a speck), with a full run of generations to watch.
@@ -324,6 +331,7 @@ function sizeAt(s: State, gf: number): number {
 
 const view = sceneCache((s: State, theme) => {
   const stage = makeStage(theme, s.p.look);
+  stage.lift = s.p.explain ? EXPLAIN_LIFT : 0;
   const root = new THREE.Group();
   stage.scene.add(root);
   const voxels = new Voxels(root, voxelMaterial(s.p.look), s.p.look, 16384);

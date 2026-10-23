@@ -13,7 +13,7 @@ import { gaussFit } from '../../scoring';
 import { THREE, sceneCache } from '../../three-layer';
 import type { AutomataParams } from '../params';
 import { Voxels, drawStage, fitDistance, linear, makeStage, orbit, voxelMaterial } from '../view';
-import { clamp01, ev, evName, outlined, smooth, velOf, type ModeImpl } from '../shared';
+import { EXPLAIN_LIFT, clamp01, drawExplainer, ev, evName, outlined, smooth, velOf, type ModeImpl } from '../shared';
 
 const GEN_RATE = 10;
 const OUTRO_S = 3;
@@ -308,11 +308,22 @@ export const warMode: ModeImpl<State> = {
     const ended = s.endAt !== null;
     const precise = ended || s.p.durationS - OUTRO_S - s.t <= 5;
     drawShareBar(ctx, { x: 70, y: 1920 * 0.2, w: 940, h: 68, teams: s.teams, counts: Array.from(s.counts), leader: ended ? s.winner : s.leader, precise });
-    drawClock(ctx, { left: s.p.durationS - OUTRO_S - s.t, rush: s.rushOn, ended, labelY: 1920 * 0.8, bigY: 1920 * 0.5, text: theme.text, stroke: theme.textStroke });
-    if (!ended && s.t > 2.9) {
+    const top = s.p.explain ? drawExplainer(ctx, warMode.explain(s), s.t) : null;
+    drawClock(ctx, { left: s.p.durationS - OUTRO_S - s.t, rush: s.rushOn, ended, labelY: top === null ? 1920 * 0.8 : top - 60, bigY: 1920 * 0.5 - (top === null ? 0 : EXPLAIN_LIFT), text: theme.text, stroke: theme.textStroke });
+    // The one-line reminder of the rule, unless the explainer already says it.
+    if (!ended && s.t > 2.9 && top === null) {
       const label = s.cyclic ? 'Each colour beats the next' : 'Outnumber to take a cell';
       outlined(ctx, theme, label, 540, 1920 * 0.8 + 70, { size: 36, weight: 800, alpha: clamp01((s.t - 2.9) / 0.5) * 0.85 });
     }
+  },
+
+  explain(s) {
+    const rush = s.p.finalRush ? ' In the final seconds the arena shrinks.' : '';
+    if (s.cyclic) {
+      const [a, b, c] = s.teams.map((tm) => tm.label);
+      return `Rock-paper-scissors: ${b} takes ${a}, ${c} takes ${b}, ${a} takes ${c}. A cube can only fall to the side that beats it, once enough of them surround it.${rush}`;
+    }
+    return `Empty cubes join whichever colony surrounds them most; a cube on a border flips when it's outnumbered. Colonies surge and tire in waves, and late on bigger ones grow stronger.${rush}`;
   },
 
   audio(e, { melody, theme, lastNoteT }) {
@@ -458,6 +469,7 @@ function generation(s: State, t: number, emit: StepCtx['emit']) {
 
 const view = sceneCache((s: State, theme) => {
   const stage = makeStage(theme, s.p.look);
+  stage.lift = s.p.explain ? EXPLAIN_LIFT : 0;
   const voxels = new Voxels(stage.scene, voxelMaterial(s.p.look), s.p.look, 16384);
   s.prev = s.owner.slice();
   // Each cell's bearing round the vertical axis, and whether it's in the upper half (for the cut).

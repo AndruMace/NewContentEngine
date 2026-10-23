@@ -18,6 +18,8 @@ export interface ModeImpl<S = any> {
   hud(s: S): Record<string, string | number | boolean | LeaderboardRow[]>;
   render(rc: RenderCtx, s: S): void;
   renderTop(rc: RenderCtx, s: S): void;
+  /** This run's rules in plain words, for the explainer at the bottom. */
+  explain(s: S): string;
   /** Only sees this mode's events (see `modeOfEvent`). */
   audio(e: SimEvent, m: AudioMapCtx): AudioEventInput[];
   score(events: SimEvent[], info: ScoreInfo): DramaScore;
@@ -43,6 +45,12 @@ export const popIn = (u: number) => {
   const k = clamp01(u) - 1;
   return 1 + 2.7 * k * k * k + 1.7 * k * k;
 };
+
+/**
+ * How well a run's length fits the target. Running short is penalised gently (short-lived runs play
+ * at their own pace on purpose, not stretched to fill), running long more firmly.
+ */
+export const durationFit = (durationS: number, targetS: number) => Math.exp(-(((durationS - targetS) / (targetS * (durationS < targetS ? 0.55 : 0.2))) ** 2));
 
 export const fmtInt = (n: number) => Math.round(n).toLocaleString('en-US');
 
@@ -105,4 +113,55 @@ export function genSchedule(total: number, spanS: number, startRate: number): (g
   const k = (lo + hi) / 2;
   const ek = Math.exp(k) - 1;
   return (g) => (Math.log(1 + (g / total) * ek) / k) * spanS;
+}
+
+/** Bottom of the explainer panel: just above the band platforms cover with their own buttons and captions. */
+const EXPLAIN_BOTTOM = 1920 * 0.79;
+/** How far the 3D view is lifted when the explainer is on (pixels). */
+export const EXPLAIN_LIFT = 170;
+
+/** Split text into lines no wider than maxW at the current font. */
+function wrap(ctx: Ctx2D, text: string, maxW: number): string[] {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(next).width > maxW) {
+      lines.push(line);
+      line = word;
+    } else line = next;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/**
+ * The rules in a dark rounded panel at the bottom of the safe area. Returns the panel's top, so the
+ * counter can sit above it.
+ */
+export function drawExplainer(ctx: Ctx2D, text: string, t: number): number {
+  const size = 34;
+  const lineH = 44;
+  const padX = 34;
+  const padY = 24;
+  const w = 960;
+  ctx.save();
+  ctx.font = `700 ${size}px ${FONT_FAMILY}`;
+  const lines = wrap(ctx, text, w - padX * 2);
+  const h = lines.length * lineH + padY * 2;
+  const top = EXPLAIN_BOTTOM - h;
+  ctx.globalAlpha = clamp01((t - 0.2) / 0.5);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(540 - w / 2, top, w, h, 26);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach((l, i) => ctx.fillText(l, 540, top + padY + lineH * (i + 0.5)));
+  ctx.restore();
+  return top;
 }

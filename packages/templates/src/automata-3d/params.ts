@@ -16,6 +16,7 @@ export const automataSchema = z.object({
   mode: z.enum(MODES).default('crystal').meta({ title: 'Mode (crystal growth, Life tower, colony war)' }),
   durationS: z.number().min(20).max(60).default(32).meta({ title: 'Length (s)' }),
   look: z.enum(LOOKS).default('glossy').meta({ title: 'Look' }),
+  explain: z.boolean().default(false).meta({ title: 'Explain the rules (text at the bottom)' }),
 
   preset: z.enum(['random', ...CRYSTAL_PRESET_IDS]).default('random').meta({ title: 'Rule (random = picked by the seed)', modes: ['crystal'] }),
   symmetry: z.enum(SYMMETRIES).default('cubic').meta({ title: 'Seed symmetry (cubic = 48-fold)', modes: ['crystal'] }),

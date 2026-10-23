@@ -96,3 +96,32 @@ export const LIFE_RULES = {
 
 export type LifeRuleId = keyof typeof LIFE_RULES;
 export const LIFE_RULE_IDS = Object.keys(LIFE_RULES) as LifeRuleId[];
+
+/** Neighbour counts in a mask as words: "exactly 3", "2 or 3", "5 to 7, 12, 13 or 15", "9 or more". */
+export function countsText(mask: number, max: number): string {
+  const runs: [number, number][] = [];
+  for (let k = 0; k <= max; k++) {
+    if (!((mask >>> k) & 1)) continue;
+    const last = runs[runs.length - 1];
+    if (last && last[1] === k - 1) last[1] = k;
+    else runs.push([k, k]);
+  }
+  if (runs.length === 1 && runs[0][0] === runs[0][1]) return `exactly ${runs[0][0]}`;
+  const parts = runs.flatMap(([a, b]) => (b === max && a > 0 ? [`${a} or more`] : b - a >= 2 ? [`${a} to ${b}`] : b === a ? [`${a}`] : [`${a}`, `${b}`]));
+  return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} or ${parts[parts.length - 1]}`;
+}
+
+/** A 3D rule in a sentence or two, for viewers. */
+export function describeRule3(rule: Rule3): string {
+  const max = rule.nb === 'vn' ? 6 : 26;
+  const who = rule.nb === 'vn' ? 'its 6 face neighbours' : 'the 26 cubes touching it';
+  const born = rule.birth ? `An empty cell with ${countsText(rule.birth, max)} live neighbours is born` : 'Nothing new is ever born';
+  const fade = rule.states > 2 ? `, otherwise it fades through ${rule.states - 2} dying ${rule.states === 3 ? 'stage' : 'stages'}` : ', otherwise it dies';
+  const lives = rule.survive ? `a live cell survives with ${countsText(rule.survive, max)}${fade}` : `a live cell never survives${rule.states > 2 ? ` (it fades through ${rule.states - 2} dying stages)` : ''}`;
+  return `Every cube is a cell that looks at ${who}. ${born}; ${lives}.`;
+}
+
+/** A 2D rule in a sentence, for viewers. */
+export function describeRule2(rule: Rule2): string {
+  return `Each square looks at its 8 neighbours. An empty one with ${countsText(rule.birth, 8)} live neighbours comes alive; a live one survives with ${countsText(rule.survive, 8)}, otherwise it dies.`;
+}
