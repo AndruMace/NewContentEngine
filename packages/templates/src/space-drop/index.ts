@@ -5,7 +5,7 @@ import { craterOf, impactEnergy, tntLabel } from './impact';
 import { objectById, rodBody, type Body, type SpaceObject, type StartMode } from './objects';
 import { simulate, type Start, type Trajectory } from './physics';
 import { spaceDropSchema, type SpaceDropParams } from './params';
-import { buildFall, simTimeAt, type FallSim, type Run } from './script';
+import { REPLAY, buildFall, simTimeAt, type FallSim, type Run } from './script';
 import { drawSpaceDrop, makeLook, type Look } from './view3d';
 import { CRUSH } from './wreck';
 import { drawSpaceDropTop } from './hud';
@@ -20,6 +20,24 @@ export interface SpaceDropState {
   look: Look;
   visual: boolean;
   t: number;
+  /** Video time and sim time at every step, so the picture can replay any moment exactly. */
+  hist: { t: number[]; simT: number[] };
+}
+
+/** Sim time at an earlier video time (from the recorded history). */
+export function simTimeAtVideo(s: SpaceDropState, t: number): number {
+  const ts = s.hist.t;
+  if (!ts.length || t <= ts[0]) return ts.length ? s.hist.simT[0] : 0;
+  let lo = 0;
+  let hi = ts.length - 1;
+  if (t >= ts[hi]) return s.hist.simT[hi];
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (ts[mid] <= t) lo = mid;
+    else hi = mid;
+  }
+  const u = (t - ts[lo]) / (ts[hi] - ts[lo]);
+  return s.hist.simT[lo] + (s.hist.simT[hi] - s.hist.simT[lo]) * u;
 }
 
 /** Objects with windows (their glass shatters as they hit; see models.ts). */
@@ -69,17 +87,72 @@ export function buildRuns(p: SpaceDropParams): Run[] {
   });
 }
 
+/** What its landing leaves: a crumpled wreck (with its windows bursting, if it still has them), or none. */
+function wreckOf(r: Run, v: number): 'glazed' | 'crush' | 'none' {
+  const lands = r.tr.impact?.body.name ?? '';
+  if (v >= 600 || !CRUSH[lands]) return 'none';
+  return lands === r.body.name && GLAZED.has(r.obj.id) ? 'glazed' : 'crush';
+}
+
+/** The sounds of a landing (`gain` < 1 for the replay). */
+function impactSounds(energy: number, wreck: unknown, gain: number): AudioEventInput[] {
+  // Bigger impacts sound deeper.
+  const size = Math.min(1, Math.max(0, (Math.log10(energy + 1) - 2) / 12));
+  const out: AudioEventInput[] = [
+    { kind: 'sfx', name: 'blast', vel: (0.5 + 0.5 * size) * gain, pitch: 1 - size },
+    { kind: 'sfx', name: 'crunch', vel: 0.7 * gain, pitch: 0.3 },
+  ];
+  // Metal folding up, parts tearing off; a vehicle's windows bursting.
+  if (wreck !== 'none') out.push({ kind: 'sfx', name: 'crunch', vel: 0.9 * gain, pitch: 0.15 }, { kind: 'sfx', name: 'clang', vel: 0.55 * gain, pitch: 0.35 });
+  if (wreck === 'glazed') out.push({ kind: 'sfx', name: 'shatter', vel: 0.75 * gain, pitch: 0.5 });
+  return out;
+}
+
+/** "a car", "an anvil". */
+const aName = (o: SpaceObject) => {
+  const n = o.short.replace(/^the /, '');
+  return `${/^[aeiou]/i.test(n) ? 'an' : 'a'} ${n}`;
+};
+
+/** The opening line on screen, fitted to what falls and how. */
+export function hookFor(p: SpaceDropParams): string {
+  const objs = objectsOf(p);
+  if (p.mode !== 'solo') {
+    const names = objs.map((o) => o.short.replace(/^the /, '')).join(' vs ');
+    return `${names.charAt(0).toUpperCase()}${names.slice(1)}, from space: which hits hardest?`;
+  }
+  const o = objs[0];
+  const start = startOf(p, objs).mode;
+  const from = start === 'orbit' ? 'out of orbit' : start === 'meteor' ? 'from deep space' : 'from space';
+  switch (o.id) {
+    case 'tungsten-rod': {
+      const t = p.rodTonnes;
+      const mass = t >= 1 ? `${Number(t.toPrecision(3))}-tonne` : `${Math.round(t * 1000)} kg`;
+      return `A ${mass} tungsten rod, dropped ${from}`;
+    }
+    case 'asteroid':
+      return p.start === 'auto' ? 'The Chelyabinsk meteor, recreated' : `A Chelyabinsk-size asteroid, ${from}`;
+    case 'penny':
+      return 'Can a penny dropped from space hurt you?';
+    case 'steel-cube':
+      return `The Eiffel Tower's iron, dropped ${from}`;
+    case 'jumbo-jet':
+      return `A jumbo jet falling ${from}`;
+    case 'iron-meteorite':
+    case 'stony-meteorite':
+      return `What happens when ${aName(o)} hits?`;
+    default:
+      return start === 'drop' ? `We dropped ${aName(o)} from the edge of space` : `What if ${aName(o)} fell ${from}?`;
+  }
+}
+
 /** Events of the fall between two sim times, as sim events (for sound and the picture). */
 function emitBetween(s: SpaceDropState, from: number, to: number, emit: (e: Omit<SimEvent, 't'>) => void) {
   s.sim.runs.forEach((r, k) => {
     for (const e of r.tr.events) {
       if (e.t <= from || e.t > to) continue;
-      if (e.kind === 'impact') {
-        // Slow enough to leave a wreck: does it crumple (and is it still whole, windows and all)?
-        const lands = r.tr.impact?.body.name ?? '';
-        const wreck = e.v < 600 && CRUSH[lands] ? (lands === r.body.name && GLAZED.has(r.obj.id) ? 'glazed' : 'crush') : 'none';
-        emit({ type: 'drop:impact', run: k, energy: r.energy, v: e.v, wreck });
-      } else if (e.kind === 'airburst') emit({ type: 'drop:airburst', run: k, energy: e.value ?? 0, alt: e.alt });
+      if (e.kind === 'impact') emit({ type: 'drop:impact', run: k, energy: r.energy, v: e.v, wreck: wreckOf(r, e.v) });
+      else if (e.kind === 'airburst') emit({ type: 'drop:airburst', run: k, energy: e.value ?? 0, alt: e.alt });
       else if (e.kind === 'breakup') emit({ type: 'drop:breakup', run: k, alt: e.alt, rock: r.body.breakup?.kind === 'pancake' });
       else if (e.kind === 'subsonic') emit({ type: 'drop:boom', run: k });
       else if (e.kind === 'entry') emit({ type: 'drop:entry', run: k });
@@ -131,9 +204,9 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
   init(ctx) {
     const p = ctx.params;
     const runs = buildRuns(p);
-    const { sim, script } = buildFall(runs, p.units, p.ground);
+    const { sim, script } = buildFall(runs, p.units, p.ground, p.replay);
     const dir = storyDirector(script, ctx, 1);
-    const s: SpaceDropState = { p, sim, dir, look: makeLook(ctx.fxRng, p.sun, runs.length), visual: ctx.visual, t: 0 };
+    const s: SpaceDropState = { p, sim, dir, look: makeLook(ctx.fxRng, p.sun, runs.length), visual: ctx.visual, t: 0, hist: { t: [], simT: [] } };
     dir.onSpan = (sim, emit, span) => {
       if (span.seconds <= 0) return;
       const a = roarLevel(sim, simTimeAt(sim, span.from));
@@ -146,6 +219,7 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
   },
 
   step(s, { t, emit }) {
+    const was = s.t;
     s.t = t;
     runDirector(s.dir, s.sim, emit, (sim, emit) => {
       const before = sim.simT;
@@ -153,6 +227,18 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
       sim.simT = simTimeAt(sim, sim.tick);
       if (sim.simT > before) emitBetween(s, before, sim.simT, emit);
     });
+    s.hist.t.push(t);
+    s.hist.simT.push(s.sim.simT);
+    // The replay: a rewind swish, then the landings again (quieter), as they hit on screen.
+    const r0 = markAt(s.dir, 'replay');
+    if (Number.isFinite(r0)) {
+      if (was < r0 && t >= r0) emit({ type: 'drop:rewind' });
+      const hit = r0 + REPLAY.lead;
+      if (was < hit && t >= hit)
+        s.sim.runs.forEach((r, k) => {
+          if (r.tr.impact) emit({ type: 'drop:replay', run: k, energy: r.energy, wreck: wreckOf(r, r.tr.impact.v) });
+        });
+    }
   },
 
   isDone: (s) => s.dir.done,
@@ -160,17 +246,7 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
   hud: (s) => ({ answer: s.sim.answer, outro: s.t >= markAt(s.dir, 'outro') + 0.4 }),
 
   overlays(p, copy) {
-    const name = objectsOf(p)
-      .map((o) => o.short.replace(/^the /, 'a '))
-      .join(' vs ');
-    const hook =
-      copy.hook === DEFAULT_HOOK
-        ? p.mode === 'solo'
-          ? `What if you dropped ${name} from space?`
-          : `${objectsOf(p)
-              .map((o) => o.name)
-              .join(' vs ')}: dropped from space`
-        : copy.hook;
+    const hook = copy.hook === DEFAULT_HOOK ? hookFor(p) : copy.hook;
     return [
       { kind: 'hook', text: hook, from: 0, to: 3.4, y: 0.1 },
       { kind: 'cta', text: copy.cta, when: 'outro', y: 0.1 },
@@ -210,19 +286,12 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
         ];
       case 'drop:airburst':
         return [{ kind: 'sfx', name: 'blast', vel: 1.0, pitch: 0.15 }];
-      case 'drop:impact': {
-        // Bigger impacts sound deeper.
-        const E = e.energy as number;
-        const size = Math.min(1, Math.max(0, (Math.log10(E + 1) - 2) / 12));
-        const out: AudioEventInput[] = [
-          { kind: 'sfx', name: 'blast', vel: 0.5 + 0.5 * size, pitch: 1 - size },
-          { kind: 'sfx', name: 'crunch', vel: 0.7, pitch: 0.3 },
-        ];
-        // Metal folding up, parts tearing off; a vehicle's windows bursting.
-        if (e.wreck !== 'none') out.push({ kind: 'sfx', name: 'crunch', vel: 0.9, pitch: 0.15 }, { kind: 'sfx', name: 'clang', vel: 0.55, pitch: 0.35 });
-        if (e.wreck === 'glazed') out.push({ kind: 'sfx', name: 'shatter', vel: 0.75, pitch: 0.5 });
-        return out;
-      }
+      case 'drop:impact':
+        return impactSounds(e.energy as number, e.wreck, 1);
+      case 'drop:rewind':
+        return [{ kind: 'sfx', name: 'swish', vel: 0.6, pitch: 0.3 }];
+      case 'drop:replay':
+        return impactSounds(e.energy as number, e.wreck, 0.55);
       case 'drop:burnup':
         return [{ kind: 'sfx', name: 'flame', vel: 0.6 }];
       default:

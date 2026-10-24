@@ -42,6 +42,13 @@ export const CRUSH: Record<string, CrushSpec> = {
   'engine and frame': { force: 6e7, max: 0.15, bounce: 0.05 },
   'diesel engine': { force: 1e8, max: 0.12, bounce: 0.04 },
   'jet engine': { force: 2e7, max: 0.35, bounce: 0.04 },
+  'hull section': { force: 2e8, max: 0.6, bounce: 0.01 },
+  'steel docking frame': { force: 3e7, max: 0.3, bounce: 0.04 },
+};
+
+/** Brittle things that burst apart rather than crumple: how many chunks they break into. */
+export const SHATTER: Record<string, { chunks: number }> = {
+  'brick chimney': { chunks: 150 },
 };
 
 /**
@@ -312,6 +319,12 @@ export class Wreck {
   private readonly pieces: Piece[] = [];
   private readonly shards: THREE.InstancedMesh;
   private readonly bits: THREE.InstancedMesh;
+  /** Brittle things: the chunks they burst into, and the rubble mound they leave. */
+  private readonly shatter: { chunks: number } | null;
+  private readonly chunks: THREE.InstancedMesh;
+  private readonly mound: THREE.Mesh;
+  private chunkF: Flyer[] = [];
+  private moundSize = 0;
   private shardF: Flyer[] = [];
   private bitF: Flyer[] = [];
   private coats: { m: THREE.MeshStandardMaterial; base: THREE.Color; rough: number }[] = [];
@@ -389,7 +402,39 @@ export class Wreck {
     const bitMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.45, metalness: 0.45, flatShading: true });
     this.bits = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0).scale(1, 0.16, 0.75), bitMat, 80);
     for (let i = 0; i < this.bits.count; i++) this.bits.setColorAt(i, glassCol);
-    this.group.add(this.shards, this.bits);
+    // Chunks of brickwork and a rubble mound, for things that burst apart.
+    this.shatter = SHATTER[name] ?? null;
+    this.chunks = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.55, 0.7), bitMat.clone(), this.shatter?.chunks ?? 1);
+    (this.chunks.material as THREE.MeshStandardMaterial).roughness = 0.9;
+    (this.chunks.material as THREE.MeshStandardMaterial).metalness = 0;
+    for (let i = 0; i < this.chunks.count; i++) this.chunks.setColorAt(i, glassCol);
+    const moundGeo = new THREE.IcosahedronGeometry(1, 3);
+    const mp = moundGeo.attributes.position as THREE.BufferAttribute;
+    const rr = rng(seed + 5);
+    const bumps = Array.from({ length: 12 }, () => new THREE.Vector3(rr() - 0.5, rr() - 0.5, rr() - 0.5).normalize());
+    for (let i = 0; i < mp.count; i++) {
+      tmp.a.fromBufferAttribute(mp, i);
+      const n = tmp.a.clone().normalize();
+      let f = 1;
+      for (const b of bumps) f += 0.18 * Math.max(0, n.dot(b)) ** 6;
+      f *= 0.9 + 0.2 * rr();
+      tmp.a.multiplyScalar(f);
+      tmp.a.y = Math.max(-0.05, tmp.a.y) * 0.2;
+      mp.setXYZ(i, tmp.a.x, tmp.a.y, tmp.a.z);
+    }
+    // Broken brick, mortar and dust: each face its own shade.
+    const flatMound = moundGeo.toNonIndexed();
+    const mc = new Float32Array(flatMound.attributes.position.count * 3);
+    for (let f = 0; f < mc.length; f += 9) {
+      const k = 0.55 + 0.55 * rr();
+      const dusty = rr() < 0.3;
+      for (let j = 0; j < 3; j++) mc.set(dusty ? [0.5 * k, 0.45 * k, 0.4 * k] : [0.55 * k, 0.26 * k, 0.18 * k], f + j * 3);
+    }
+    flatMound.setAttribute('color', new THREE.BufferAttribute(mc, 3));
+    flatMound.computeVertexNormals();
+    this.mound = new THREE.Mesh(flatMound, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true, vertexColors: true }));
+    this.mound.scale.setScalar(this.shatter ? 1e-6 : 0);
+    this.group.add(this.shards, this.bits, this.chunks, this.mound);
     // Drawn wherever the camera looks, so it's always compiled before it's needed.
     this.group.traverse((o) => (o.frustumCulled = false));
     this.warm();
@@ -602,6 +647,16 @@ export class Wreck {
       this.bits.count = Math.max(1, this.bitF.length);
       this.place(this.shards, this.shardF, -1);
       this.place(this.bits, this.bitF, -1);
+      if (this.shatter) {
+        const pts = surfacePoints(this.body, this.group, this.chunks.count, r);
+        this.chunkF = pts.map(({ p }) => this.flyer(p, 'chunk', centreY, im, r));
+        pts.forEach(({ mesh }, i) => this.chunks.setColorAt(i, colourOf(materialsOf(mesh)[0], col).multiplyScalar(0.6 + 0.5 * r())));
+        if (this.chunks.instanceColor) this.chunks.instanceColor.needsUpdate = true;
+        this.mound.position.set(0, bowl(im.crater, 0) * 0.6, 0);
+        this.moundSize = Math.max(im.size * 0.3, im.crater.R * 0.75);
+      }
+      this.chunks.count = Math.max(1, this.chunkF.length);
+      this.place(this.chunks, this.chunkF, -1);
     });
   }
 
@@ -656,7 +711,7 @@ export class Wreck {
   }
 
   /** A shard of glass or a fragment of the body, from a point on its surface (wreck frame). */
-  private flyer(p: THREE.Vector3, kind: 'shard' | 'bit', centreY: number, im: WreckImpact, r: () => number): Flyer {
+  private flyer(p: THREE.Vector3, kind: 'shard' | 'bit' | 'chunk', centreY: number, im: WreckImpact, r: () => number): Flyer {
     const start = new THREE.Vector3(p.x, p.y - this.ymin, p.z);
     const s = Math.min(1, Math.max(0, start.y / this.H));
     const t0 = this.tc * (kind === 'shard' ? 0.08 + 0.4 * s : 0.15 + 0.85 * s) * (0.7 + 0.6 * r());
@@ -665,10 +720,10 @@ export class Wreck {
     if (out.lengthSq() < 1e-8) out.set(r() - 0.5, 0, r() - 0.5);
     out.normalize().applyAxisAngle(tmp.b.set(0, 1, 0), (r() - 0.5) * 1.2);
     const v = im.v;
-    const speed = kind === 'shard' ? Math.min(28, v * (0.04 + 0.28 * r() ** 2)) : Math.min(24, v * (0.03 + 0.2 * r() ** 2));
+    const speed = kind === 'shard' ? Math.min(28, v * (0.04 + 0.28 * r() ** 2)) : kind === 'chunk' ? Math.min(16, v * (0.02 + 0.13 * r() ** 2)) : Math.min(24, v * (0.03 + 0.2 * r() ** 2));
     const up = 0.25 + 0.6 * r() + 0.3 * (start.y > centreY ? 1 : 0);
     const vel = new THREE.Vector3(out.x * speed, up * speed * 0.7, out.z * speed).addScaledVector(this.carry, 0.35);
-    const sz = im.size * (kind === 'shard' ? 0.005 + 0.012 * r() : 0.01 + 0.032 * r() ** 1.5);
+    const sz = im.size * (kind === 'shard' ? 0.005 + 0.012 * r() : kind === 'chunk' ? 0.025 + 0.05 * r() ** 1.5 : 0.01 + 0.032 * r() ** 1.5);
     const scale = new THREE.Vector3(sz, sz, sz * (0.6 + 0.8 * r()));
     // Flight to the ground (the finished crater's shape).
     const at = (t: number) => tmp.a.set(start.x + vel.x * t, 0, start.z + vel.z * t);
@@ -845,6 +900,11 @@ export class Wreck {
     const prog = this.progress(psi);
     for (const m of this.body) if (m.morphTargetInfluences) m.morphTargetInfluences[0] = prog;
     for (const m of this.glass) m.visible = psi < this.tc * 0.1;
+    // Something brittle bursts as it hits: chunks fly, the rubble settles into a mound.
+    if (this.shatter) {
+      for (const m of this.body) m.visible = psi < this.tc * 0.35;
+      this.mound.scale.set(1, 1, 1).multiplyScalar(this.moundSize * Math.max(1e-6, smooth(this.tc * 0.3, this.tc * 0.3 + 0.35, psi)));
+    }
     // Rebound and rock (two hops), sliding on a little.
     const tau = psi - this.tc;
     let y = 0;
@@ -896,6 +956,7 @@ export class Wreck {
     }
     this.place(this.shards, this.shardF, psi);
     this.place(this.bits, this.bitF, psi);
+    if (this.shatter) this.place(this.chunks, this.chunkF, psi);
     // Scuffed and dusted: duller, and the colour of the ground.
     const coat = 0.28 * smooth(0.02, 1.5, psi);
     for (const c of this.coats) {

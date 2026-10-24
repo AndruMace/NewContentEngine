@@ -646,9 +646,21 @@ function core(name: string, shape: Shape): THREE.Group {
     case 'brick chimney':
       mesh(new THREE.BoxGeometry(6, 1.2, 1.2), mat(0x8c3b2a, 0.9), 0, 0, 0, g);
       return g;
-    case 'hull section':
-      mesh(new THREE.BoxGeometry(30, 20, 38), mat(0x1d2c4a, 0.6, 0.3), 0, 0, 0, g);
+    case 'hull section': {
+      // A slice of the ship: navy hull below the waterline stripe, white decks with rows of windows.
+      const s = shape.kind === 'box' ? shape : { l: 30, h: 20, w: 38 };
+      const hullH = s.h * 0.45;
+      mesh(new THREE.BoxGeometry(s.l, hullH, s.w), mat(0x1d2c4a, 0.55, 0.3), 0, -s.h / 2 + hullH / 2, 0, g);
+      mesh(new THREE.BoxGeometry(s.l * 1.002, s.h * 0.04, s.w * 1.002), mat(0xb3261e, 0.5, 0.2), 0, -s.h / 2 + hullH * 0.35, 0, g);
+      const decks = canvasTexture(256, 128, (c) => {
+        c.fillStyle = '#f4f6f8';
+        c.fillRect(0, 0, 256, 128);
+        c.fillStyle = '#1e3448';
+        for (let y = 10; y < 128; y += 20) for (let x = 4; x < 256; x += 12) c.fillRect(x, y, 8, 7);
+      });
+      mesh(new THREE.BoxGeometry(s.l, s.h - hullH, s.w * 0.92), mat(0xffffff, 0.45, 0.1, { map: decks }), 0, s.h / 2 - (s.h - hullH) / 2, 0, g);
       return g;
+    }
     default:
       return rock(shape.kind === 'sphere' ? shape.d : 0.3, 99, 0x2a2420, 0.9, 0.1);
   }

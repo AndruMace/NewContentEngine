@@ -10,8 +10,8 @@ import { LAYER_NAMES } from './atmosphere';
 import { comparison, energyLabel, round2, seismicMagnitude, timesLabel, tntLabel } from './impact';
 import { massLabel } from './objects';
 import { sampleAt, type Sample } from './physics';
-import { endTime, type Run } from './script';
-import { altReadout, lengthText, speedReadout, speedText, tempReadout, type Units } from './units';
+import { REPLAY, endTime, type Run } from './script';
+import { altReadout, durationText, lengthText, speedReadout, speedText, tempReadout, tempText, type Units } from './units';
 import { blackbody, impactClock } from './view3d';
 import type { SpaceDropState } from './index';
 
@@ -127,7 +127,12 @@ function drawStats(ctx: Ctx2D, smp: Sample, run: Run, u: Units, x: number, y: nu
     { label: 'ALTITUDE', value: alt, unit: altU },
     { label: 'SPEED', value: spd, unit: spdU, sub: `${speedText(smp.v, u)}${mach > 0.3 ? ` · MACH ${mach < 10 ? mach.toFixed(1) : Math.round(mach)}` : ''}` },
     { label: 'SURFACE TEMP', value: ts, unit: tsU, sub: smp.v > 300 && smp.rho > 1e-7 ? `AIR IN FRONT ${ta} ${taU}` : undefined, color: heatColour(smp.Ts) },
-    { label: 'G-FORCE', value: smp.phase === 2 ? '—' : smp.g < 10 ? smp.g.toFixed(1) : Math.round(smp.g).toLocaleString('en-US'), unit: 'g', sub: smp.phase === 2 ? 'CRUSHED, SPREADING' : run.tr.breakup && smp.phase === 1 ? `ONLY THE ${run.tr.breakup.core?.name.toUpperCase()} LEFT` : undefined },
+    {
+      label: 'G-FORCE',
+      value: smp.phase === 2 ? '—' : smp.g < 10 ? smp.g.toFixed(1) : Math.round(smp.g).toLocaleString('en-US'),
+      unit: 'g',
+      sub: smp.phase === 2 ? 'CRUSHED, SPREADING' : run.tr.breakup && smp.phase === 1 ? `ONLY THE ${run.tr.breakup.core?.name.toUpperCase()} LEFT` : undefined,
+    },
   ];
   rowsData.forEach((r, k) => {
     const cy = y + 22 + k * rowH;
@@ -245,6 +250,63 @@ function toasts(ctx: Ctx2D, m: Memo, run: Run, simT: number, t: number, units: U
   });
 }
 
+/** The final approach: altitude and speed on one slim row, so the sky where it comes down is clear. */
+function drawStrip(ctx: Ctx2D, smp: Sample, u: Units, x: number, y: number, w: number, alpha: number) {
+  if (alpha <= 0.01) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  panel(ctx, x, y, w, 96, 22);
+  const [alt, altU] = altReadout(smp.h, u);
+  const [spd, spdU] = speedReadout(smp.v, u);
+  const half = w / 2;
+  for (const [k, label, value, unit] of [
+    [0, 'ALTITUDE', alt, altU],
+    [1, 'SPEED', spd, spdU],
+  ] as const) {
+    const x0 = x + 26 + k * half;
+    text(ctx, label, x0, y + 28, { size: 20, weight: 700, color: 'rgba(200,215,235,0.8)' });
+    text(ctx, `${value} ${unit}`, x0, y + 64, { size: 40, weight: 800, font: MONO });
+  }
+  ctx.restore();
+}
+
+/** "INSTANT REPLAY", with a blinking red dot. */
+function drawReplayBadge(ctx: Ctx2D, t: number, alpha: number, x: number, y: number) {
+  if (alpha <= 0.01) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  panel(ctx, x - 205, y, 410, 76, 38, 0.55);
+  ctx.fillStyle = Math.floor(t * 2) % 2 ? 'rgba(255,70,60,0.35)' : '#ff463c';
+  ctx.beginPath();
+  ctx.arc(x - 165, y + 38, 12, 0, Math.PI * 2);
+  ctx.fill();
+  text(ctx, 'INSTANT REPLAY', x + 20, y + 39, { size: 32, weight: 900, align: 'center' });
+  ctx.restore();
+}
+
+/** The whole fall at a glance, for the end. */
+function drawRecapCard(ctx: Ctx2D, run: Run, u: Units, alpha: number, y: number) {
+  if (alpha <= 0.01) return;
+  const tr = run.tr;
+  const vmax = tr.v.reduce((m, v) => Math.max(m, v), 0);
+  const rows: [string, string][] = [
+    ['FALL', durationText(endTime(tr))],
+    ['TOP SPEED', speedText(vmax, u)],
+    ['HOTTEST SURFACE', tempText(tr.maxTs, u)],
+    tr.impact ? ['IMPACT', `${energyLabel(run.energy)} · ${tntLabel(run.energy)}`] : ['END', 'burned up in the air'],
+  ];
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  panel(ctx, 90, y, 900, 96 + rows.length * 74, 34, 0.55);
+  text(ctx, 'FROM SPACE TO THE GROUND', 540, y + 50, { size: 30, weight: 800, color: 'rgba(255,190,120,0.95)', align: 'center' });
+  rows.forEach(([label, value], k) => {
+    const yy = y + 118 + k * 74;
+    text(ctx, label, 130, yy, { size: 26, weight: 700, color: 'rgba(200,215,235,0.85)' });
+    text(ctx, value.toUpperCase(), 950, yy, { size: 36, weight: 900, color: k === rows.length - 1 ? '#ffd166' : '#ffffff', align: 'right' });
+  });
+  ctx.restore();
+}
+
 function drawImpactCard(ctx: Ctx2D, run: Run, u: Units, tau: number, y: number) {
   const im = run.tr.impact;
   if (!im || tau < 0.35) return;
@@ -253,7 +315,7 @@ function drawImpactCard(ctx: Ctx2D, run: Run, u: Units, tau: number, y: number) 
   const shown = E * ease((tau - 0.35) / 1.3);
   const cmp = comparison(E);
   ctx.save();
-  ctx.globalAlpha = a;
+  ctx.globalAlpha *= a;
   panel(ctx, 90, y, 900, 400, 34, 0.5);
   text(ctx, 'IMPACT', 540, y + 50, { size: 30, weight: 800, color: 'rgba(255,190,120,0.95)', align: 'center' });
   text(ctx, speedText(im.v, u).toUpperCase(), 540, y + 96, { size: 34, weight: 800, color: '#ffffff', align: 'center' });
@@ -320,14 +382,36 @@ function drawSolo(ctx: Ctx2D, s: SpaceDropState, m: Memo, run: Run, simT: number
   const tau = t - ti;
   const after = Number.isFinite(ti) ? clamp01((tau - 0.2) / 0.4) : 0;
   const intro = clamp01((t - 0.3) / 0.5);
-  drawStats(ctx, smp, run, u, 40, 300, intro * (1 - after));
+  // The final approach: the panel and ladder fold into a slim strip, clearing the sky.
+  const ta = markAt(s.dir, 'approach');
+  const fold = Number.isFinite(ta) ? ease((t - ta - 0.6) / 0.6) : 0;
+  // The replay and the end take the screen over.
+  const r0 = markAt(s.dir, 'replay');
+  const replay = t >= r0 && t < r0 + REPLAY.solo ? clamp01((t - r0) / 0.2) * clamp01((r0 + REPLAY.solo - t) / 0.2) : 0;
+  const to = markAt(s.dir, 'outro');
+  const end = clamp01((t - to - 0.2) / 0.4);
+  const live = intro * (1 - after);
+  drawStats(ctx, smp, run, u, 40, 300, live * (1 - fold));
+  drawStrip(ctx, smp, u, 40, 300, 700, live * fold);
   const slowmo = Number.isFinite(ti) && tau < 5 && impactClock(tau) < tau * 0.8;
-  drawClockChip(ctx, simT, m.rate, slowmo, 1040, 300, 'right');
-  if (s.p.ladder) drawLadder(ctx, smp.h, run.start.mode === 'meteor' ? 200 : run.start.altitude / 1000, 1000, 450, 1240, intro * (1 - after));
+  if (replay < 0.99 && end < 0.99) {
+    ctx.save();
+    ctx.globalAlpha = (1 - replay) * (1 - end);
+    drawClockChip(ctx, simT, m.rate, slowmo, 1040, 300, 'right');
+    ctx.restore();
+  }
+  if (s.p.ladder) drawLadder(ctx, smp.h, run.start.mode === 'meteor' ? 200 : run.start.altitude / 1000, 1000, 450, 1240, live * (1 - fold));
   toasts(ctx, m, run, simT, t, u, 1220);
   const tb = markAt(s.dir, 'burst');
   if (Number.isFinite(tb)) drawBurstCard(ctx, run, u, t - tb, 1010);
-  if (Number.isFinite(ti)) drawImpactCard(ctx, run, u, tau, 290);
+  if (Number.isFinite(ti) && replay < 0.99) {
+    ctx.save();
+    ctx.globalAlpha = (1 - replay) * (1 - end);
+    drawImpactCard(ctx, run, u, tau, 290);
+    ctx.restore();
+  }
+  drawReplayBadge(ctx, t, replay, 540, 300);
+  drawRecapCard(ctx, run, u, end, 290);
   const tg = markAt(s.dir, 'gone');
   if (Number.isFinite(tg) && t - tg > 0.4) {
     ctx.save();
@@ -355,6 +439,9 @@ function drawVersus(ctx: Ctx2D, s: SpaceDropState, m: Memo, simT: number, t: num
     .sort((a, b) => a.at - b.at)
     .map((x) => x.k);
   const intro = clamp01((t - 0.3) / 0.5);
+  // The replay clears the columns' cards (the names stay).
+  const r0 = markAt(s.dir, 'replay');
+  const replay = t >= r0 && t < r0 + REPLAY.versus ? clamp01((t - r0) / 0.2) * clamp01((r0 + REPLAY.versus - t) / 0.2) : 0;
   runs.forEach((run, k) => {
     const cx = colW * (k + 0.5);
     const smp = sampleAt(run.tr, Math.min(simT, endTime(run.tr)));
@@ -366,7 +453,15 @@ function drawVersus(ctx: Ctx2D, s: SpaceDropState, m: Memo, simT: number, t: num
     text(ctx, run.obj.name.toUpperCase(), cx, 334, { size: n === 2 ? 34 : 27, weight: 900, color: COL_COLORS[k], align: 'center' });
     text(ctx, massLabel(run.body.mass), cx, 372, { size: 24, weight: 700, color: 'rgba(225,232,245,0.85)', align: 'center' });
     const gone = run.tr.end === 'burnup' && simT >= endTime(run.tr);
-    if (!landed && !gone) {
+    // Coming in to land, its readout folds to one line, clearing the sky it falls through.
+    const ta = markAt(s.dir, `approach${k}`);
+    const fold = Number.isFinite(ta) ? ease((t - ta - 0.6) / 0.6) : 0;
+    if (!landed && !gone && fold > 0.5) {
+      panel(ctx, k * colW + 14, 412, colW - 28, 64, 22, 0.38);
+      const [alt, altU] = altReadout(smp.h, u);
+      const [spd, spdU] = speedReadout(smp.v, u);
+      text(ctx, `${alt} ${altU} · ${spd} ${spdU}`, cx, 444, { size: n === 2 ? 30 : 22, weight: 800, font: MONO, align: 'center' });
+    } else if (!landed && !gone) {
       panel(ctx, k * colW + 14, 412, colW - 28, 196, 22, 0.38);
       const [alt, altU] = altReadout(smp.h, u);
       const [spd, spdU] = speedReadout(smp.v, u);
@@ -378,7 +473,7 @@ function drawVersus(ctx: Ctx2D, s: SpaceDropState, m: Memo, simT: number, t: num
     } else if (landed) {
       const place = order.indexOf(k);
       const tau = t - ti;
-      const a = clamp01((tau - 0.3) / 0.4);
+      const a = clamp01((tau - 0.3) / 0.4) * (1 - replay);
       ctx.globalAlpha = intro * a;
       panel(ctx, k * colW + 14, 412, colW - 28, 250, 22, 0.5);
       text(ctx, ['1ST DOWN', '2ND DOWN', '3RD DOWN'][place] ?? 'DOWN', cx, 448, { size: 26, weight: 800, color: 'rgba(255,190,120,0.95)', align: 'center' });
@@ -409,7 +504,13 @@ function drawVersus(ctx: Ctx2D, s: SpaceDropState, m: Memo, simT: number, t: num
     ctx.restore();
     toastsCol(ctx, s, m, run, simT, t, u, k, cx, 680, colW);
   });
-  drawClockChip(ctx, simT, m.rate, false, 540, 196 + 0, 'center');
+  if (replay < 0.99) {
+    ctx.save();
+    ctx.globalAlpha = 1 - replay;
+    drawClockChip(ctx, simT, m.rate, false, 540, 196, 'center');
+    ctx.restore();
+  }
+  drawReplayBadge(ctx, t, replay, 540, 206);
   // The result: energies side by side on a log scale.
   const tr_ = markAt(s.dir, 'reveal');
   if (Number.isFinite(tr_)) drawEnergyBars(ctx, runs, t - tr_);
@@ -419,7 +520,8 @@ function toastsCol(ctx: Ctx2D, s: SpaceDropState, m: Memo, run: Run, simT: numbe
   void s;
   let best: { at: number; label: string; color: string } | null = null;
   for (const e of run.tr.events) {
-    const label = e.kind === 'breakup' ? 'BREAKUP' : e.kind === 'airburst' ? 'AIRBURST' : e.kind === 'melt' ? 'MELTING' : e.kind === 'subsonic' ? 'SONIC BOOM' : e.kind === 'burnup' ? 'BURNED UP' : null;
+    const label =
+      e.kind === 'breakup' ? 'BREAKUP' : e.kind === 'airburst' ? 'AIRBURST' : e.kind === 'melt' ? 'MELTING' : e.kind === 'subsonic' ? 'SONIC BOOM' : e.kind === 'burnup' ? 'BURNED UP' : null;
     if (!label) continue;
     const at = seenAt(m, `${k}:${e.kind}`, simT >= e.t, t);
     if (at !== null && t - at < 2.4 && (!best || at > best.at)) best = { at, label, color: e.kind === 'melt' || e.kind === 'subsonic' ? '#ffd27a' : '#ff7a5a' };

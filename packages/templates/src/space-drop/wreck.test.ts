@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { THREE } from '../three-layer';
-import { sayEvents } from '../story';
+import { markAt, sayEvents } from '../story';
 import { runStory } from '../story/testing';
-import { spaceDrop, type SpaceDropState } from '.';
+import { hookFor, spaceDrop, spaceDropSchema, type SpaceDropState } from '.';
+import { REPLAY } from './script';
 import { OMEGA, R_EARTH } from './atmosphere';
 import { buildModel } from './models';
 import { objectById } from './objects';
@@ -166,5 +167,35 @@ describe('impact sounds', () => {
     expect(wreckOf({ object: 'sedan' })).toBe('glazed');
     expect(wreckOf({ object: 'sedan', start: 'orbit' })).toBe('crush');
     expect(wreckOf({})).toBe('none');
+  });
+});
+
+describe('replay', () => {
+  it.each([
+    [{ object: 'sedan' }, REPLAY.solo],
+    [{ mode: 'versus', versusA: 'tank', versusB: 'cow' }, REPLAY.versus],
+  ])('%j: holds for the replay when on, with a rewind and the landings again; nothing when off', (params, hold) => {
+    const on = runStory(spaceDrop, { ...params, replay: true }, 1);
+    const off = runStory(spaceDrop, { ...params, replay: false }, 1);
+    // (The story fits its length to the target, so the hold shows as a gap, not a longer video.)
+    const d = (on.state as SpaceDropState).dir;
+    expect(markAt(d, 'outro') - markAt(d, 'replay')).toBeGreaterThanOrEqual(hold - 1e-6);
+    expect(markAt((off.state as SpaceDropState).dir, 'replay')).toBe(Infinity);
+    const count = (r: typeof on, type: string) => r.events.filter((e) => e.type === type).length;
+    expect(count(on, 'drop:rewind')).toBe(1);
+    expect(count(on, 'drop:replay')).toBe(count(on, 'drop:impact'));
+    expect(count(off, 'drop:rewind') + count(off, 'drop:replay')).toBe(0);
+  });
+});
+
+describe('hooks', () => {
+  const hook = (p: Record<string, unknown>) => hookFor(spaceDropSchema.parse(p));
+  it('fit what falls and how', () => {
+    expect(hook({})).toBe('A 9-tonne tungsten rod, dropped out of orbit');
+    expect(hook({ rodTonnes: 0.5 })).toBe('A 500 kg tungsten rod, dropped out of orbit');
+    expect(hook({ object: 'sedan' })).toBe('We dropped a car from the edge of space');
+    expect(hook({ object: 'anvil', start: 'orbit' })).toBe('What if an anvil fell out of orbit?');
+    expect(hook({ object: 'asteroid' })).toBe('The Chelyabinsk meteor, recreated');
+    expect(hook({ mode: 'versus', versusA: 'sedan', versusB: 'tank', versusC: 'piano' })).toBe('Car vs tank vs piano, from space: which hits hardest?');
   });
 });

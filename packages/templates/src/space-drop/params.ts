@@ -46,6 +46,7 @@ export const spaceDropSchema = z.object({
     .default('metric')
     .meta({ title: 'Units', optionLabels: { metric: 'Metric (km/h, °C)', imperial: 'US (mph, °F)' } }),
   ladder: z.boolean().default(true).meta({ title: 'Altitude ladder (atmosphere layers, landmarks)' }),
+  replay: z.boolean().default(true).meta({ title: 'Instant replay of the impact (Versus: all side by side)' }),
   sun: z
     .enum(['auto', 'low', 'mid', 'high'])
     .default('auto')

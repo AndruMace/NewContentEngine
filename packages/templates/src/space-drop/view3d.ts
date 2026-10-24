@@ -20,9 +20,9 @@ import { R_EARTH, OMEGA } from './atmosphere';
 import { buildModel, debrisGeometry } from './models';
 import { sizeOf, type Shape } from './objects';
 import { sampleAt, type Sample } from './physics';
-import { endTime, type Run } from './script';
+import { REPLAY, endTime, type Run } from './script';
 import { Wreck, relativeTo, type WreckImpact } from './wreck';
-import type { SpaceDropState } from './index';
+import { simTimeAtVideo, type SpaceDropState } from './index';
 
 const V = () => new THREE.Vector3();
 
@@ -279,6 +279,8 @@ uniform float uRMax;
 uniform float uCrFinal;
 uniform float uEject;
 uniform float uMelt;
+uniform vec3 uMeltCol;
+uniform float uCrust;
 uniform float uScorch;
 uniform vec3 uGlowPos;
 uniform vec3 uGlowCol;
@@ -331,7 +333,10 @@ void main() {
     float blanket = smoothstep(4.0, 1.0, x) * (1.0 - inside);
     col = mix(col, col * mix(0.72, 1.18, rays), blanket * uEject);
     col = mix(col, col * 0.25, uScorch * smoothstep(2.5, 0.6, x));
-    col += vec3(1.0, 0.32, 0.06) * uMelt * inside * (0.55 + 0.45 * n) * 1.3;
+    // Crusting over as it cools, until only the cracks between the plates glow.
+    float crack = 1.0 - abs(snoise(vec4(q / uCrFinal * 4.0, 9.0, 0.0)));
+    float crust = smoothstep(1.0 - uCrust - 0.05, 1.0 - uCrust + 0.05, crack);
+    col += uMeltCol * uMelt * inside * (0.55 + 0.45 * n) * 1.3 * crust;
   }
   // Scraped where a wreck slid or toppled, gouged where heavy parts first hit.
   if (uScarW > 0.0) {
@@ -525,6 +530,102 @@ void main() {
   vec2 c = gl_PointCoord - 0.5;
   float a = smoothstep(0.5, 0.0, length(c)) * vA;
   gl_FragColor = vec4(uColor * vShade * 1.7, a);
+}`;
+
+/**
+ * The ejecta curtain: an inverted cone of dirt thrown out of a growing crater, standing on its rim
+ * (a unit open cylinder: y 0..1 is stretched to uH, the radius widened from uRb at the rim to uRt).
+ */
+const CURTAIN_VERT = /* glsl */ `
+uniform float uRb;
+uniform float uRt;
+uniform float uH;
+varying vec3 vP;
+varying float vY;
+void main() {
+  vY = position.y;
+  float rad = mix(uRb, uRt, position.y);
+  vec3 p = vec3(position.x * rad, position.y * uH, position.z * rad);
+  vP = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+}`;
+const CURTAIN_FRAG = /* glsl */ `
+${NOISE}
+uniform vec3 uColor;
+uniform float uAlpha;
+uniform float uTime;
+varying vec3 vP;
+varying float vY;
+void main() {
+  float ang = atan(vP.z, vP.x);
+  // Streaky: rays of thrown dirt, ragged at the top.
+  float rays = snoise(vec4(cos(ang) * 6.0, sin(ang) * 6.0, vY * 2.0, uTime * 0.3)) * 0.5 + 0.5;
+  float a = uAlpha * pow(1.0 - vY, 0.8) * smoothstep(0.15, 0.7, rays + 0.25 * (1.0 - vY));
+  gl_FragColor = vec4(uColor * (0.55 + 0.45 * rays), a);
+}`;
+
+/** The shock wave's dust: a low wall of it racing out over the ground (a unit open cylinder). */
+const SKIRT_FRAG = /* glsl */ `
+${NOISE}
+uniform vec3 uColor;
+uniform float uAlpha;
+varying vec3 vP;
+varying float vY;
+void main() {
+  float ang = atan(vP.z, vP.x);
+  float n = snoise(vec4(cos(ang) * 9.0, sin(ang) * 9.0, vY * 3.0, 1.0)) * 0.5 + 0.5;
+  gl_FragColor = vec4(uColor * (0.7 + 0.3 * n), uAlpha * pow(1.0 - vY, 1.6) * (0.5 + 0.5 * n));
+}`;
+
+/** A condensation dome: the shock front, seen only at its edges. */
+const DOME_VERT = /* glsl */ `
+varying vec3 vN;
+varying vec3 vV;
+void main() {
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vN = normalize(normalMatrix * normal);
+  vV = normalize(-mv.xyz);
+  gl_Position = projectionMatrix * mv;
+}`;
+const DOME_FRAG = /* glsl */ `
+uniform float uAlpha;
+varying vec3 vN;
+varying vec3 vV;
+void main() {
+  float edge = pow(1.0 - abs(dot(vN, vV)), 3.0);
+  gl_FragColor = vec4(vec3(1.0), uAlpha * edge);
+}`;
+
+/** A rising column for the biggest impacts: a stem of dust under a billowing cap. */
+const COLUMN_VERT = /* glsl */ `
+attribute vec4 aSeed;
+uniform float uPsi;
+uniform float uH;
+uniform float uR;
+varying float vA;
+varying float vShade;
+void main() {
+  float hc = uH * (1.0 - exp(-uPsi / 3.0));
+  float rc = uR * (0.35 + 0.65 * (1.0 - exp(-uPsi / 2.5)));
+  vec3 pos;
+  float size;
+  if (aSeed.y < 0.4) {
+    float f = aSeed.x;
+    float a = aSeed.z * 6.2831853;
+    float rs = rc * 0.3 * (0.55 + 0.45 * f) * sqrt(aSeed.w);
+    pos = vec3(cos(a) * rs, hc * f, sin(a) * rs);
+    size = rc * 0.3;
+  } else {
+    vec3 d = normalize(vec3(aSeed.x - 0.5, aSeed.z - 0.45, aSeed.w - 0.5) + 1e-4);
+    pos = vec3(d.x * rc, hc + d.y * rc * 0.55, d.z * rc) * (0.7 + 0.3 * aSeed.y);
+    size = rc * 0.45;
+  }
+  size *= 0.6 + 0.8 * aSeed.w;
+  vA = smoothstep(0.0, 0.4, uPsi) * (1.0 - smoothstep(9.0, 26.0, uPsi)) * 0.2;
+  vShade = 0.5 + 0.3 * aSeed.y;
+  vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  gl_PointSize = clamp(size * 1100.0 / -mv.z, 1.0, 380.0);
+  gl_Position = projectionMatrix * mv;
 }`;
 
 /** Smoke from a wrecked engine bay: puffs leave the source, rise, spread and drift on the wind. */
@@ -737,6 +838,9 @@ interface Vis {
   ejectaLaunch: { x: number; z: number; vr: number; vy: number; ang: number; s: number; spin: number }[];
   dust: THREE.Points;
   ring: THREE.Mesh;
+  dome: THREE.Mesh;
+  curtain: THREE.Mesh;
+  column: THREE.Points;
   smoke: THREE.Points;
   /** What lies on the ground after a slow landing (crushed, if it crushes). */
   wreck: Wreck | null;
@@ -854,6 +958,8 @@ function makeVis(run: Run, k: number, look: Look['runs'][number], sun: THREE.Vec
     uCrFinal: { value: 0 },
     uEject: { value: 0 },
     uMelt: { value: 0 },
+    uMeltCol: { value: new THREE.Color(1, 0.32, 0.06) },
+    uCrust: { value: 1 },
     uScorch: { value: 0 },
     uGlowPos: { value: new THREE.Vector3() },
     uGlowCol: { value: new THREE.Color(0, 0, 0) },
@@ -933,11 +1039,54 @@ function makeVis(run: Run, k: number, look: Look['runs'][number], sun: THREE.Vec
   );
   dust.renderOrder = 3;
   impact.add(dust);
+  // The shock wave: a wall of dust racing over the ground, and (big ones) a faint condensation dome.
+  const wall = () => new THREE.CylinderGeometry(1, 1, 1, 96, 6, true).translate(0, 0.5, 0);
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.92, 1, 96).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+    wall(),
+    new THREE.ShaderMaterial({
+      vertexShader: CURTAIN_VERT,
+      fragmentShader: SKIRT_FRAG,
+      uniforms: { uRb: { value: 1 }, uRt: { value: 1 }, uH: { value: 1 }, uColor: { value: new THREE.Color() }, uAlpha: { value: 0 } },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
   );
+  ring.renderOrder = 3;
   impact.add(ring);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 48, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.ShaderMaterial({ vertexShader: DOME_VERT, fragmentShader: DOME_FRAG, uniforms: { uAlpha: { value: 0 } }, transparent: true, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  dome.renderOrder = 4;
+  impact.add(dome);
+  // The ejecta curtain standing on the growing crater's rim.
+  const curtain = new THREE.Mesh(
+    wall(),
+    new THREE.ShaderMaterial({
+      vertexShader: CURTAIN_VERT,
+      fragmentShader: CURTAIN_FRAG,
+      uniforms: { uRb: { value: 1 }, uRt: { value: 2 }, uH: { value: 1 }, uColor: { value: new THREE.Color() }, uAlpha: { value: 0 }, uTime: { value: 0 } },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  curtain.renderOrder = 3;
+  impact.add(curtain);
+  const column = pointsCloud(
+    300,
+    91 + k,
+    new THREE.ShaderMaterial({
+      vertexShader: COLUMN_VERT,
+      fragmentShader: DUST_FRAG,
+      uniforms: { uPsi: { value: 0 }, uH: { value: 1 }, uR: { value: 1 }, uColor: { value: new THREE.Color() } },
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
+  column.renderOrder = 3;
+  impact.add(column);
   // Smoke from a wrecked engine bay, drifting downwind.
   const windA = r() * Math.PI * 2;
   const smoke = pointsCloud(
@@ -1014,6 +1163,9 @@ function makeVis(run: Run, k: number, look: Look['runs'][number], sun: THREE.Vec
     ejectaLaunch,
     dust,
     ring,
+    dome,
+    curtain,
+    column,
     smoke,
     wreck,
     hull: { intact: hullOf(intact, spin), core: core && hullOf(core, spin), frag: frag && hullOf(frag, spin) },
@@ -1262,6 +1414,30 @@ const view = sceneCache((s: SpaceDropState) => {
 
 const tmp = { a: V(), b: V(), c: V(), d: V(), e: V(), f: V(), up: V(), side: V(), q: new THREE.Quaternion(), m: new THREE.Matrix4(), col: new THREE.Color(), col2: new THREE.Color() };
 
+/**
+ * Radius (m) of an impact's blast wave t s on, taking a twentieth of the energy into the air: Sedov–
+ * Taylor while it's strong (R ∝ (E t²/ρ)^⅕), then moving at the speed of sound.
+ */
+export function shockRadius(E: number, t: number): number {
+  if (t <= 0) return 0;
+  const k = ((0.05 * E) / 1.2) ** 0.2;
+  const ts = ((0.4 * k) / 408) ** (1 / 0.6);
+  return t < ts ? k * t ** 0.4 : k * ts ** 0.4 + 340 * (t - ts);
+}
+
+/** When the blast wave reaches a distance (s after impact). */
+export function shockArrival(E: number, d: number): number {
+  let lo = 0;
+  let hi = 1;
+  while (shockRadius(E, hi) < d && hi < 1e4) hi *= 2;
+  for (let i = 0; i < 40; i++) {
+    const m = (lo + hi) / 2;
+    if (shockRadius(E, m) < d) lo = m;
+    else hi = m;
+  }
+  return hi;
+}
+
 /** Physical seconds into the impact, from video seconds since it: slow motion at first. */
 export function impactClock(tau: number): number {
   if (tau <= 0) return 0;
@@ -1296,7 +1472,7 @@ function poseOf(v: Vis, simT: number): Pose {
 }
 
 /** Camera for one object at video time t: where it is and what it looks at (site frame). */
-function cameraFor(v: Vis, pose: Pose, d: AnyDirector, t: number, tag: string, out: { pos: THREE.Vector3; look: THREE.Vector3; shake: number }, zoomOut = 1) {
+function cameraFor(v: Vis, pose: Pose, d: AnyDirector, t: number, tag: string, out: { pos: THREE.Vector3; look: THREE.Vector3; shake: number }, zoomOut = 1, replay = false) {
   const { O, dir, smp } = pose;
   const up = tmp.up
     .copy(O)
@@ -1342,23 +1518,30 @@ function cameraFor(v: Vis, pose: Pose, d: AnyDirector, t: number, tag: string, o
   // Far enough back to see it come in (clear of the readouts) and what it throws up; less so for
   // big things (a jet is 70 m across, but its wreck still has to read).
   const reach = size < 12 ? size : 12 * Math.sqrt(size / 12);
-  const Dg = Math.max(9 * reach, crD * 7, 3) * zf;
-  const ground = tmp.d.set(Dg * 0.45, Math.max(1.6, Dg * 0.07), Dg);
+  // Never closer than a few metres or lower than eye height, unless it's tiny (a penny).
+  const Dg = Math.max(9 * reach, crD * 7, Math.min(3, size * 16)) * zf;
+  const lowH = Math.min(1.6, size * 3);
+  // The replay: from the other side, lower and closer.
+  const ground = replay ? tmp.d.set(-Dg * 0.5, Math.max(lowH * 0.6, Dg * 0.04), Dg * 0.62) : tmp.d.set(Dg * 0.45, Math.max(lowH, Dg * 0.07), Dg);
   if (t > ta + 1.0 && v.run.tr.impact) {
     const u = smooth(ta + 1.0, ta + 1.6, t);
     // Aim between the incoming object and the site.
-    const target = tmp.e.copy(O).lerp(tmp.f.set(0, size * 0.5, 0), Number.isFinite(ti) ? 1 : 0.35);
+    const target = tmp.e.copy(O).lerp(tmp.f.set(0, size * 0.5, 0), t >= ti ? 1 : 0.35);
     out.pos.lerp(ground, u);
     out.look.lerp(target, u);
     out.shake = 0;
   }
-  if (Number.isFinite(ti)) {
+  if (t >= ti) {
     const tau = t - ti;
     const psi = impactClock(tau);
-    out.shake = Dg * 0.012 * Math.exp(-psi * 3) * smooth(0, 0.05, tau);
+    // The ground shakes when the shock wave gets here, harder the closer and bigger it is.
+    const E = v.run.energy;
+    const arrive = shockArrival(E, Dg);
+    const felt = Math.min(1, Math.max(0.1, Math.cbrt(E / 4.184e6) / (Dg / 12)));
+    out.shake = psi >= arrive ? Dg * 0.012 * felt * Math.exp(-(psi - arrive) * 3) * smooth(arrive, arrive + 0.02, psi) : 0;
     // Crane up over the crater once the dust starts to settle.
     const u = smooth(3.2, 6.5, tau);
-    const aerial = tmp.e.set(crD * 1.2, Math.max(crD * 2.6, size * 5, 6), crD * 1.9 + size * 3).multiplyScalar(zf);
+    const aerial = tmp.e.set(crD * 1.2, Math.max(crD * 2.6, size * 5, Math.min(6, size * 40)), crD * 1.9 + size * 3).multiplyScalar(zf);
     out.pos.copy(ground).lerp(aerial, u);
     out.look.set(0, 0, 0).lerp(tmp.f.set(0, -crD * 0.1, 0), u);
   }
@@ -1472,7 +1655,7 @@ function updateVis(v: Vis, pose: Pose, cam: THREE.Vector3, d: AnyDirector, t: nu
   const camDist = cam.distanceTo(O);
   const tr = v.run.tr;
   const ti = markAt(d, `impact${tag}`);
-  const landed = Number.isFinite(ti) || smp.t >= endTime(tr) - 1e-6;
+  const landed = t >= ti || smp.t >= endTime(tr) - 1e-6;
   const gone = tr.end === 'burnup' && smp.t >= endTime(tr) - 1e-6;
   // Object.
   v.holder.position.copy(O).sub(cam);
@@ -1603,9 +1786,12 @@ function updateGround(v: Vis, cam: THREE.Vector3, camAlt: number, simT: number, 
   const cr = v.run.crater;
   const ti = markAt(d, `impact${tag}`);
   const psi = impactClock(t - ti);
-  const fast = (v.run.tr.impact?.v ?? 0) > 1500;
+  // Hot: fast enough to melt and vaporise (fireball, glowing debris, a molten floor).
+  const vImp = v.run.tr.impact?.v ?? 0;
+  const fast = vImp > 2000;
+  const meltTau = Math.min(6, Math.max(1.5, vImp / 1500));
   let grow = 0;
-  if (cr && Number.isFinite(ti)) {
+  if (cr && t >= ti) {
     const R = cr.diameter / 2;
     const form = Math.max(0.05, 0.9 * Math.sqrt(cr.diameter / 9.81));
     grow = 1 - Math.exp(-psi / (form * 0.35));
@@ -1614,8 +1800,12 @@ function updateGround(v: Vis, cam: THREE.Vector3, camAlt: number, simT: number, 
     u.uRim.value = cr.depth * 0.18 * grow;
     u.uCrFinal.value = R;
     u.uEject.value = grow;
-    u.uMelt.value = fast ? Math.exp(-psi / 2.5) * smooth(0, 0.05, psi) : 0;
-    u.uScorch.value = fast ? Math.min(1, psi * 3) * 0.6 : 0;
+    // The melt glows white-orange, cools through dark red and crusts over.
+    const cool = Math.exp(-psi / meltTau);
+    u.uMelt.value = fast ? (0.35 + 0.65 * cool) * smooth(0, 0.05, psi) * (1 - smooth(meltTau * 2, meltTau * 4, psi)) : 0;
+    blackbody(650 + 1500 * cool, u.uMeltCol.value as THREE.Color).convertSRGBToLinear();
+    u.uScorch.value = fast ? Math.min(0.9, Math.min(1, psi * 3) * 0.6 + 0.3 * (1 - cool)) : 0;
+    u.uCrust.value = 1.1 * cool * cool;
   } else {
     u.uCr.value = 0;
     u.uCrFinal.value = 0;
@@ -1631,16 +1821,16 @@ function updateGround(v: Vis, cam: THREE.Vector3, camAlt: number, simT: number, 
     const tu = (v.trail.material as THREE.ShaderMaterial).uniforms;
     tu.uCam.value.copy(cam);
     // The fall's clock stops at the impact; the smoke keeps ageing with the impact's.
-    tu.uSimT.value = simT + (Number.isFinite(ti) ? impactClock(t - ti) : 0);
-    tu.uClear.value = Number.isFinite(ti) && cr ? Math.max(cr.diameter * 3, v.size * 4) * Math.min(1, impactClock(t - ti) * 4) : 0;
+    tu.uSimT.value = simT + impactClock(t - ti);
+    tu.uClear.value = t >= ti && cr ? Math.max(cr.diameter * 3, v.size * 4) * Math.min(1, impactClock(t - ti) * 4) : 0;
     v.trail.visible = visible;
   }
   // The impact itself (drawn too small to see until then, so its shaders are ready when it comes).
   const imp = v.run.tr.impact;
   v.impact.position.set(0, 0, 0).sub(cam);
   v.impact.visible = Boolean(imp);
-  v.impact.scale.setScalar(Number.isFinite(ti) ? 1 : 1e-6);
-  if (imp && cr && Number.isFinite(ti)) {
+  v.impact.scale.setScalar(t >= ti ? 1 : 1e-6);
+  if (imp && cr && t >= ti) {
     const E = v.run.energy;
     const R = Math.max(cr.diameter / 2, 0.01);
     // Fireball and flash scale with the energy (only fast impacts vaporise enough to burn).
@@ -1678,16 +1868,44 @@ function updateGround(v: Vis, cam: THREE.Vector3, camAlt: number, simT: number, 
       v.ejecta.setMatrixAt(i, tmp.m);
     }
     v.ejecta.instanceMatrix.needsUpdate = true;
-    (v.ejecta.material as THREE.MeshStandardMaterial).color.copy(dustColour(ground, tmp.col)).multiplyScalar(0.8);
+    const em = v.ejecta.material as THREE.MeshStandardMaterial;
+    em.color.copy(dustColour(ground, tmp.col)).multiplyScalar(0.8);
+    // Thrown out molten and glowing from a hot impact, cooling as they fly.
+    if (fast) blackbody(600 + 1600 * Math.exp(-psi / 1.5), em.emissive).convertSRGBToLinear();
+    em.emissiveIntensity = fast ? 2 * Math.exp(-psi / 2) : 0;
+    // The ejecta curtain: rises from the rim as the crater opens, then thins and falls back.
+    const form = Math.max(0.05, 0.9 * Math.sqrt(cr.diameter / 9.81));
+    const Rcur = R * (0.25 + 0.75 * grow);
+    const cu = (v.curtain.material as THREE.ShaderMaterial).uniforms;
+    const hc = 1.4 * R * Math.sqrt(Math.min(1, psi / form));
+    cu.uRb.value = Rcur;
+    cu.uRt.value = Rcur + hc;
+    cu.uH.value = Math.max(1e-3, hc);
+    cu.uAlpha.value = cr.diameter >= 2.5 ? 0.6 * smooth(0, 0.15 * form, psi) * (1 - smooth(0.6 * form, 2.2 * form, psi)) : 0;
+    cu.uTime.value = psi;
+    dustColour(ground, cu.uColor.value).multiplyScalar(0.75);
+    // A rising column over the biggest.
+    const co = (v.column.material as THREE.ShaderMaterial).uniforms;
+    v.column.visible = E >= 1e12;
+    co.uPsi.value = psi;
+    co.uH.value = 600 * (E / 4.184e12) ** 0.25;
+    co.uR.value = co.uH.value * 0.35;
+    dustColour(ground, co.uColor.value).multiplyScalar(fast ? 0.45 : 0.7);
     const du = (v.dust.material as THREE.ShaderMaterial).uniforms;
     du.uPsi.value = psi;
     du.uR.value = R;
     du.uSpeed.value = Math.max(2, Math.min(vScale * 1.2, 400));
     dustColour(ground, du.uColor.value);
-    // The blast ring racing outward over the ground.
-    const ringR = R * 1.2 + psi * Math.min(600, 340 * (1 + Math.cbrt(E / 4.184e9) * 0.1));
-    v.ring.scale.setScalar(ringR);
-    (v.ring.material as THREE.MeshBasicMaterial).opacity = E > 1e8 ? 0.35 * Math.exp(-psi / 1.5) : 0;
+    // The shock wave racing outward: dust kicked up along its foot, a faint dome on big ones.
+    const Rs = Math.max(R * 1.2, shockRadius(E, psi));
+    const ru = (v.ring.material as THREE.ShaderMaterial).uniforms;
+    ru.uRb.value = Rs;
+    ru.uRt.value = Rs * 1.02;
+    ru.uH.value = Math.max(0.3, Math.min(Rs * 0.08, 60));
+    ru.uAlpha.value = E > 1e9 ? 0.45 * Math.exp(-psi / 3) * smooth(0, 0.02, psi) : 0;
+    dustColour(ground, ru.uColor.value);
+    v.dome.scale.setScalar(Rs);
+    (v.dome.material as THREE.ShaderMaterial).uniforms.uAlpha.value = E > 1e10 ? 0.16 * Math.exp(-psi / 0.15) * smooth(0, 0.01, psi) : 0;
   }
   // The wreck: worked out while it comes in to land, shown from the moment it touches.
   if (v.wreck) {
@@ -1695,14 +1913,14 @@ function updateGround(v: Vis, cam: THREE.Vector3, camAlt: number, simT: number, 
     w.group.position.set(0, 0, 0).sub(cam);
     const ta = markAt(d, `approach${tag}`);
     if (Number.isFinite(ta) || Number.isFinite(ti)) w.prepare(() => wreckImpact(v, ta, ti));
-    if (imp && cr && Number.isFinite(ti)) w.update(psi, grow, dustColour(ground, tmp.col2));
+    if (imp && cr && t >= ti) w.update(psi, grow, dustColour(ground, tmp.col2));
     else {
       if (Number.isFinite(ta)) w.work(6);
       w.warm();
     }
   }
   // What it leaves on the ground, and smoke from a wrecked engine.
-  const landed = Boolean(v.wreck && imp && cr && Number.isFinite(ti));
+  const landed = Boolean(v.wreck && imp && cr && t >= ti);
   u.uScarW.value = landed ? v.wreck!.scar(u.uScar.value) : 0;
   if (landed) v.wreck!.gouges(psi, u.uGouge.value);
   else for (const g of u.uGouge.value as THREE.Vector4[]) g.w = 0;
@@ -1744,11 +1962,17 @@ export function drawSpaceDrop(rc: RenderCtx, s: SpaceDropState) {
   const v = view(s, rc.theme);
   const { ctx, width: W, height: H, t } = rc;
   const n = v.vis.length;
-  const simT = simTOf(s);
   const colW = W / n;
+  // The instant replay: each column back to just before its own landing, all in step.
+  const r0 = markAt(s.dir, 'replay');
+  const replaying = t >= r0 && t < r0 + (n === 1 ? REPLAY.solo : REPLAY.versus);
   for (let k = 0; k < n; k++) {
     const vis = v.vis[k];
     const tag = n === 1 ? '' : String(k);
+    const tiK = markAt(s.dir, `impact${tag}`);
+    const again = replaying && Number.isFinite(tiK);
+    const t = again ? tiK - REPLAY.lead + (rc.t - r0) : rc.t;
+    const simT = again ? simTimeAtVideo(s, t) : simTOf(s);
     // Only this column's object and site.
     v.vis.forEach((o, j) => {
       const on = j === k;
@@ -1763,7 +1987,7 @@ export function drawSpaceDrop(rc: RenderCtx, s: SpaceDropState) {
     const pose = poseOf(vis, simT);
     const camOut = { pos: V(), look: V(), shake: 0 };
     // A narrow column needs the camera further back to fit the object across it.
-    cameraFor(vis, pose, s.dir, t, tag, camOut, Math.max(1, 9 / 16 / (colW / H)) * (n > 1 ? 0.75 : 1));
+    cameraFor(vis, pose, s.dir, t, tag, camOut, Math.max(1, 9 / 16 / (colW / H)) * (n > 1 ? 0.75 : 1), again);
     // Shake: a quick deterministic jitter.
     if (camOut.shake > 0) camOut.pos.add(tmp.a.set(Math.sin(t * 61.3 + k), Math.sin(t * 47.1 + 2 * k), Math.sin(t * 53.7)).multiplyScalar(camOut.shake));
     const cam = camOut.pos;
@@ -1785,7 +2009,7 @@ export function drawSpaceDrop(rc: RenderCtx, s: SpaceDropState) {
     // Light the ground from a glowing object or fireball.
     const glow = { pos: pose.O.clone(), col: new THREE.Color(0, 0, 0) };
     const P = plasmaOf(pose.smp.heat);
-    const down = Number.isFinite(markAt(s.dir, `impact${tag}`)) || pose.smp.t >= endTime(vis.run.tr) - 1e-6;
+    const down = t >= tiK || pose.smp.t >= endTime(vis.run.tr) - 1e-6;
     if (P > 0.05 && !down)
       blackbody(pose.smp.Tshock, glow.col)
         .convertSRGBToLinear()
