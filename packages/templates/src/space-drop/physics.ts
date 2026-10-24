@@ -376,7 +376,7 @@ export function simulate(body: Body, start: Start, opts: SimOptions = {}): Traje
   const up = new Float64Array(LAYERS);
   const rhs = new Float64Array(LAYERS);
 
-  let prev: { t: number; h: number } | null = null;
+  let prev: { t: number; h: number; th: number; v: number } | null = null;
   let lastRec = -Infinity;
   let lastPhase: PhaseId = 0;
   for (let step = 0; ; step++) {
@@ -460,23 +460,30 @@ export function simulate(body: Body, start: Start, opts: SimOptions = {}): Traje
     if (h <= 0 && prev) {
       const u = prev.h / (prev.h - h);
       const ti = prev.t + (t - prev.t) * u;
+      // Where and how fast, at that moment (not at the end of the step: by then the spinning
+      // Earth has carried everything tens of metres on).
+      const thi = prev.th + (dm.atan2(y, x) - prev.th) * u;
+      const vi = prev.v + (v - prev.v) * u;
       const angle = (dm.atan2(Math.max(0, vd), vh) * 180) / Math.PI;
       tr.impact = {
         t: ti,
-        v,
+        v: vi,
         angle,
         mass: b.mass,
-        th: dm.atan2(y, x),
+        th: thi,
         count: phase === 1 && tr.breakup ? tr.breakup.count : 1,
         body: b.body,
         shape: b.shape,
         L: b.pancake?.L ?? 0,
       };
-      ev({ kind: 'impact', t: ti, alt: 0, v });
-      // The last sample sits exactly on the ground.
+      ev({ kind: 'impact', t: ti, alt: 0, v: vi });
+      // The last sample sits exactly on the ground, where it touched.
       const n = tr.t.length - 1;
       tr.t[n] = ti;
       tr.h[n] = 0;
+      tr.r[n] = R_EARTH;
+      tr.th[n] = thi;
+      tr.v[n] = vi;
       break;
     }
     if (t > maxT) {
@@ -560,7 +567,7 @@ export function simulate(body: Body, start: Start, opts: SimOptions = {}): Traje
     const [a4x, a4y] = accel(x + dt * v3x, y + dt * v3y, vx + dt * a3x, vy + dt * a3y);
     const v4x = vx + dt * a3x;
     const v4y = vy + dt * a3y;
-    prev = { t, h };
+    prev = { t, h, th: dm.atan2(y, x), v };
     x += (dt / 6) * (vx + 2 * v2x + 2 * v3x + v4x);
     y += (dt / 6) * (vy + 2 * v2y + 2 * v3y + v4y);
     vx += (dt / 6) * (a1x + 2 * a2x + 2 * a3x + a4x);

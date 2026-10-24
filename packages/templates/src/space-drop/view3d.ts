@@ -1230,7 +1230,10 @@ function cameraFor(v: Vis, pose: Pose, d: AnyDirector, t: number, tag: string, o
   const cr = v.run.crater;
   const crD = cr ? cr.diameter : size;
   const zf = Math.max(1, zoomOut * 0.7);
-  const Dg = Math.max(size * 9, crD * 7, 3) * zf;
+  // Far enough back to see it come in (clear of the readouts) and what it throws up; less so for
+  // big things (a jet is 70 m across, but its wreck still has to read).
+  const reach = size < 12 ? size : 12 * Math.sqrt(size / 12);
+  const Dg = Math.max(9 * reach, crD * 7, 3) * zf;
   const ground = tmp.d.set(Dg * 0.45, Math.max(1.6, Dg * 0.07), Dg);
   if (t > ta + 1.0 && v.run.tr.impact) {
     const u = smooth(ta + 1.0, ta + 1.6, t);

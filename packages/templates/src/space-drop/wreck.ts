@@ -349,6 +349,8 @@ export class Wreck {
     if (this.spec)
       for (const m of this.body) {
         const s = Math.max(Math.abs(m.scale.x), Math.abs(m.scale.y), Math.abs(m.scale.z), 1e-6);
+        // Its corners, kept for measuring it fast (the extra points lie between them).
+        m.userData.hull = Float32Array.from((m.geometry.attributes.position as THREE.BufferAttribute).array as ArrayLike<number>);
         const geo = subdivide(m.geometry, size / 30 / s);
         m.geometry.dispose();
         m.geometry = geo;
@@ -390,8 +392,8 @@ export class Wreck {
     const box = new THREE.Box3();
     for (const m of meshesUnder(this.model)) {
       relativeTo(m, this.group, M);
-      const pos = m.geometry.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) box.expandByPoint(tmp.a.fromBufferAttribute(pos, i).applyMatrix4(M));
+      const pts = (m.userData.hull as Float32Array | undefined) ?? ((m.geometry.attributes.position as THREE.BufferAttribute).array as Float32Array);
+      for (let i = 0; i < pts.length; i += 3) box.expandByPoint(tmp.a.set(pts[i], pts[i + 1], pts[i + 2]).applyMatrix4(M));
     }
     const ymin = box.min.y;
     const ymax = box.max.y;
@@ -521,11 +523,11 @@ export class Wreck {
         this.restDrop = Number.isFinite(low) ? low : 0;
       });
 
-    // Torn-off parts: where they sit now, then flung out on their own paths.
-    this.jobs.push(() => {
-      const box = new THREE.Box3();
-      const inner = new THREE.Matrix4();
-      for (const p of this.pieces) {
+    // Torn-off parts: where they sit now, then flung out on their own paths (one per job).
+    const inner = new THREE.Matrix4();
+    for (const p of this.pieces)
+      this.jobs.push(() => {
+        const box = new THREE.Box3();
         relativeTo(p.obj, this.group, M);
         const pos0 = new THREE.Vector3();
         const q0 = new THREE.Quaternion();
@@ -544,7 +546,8 @@ export class Wreck {
         p.obj.quaternion.copy(q0);
         p.obj.scale.copy(s0);
         p.path = this.flingPiece(p.kind, pos0, q0, box, s0, centreY, im, r);
-      }
+      });
+    this.jobs.push(() => {
       const seen = new Set<THREE.Material>();
       for (const m of [...this.body, ...this.pieces.flatMap((p) => meshesUnder(p.obj))])
         for (const mat of materialsOf(m))

@@ -7,6 +7,10 @@ import { simulate, type Start, type Trajectory } from './physics';
 import { spaceDropSchema, type SpaceDropParams } from './params';
 import { buildFall, simTimeAt, type FallSim, type Run } from './script';
 import { drawSpaceDrop } from './view3d';
+import { CRUSH } from './wreck';
+
+/** Objects with windows (their glass shatters as they hit; see models.ts). */
+const GLAZED = new Set(['sedan', 'pickup', 'school-bus', 'jumbo-jet']);
 import { drawSpaceDropTop } from './hud';
 
 export { spaceDropSchema, SPACE_DROP_MODES, type SpaceDropParams } from './params';
@@ -68,9 +72,13 @@ function emitBetween(s: SpaceDropState, from: number, to: number, emit: (e: Omit
   s.sim.runs.forEach((r, k) => {
     for (const e of r.tr.events) {
       if (e.t <= from || e.t > to) continue;
-      if (e.kind === 'impact') emit({ type: 'drop:impact', run: k, energy: r.energy, v: e.v });
-      else if (e.kind === 'airburst') emit({ type: 'drop:airburst', run: k, energy: e.value ?? 0, alt: e.alt });
-      else if (e.kind === 'breakup') emit({ type: 'drop:breakup', run: k, alt: e.alt });
+      if (e.kind === 'impact') {
+        // Slow enough to leave a wreck: does it crumple (and is it still whole, windows and all)?
+        const lands = r.tr.impact?.body.name ?? '';
+        const wreck = e.v < 600 && CRUSH[lands] ? (lands === r.body.name && GLAZED.has(r.obj.id) ? 'glazed' : 'crush') : 'none';
+        emit({ type: 'drop:impact', run: k, energy: r.energy, v: e.v, wreck });
+      } else if (e.kind === 'airburst') emit({ type: 'drop:airburst', run: k, energy: e.value ?? 0, alt: e.alt });
+      else if (e.kind === 'breakup') emit({ type: 'drop:breakup', run: k, alt: e.alt, rock: r.body.breakup?.kind === 'pancake' });
       else if (e.kind === 'subsonic') emit({ type: 'drop:boom', run: k });
       else if (e.kind === 'entry') emit({ type: 'drop:entry', run: k });
       else if (e.kind === 'burnup') emit({ type: 'drop:burnup', run: k });
@@ -153,7 +161,14 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
     const name = objectsOf(p)
       .map((o) => o.short.replace(/^the /, 'a '))
       .join(' vs ');
-    const hook = copy.hook === DEFAULT_HOOK ? (p.mode === 'solo' ? `What if you dropped ${name} from space?` : `${objectsOf(p).map((o) => o.name).join(' vs ')}: dropped from space`) : copy.hook;
+    const hook =
+      copy.hook === DEFAULT_HOOK
+        ? p.mode === 'solo'
+          ? `What if you dropped ${name} from space?`
+          : `${objectsOf(p)
+              .map((o) => o.name)
+              .join(' vs ')}: dropped from space`
+        : copy.hook;
     return [
       { kind: 'hook', text: hook, from: 0, to: 3.4, y: 0.1 },
       { kind: 'cta', text: copy.cta, when: 'outro', y: 0.1 },
@@ -180,6 +195,12 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
       case 'drop:boom':
         return [{ kind: 'sfx', name: 'sonicboom', vel: 0.9 }];
       case 'drop:breakup':
+        // A rock cracking and flattening rumbles; a machine tears apart with metal and glass.
+        if (e.rock)
+          return [
+            { kind: 'sfx', name: 'crunch', vel: 0.9, pitch: 0.05 },
+            { kind: 'sfx', name: 'blast', vel: 0.45, pitch: 0.1 },
+          ];
         return [
           { kind: 'sfx', name: 'crunch', vel: 0.9, pitch: 0.2 },
           { kind: 'sfx', name: 'shatter', vel: 0.6, pitch: 0.3 },
@@ -191,10 +212,14 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
         // Bigger impacts sound deeper.
         const E = e.energy as number;
         const size = Math.min(1, Math.max(0, (Math.log10(E + 1) - 2) / 12));
-        return [
+        const out: AudioEventInput[] = [
           { kind: 'sfx', name: 'blast', vel: 0.5 + 0.5 * size, pitch: 1 - size },
           { kind: 'sfx', name: 'crunch', vel: 0.7, pitch: 0.3 },
         ];
+        // Metal folding up, parts tearing off; a vehicle's windows bursting.
+        if (e.wreck !== 'none') out.push({ kind: 'sfx', name: 'crunch', vel: 0.9, pitch: 0.15 }, { kind: 'sfx', name: 'clang', vel: 0.55, pitch: 0.35 });
+        if (e.wreck === 'glazed') out.push({ kind: 'sfx', name: 'shatter', vel: 0.75, pitch: 0.5 });
+        return out;
       }
       case 'drop:burnup':
         return [{ kind: 'sfx', name: 'flame', vel: 0.6 }];
