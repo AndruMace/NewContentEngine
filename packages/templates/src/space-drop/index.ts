@@ -6,11 +6,8 @@ import { objectById, rodBody, type Body, type SpaceObject, type StartMode } from
 import { simulate, type Start, type Trajectory } from './physics';
 import { spaceDropSchema, type SpaceDropParams } from './params';
 import { buildFall, simTimeAt, type FallSim, type Run } from './script';
-import { drawSpaceDrop } from './view3d';
+import { drawSpaceDrop, makeLook, type Look } from './view3d';
 import { CRUSH } from './wreck';
-
-/** Objects with windows (their glass shatters as they hit; see models.ts). */
-const GLAZED = new Set(['sedan', 'pickup', 'school-bus', 'jumbo-jet']);
 import { drawSpaceDropTop } from './hud';
 
 export { spaceDropSchema, SPACE_DROP_MODES, type SpaceDropParams } from './params';
@@ -19,9 +16,14 @@ export interface SpaceDropState {
   p: SpaceDropParams;
   sim: FallSim;
   dir: Director<FallSim>;
+  /** How it looks apart from the physics (visual-only randomness). */
+  look: Look;
   visual: boolean;
   t: number;
 }
+
+/** Objects with windows (their glass shatters as they hit; see models.ts). */
+const GLAZED = new Set(['sedan', 'pickup', 'school-bus', 'jumbo-jet']);
 
 const DEFAULT_HOOK = 'What if you dropped this from space?';
 const DEFAULT_CTA = 'Real physics, real numbers 🚀';
@@ -131,7 +133,7 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
     const runs = buildRuns(p);
     const { sim, script } = buildFall(runs, p.units, p.ground);
     const dir = storyDirector(script, ctx, 1);
-    const s: SpaceDropState = { p, sim, dir, visual: ctx.visual, t: 0 };
+    const s: SpaceDropState = { p, sim, dir, look: makeLook(ctx.fxRng, p.sun, runs.length), visual: ctx.visual, t: 0 };
     dir.onSpan = (sim, emit, span) => {
       if (span.seconds <= 0) return;
       const a = roarLevel(sim, simTimeAt(sim, span.from));

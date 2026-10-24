@@ -49,6 +49,14 @@ function glassy(o: THREE.Mesh): THREE.Mesh {
   o.userData.glass = true;
   return o;
 }
+/** Where a wrecked engine bay smokes from. */
+function smokes(parent: THREE.Object3D, x: number, y: number, z = 0) {
+  const o = new THREE.Object3D();
+  o.userData.smoke = true;
+  o.position.set(x, y, z);
+  parent.add(o);
+}
+
 /** A group of parts that tears off together. */
 function part(parent: THREE.Object3D, kind: Detach, x = 0, y = 0, z = 0): THREE.Group {
   const p = detach(new THREE.Group(), kind);
@@ -116,6 +124,7 @@ function car(paint: number, pickup = false): THREE.Group {
   for (const s of [-1, 1]) detach(mesh(new THREE.BoxGeometry(0.06, 0.12, 0.3), red, -L / 2 + 0.02, -H / 2 + wr + bodyH * 0.65, s * W * 0.34, g), 'trim');
   detach(mesh(new THREE.BoxGeometry(0.12, 0.16, W * 0.95), chrome(), L / 2 + 0.02, -H / 2 + wr + 0.08, 0, g), 'trim');
   wheels(g, [L * 0.32, -L * 0.32], -H / 2 + wr, W / 2 - 0.12, wr, 0.24);
+  smokes(g, L * 0.36, -H / 2 + wr + bodyH * 0.7);
   return g;
 }
 
@@ -143,6 +152,7 @@ function bus(): THREE.Group {
   detach(mesh(new THREE.BoxGeometry(0.2, 0.3, W * 1.02), black, -L / 2 - 0.05, -0.9, 0, g), 'trim');
   glassy(mesh(new THREE.BoxGeometry(0.04, 1.0, W * 0.85), glass(), L / 2 + 0.005, 0.85, 0, g));
   wheels(g, [L * 0.33, -L * 0.28], -H / 2 + 0.5, W / 2 - 0.2, 0.5, 0.35);
+  smokes(g, L / 2 - 0.9, -0.2);
   return g;
 }
 
@@ -172,6 +182,15 @@ function tank(): THREE.Group {
   mesh(xcyl(0.09, 5.2, 20), olive, 4.0, 0.05, 0, turret);
   mesh(xcyl(0.16, 0.9, 20), olive, 1.9, 0.05, 0, turret);
   mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 20), dark, -0.6, 0.5, 0.5, turret);
+  // Periscopes: little blocks of glass on the turret roof.
+  for (const [x, z] of [
+    [0.9, -0.7],
+    [0.9, 0.7],
+    [-0.6, -0.45],
+  ])
+    glassy(mesh(new THREE.BoxGeometry(0.22, 0.14, 0.3), glass(), x, 0.47, z, turret));
+  // The engine sits at the back.
+  smokes(g, -3.0, 0.3);
   return g;
 }
 

@@ -12,7 +12,7 @@
  * Everything is placed in the landing site's frame (x downrange, y up) from the precomputed fall,
  * then shifted so the camera sits at the origin. Rendering only: nothing here touches the sim.
  */
-import type { RenderCtx } from '@sim/engine';
+import type { RenderCtx, Rng } from '@sim/engine';
 import { THREE, draw3DLayers, sceneCache, studioEnvironment } from '../three-layer';
 import { HASH, NOISE4 } from '../ambient/glsl';
 import { markAt, type AnyDirector } from '../story';
@@ -24,9 +24,42 @@ import { endTime, type Run } from './script';
 import { Wreck, relativeTo, type WreckImpact } from './wreck';
 import type { SpaceDropState } from './index';
 
-/** Where the sun is, in the landing site's frame (high in the sky there). */
-const SUN = new THREE.Vector3(-0.42, 0.66, 0.62).normalize();
 const V = () => new THREE.Vector3();
+
+/**
+ * How a render looks, apart from the physics: from the seed's visual-only randomness, so two seeds
+ * of the same drop show different landings, wrecks, terrain and light with identical numbers.
+ */
+export interface Look {
+  /** Direction to the sun in the landing site's frame. */
+  sun: [number, number, number];
+  runs: {
+    /** Seeds the terrain, clouds, debris and wreck. */
+    seed: number;
+    /** Where its tumble starts, and how far off broadside-on it lands (rad). */
+    tumblePhase: number;
+    landTilt: number;
+    /** Where the camera's slow swing starts. */
+    camPhase: number;
+  }[];
+}
+
+/** Sun heights (degrees) for the settings that fix one. */
+const SUN_HEIGHT = { low: 12, mid: 35, high: 62 } as const;
+
+export function makeLook(rng: Rng, sun: 'auto' | keyof typeof SUN_HEIGHT, n: number): Look {
+  const r = rng.fork(0x51d);
+  const elev = (sun === 'auto' ? r.range(14, 62) : SUN_HEIGHT[sun]) * (Math.PI / 180);
+  // From behind the camera and off to a side: never straight into the lens.
+  const az = (-34 + r.range(-70, 70)) * (Math.PI / 180);
+  return {
+    sun: [Math.cos(elev) * Math.sin(az), Math.sin(elev), Math.cos(elev) * Math.cos(az)],
+    runs: Array.from({ length: n }, () => ({ seed: r.int(1, 999_999), tumblePhase: r.range(0, Math.PI * 2), landTilt: r.range(-0.55, 0.55), camPhase: r.range(0, Math.PI * 2) })),
+  };
+}
+
+/** A small offset for noise seeds from a big seed. */
+const noiseSeed = (seed: number, salt: number) => ((seed * 7 + salt * 13) % 97) * 1.37 + salt;
 
 // ---------------------------------------------------------------------------------------------
 // Colour helpers
@@ -249,6 +282,9 @@ uniform float uMelt;
 uniform float uScorch;
 uniform vec3 uGlowPos;
 uniform vec3 uGlowCol;
+uniform vec4 uScar;
+uniform float uScarW;
+uniform vec4 uGouge[4];
 varying vec3 vLocal;
 varying vec3 vN;
 varying float vDist;
@@ -296,6 +332,21 @@ void main() {
     col = mix(col, col * mix(0.72, 1.18, rays), blanket * uEject);
     col = mix(col, col * 0.25, uScorch * smoothstep(2.5, 0.6, x));
     col += vec3(1.0, 0.32, 0.06) * uMelt * inside * (0.55 + 0.45 * n) * 1.3;
+  }
+  // Scraped where a wreck slid or toppled, gouged where heavy parts first hit.
+  if (uScarW > 0.0) {
+    vec2 sa = uScar.xy;
+    vec2 sb = uScar.zw - sa;
+    float h = clamp(dot(q - sa, sb) / max(dot(sb, sb), 1e-6), 0.0, 1.0);
+    float d = length(q - sa - sb * h);
+    col = mix(col, col * vec3(0.58, 0.53, 0.48), (1.0 - smoothstep(uScarW * 0.35, uScarW * 0.5, d)) * (0.75 + 0.25 * n));
+  }
+  for (int i = 0; i < 4; i++) {
+    vec4 g = uGouge[i];
+    if (g.w <= 0.0) continue;
+    float d = length(q - g.xy) / g.z;
+    col = mix(col, col * 0.5, (1.0 - smoothstep(0.55, 1.0, d)) * g.w);
+    col = mix(col, col * 1.12, smoothstep(0.85, 1.0, d) * (1.0 - smoothstep(1.0, 1.4, d)) * g.w);
   }
   // Small bumps at the pixel's scale, for texture in the light (two octaves, blended like the colour).
   vec2 bump = vec2(0.0);
@@ -474,6 +525,29 @@ void main() {
   vec2 c = gl_PointCoord - 0.5;
   float a = smoothstep(0.5, 0.0, length(c)) * vA;
   gl_FragColor = vec4(uColor * vShade * 1.7, a);
+}`;
+
+/** Smoke from a wrecked engine bay: puffs leave the source, rise, spread and drift on the wind. */
+const SMOKE_VERT = /* glsl */ `
+attribute vec4 aSeed;
+uniform float uPsi;
+uniform vec3 uSrc;
+uniform vec3 uWind;
+uniform float uSize;
+varying float vA;
+varying float vShade;
+void main() {
+  float life = 9.0;
+  float age = mod(uPsi + aSeed.x * life, life);
+  float on = step(age, uPsi);
+  vec3 pos = uSrc + vec3(aSeed.y - 0.5, 0.0, aSeed.z - 0.5) * uSize * (0.15 + 0.05 * age)
+    + vec3(0.0, uSize * (0.22 * age + 0.015 * age * age), 0.0) + uWind * age;
+  float size = uSize * (0.12 + 0.1 * age) * (0.7 + 0.6 * aSeed.w);
+  vA = on * smoothstep(0.0, 0.5, age) * (1.0 - smoothstep(life * 0.45, life, age)) * smoothstep(0.0, 1.5, uPsi) * 0.3;
+  vShade = 0.22 + 0.2 * aSeed.w;
+  vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  gl_PointSize = clamp(size * 1100.0 / -mv.z, 1.0, 380.0);
+  gl_Position = projectionMatrix * mv;
 }`;
 
 /** A ball of fire (or of glowing dust in an airburst), boiling, cooling from white to dark smoke. */
@@ -663,6 +737,7 @@ interface Vis {
   ejectaLaunch: { x: number; z: number; vr: number; vy: number; ang: number; s: number; spin: number }[];
   dust: THREE.Points;
   ring: THREE.Mesh;
+  smoke: THREE.Points;
   /** What lies on the ground after a slow landing (crushed, if it crushes). */
   wreck: Wreck | null;
   /** Points on each model's surface (spin frame), to find its lowest point as it comes down. */
@@ -673,12 +748,13 @@ interface Vis {
   tSite: number;
   thSite: number;
   tumbleAxis: THREE.Vector3;
-  /** Where its tumble starts, and how far off broadside-on it lands (rad). */
+  /** Where its tumble starts, and how far off broadside-on it lands (rad); where the camera swing starts. */
   tumblePhase: number;
   landTilt: number;
+  camPhase: number;
 }
 
-function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, near: THREE.Scene): Vis {
+function makeVis(run: Run, k: number, look: Look['runs'][number], sun: THREE.Vector3, mid: THREE.Scene, near: THREE.Scene): Vis {
   const { tr, obj, body } = run;
   const size = sizeOf(body.shape);
   const holder = new THREE.Group();
@@ -765,13 +841,13 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
   const r0 = Math.max(0.0004, Math.min(crR, size) / 30);
   const groundU = {
     uType: { value: 0 },
-    uSeed: { value: 3.1 + k },
+    uSeed: { value: noiseSeed(look.seed, 3) },
     uFlat: { value: Math.max(40, crR * 6, size * 20) },
     uCr: { value: 0 },
     uCd: { value: 0 },
     uRim: { value: 0 },
     uCam: { value: new THREE.Vector3() },
-    uSun: { value: SUN },
+    uSun: { value: sun },
     uFogCol: { value: new THREE.Color() },
     uFogDist: { value: 60000 },
     uRMax: { value: 240000 },
@@ -781,6 +857,9 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
     uScorch: { value: 0 },
     uGlowPos: { value: new THREE.Vector3() },
     uGlowCol: { value: new THREE.Color(0, 0, 0) },
+    uScar: { value: new THREE.Vector4() },
+    uScarW: { value: 0 },
+    uGouge: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
   };
   const ground = new THREE.Mesh(
     patchGeometry(r0, 240000),
@@ -798,9 +877,9 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
         uCam: groundU.uCam,
         uH: { value: 2600 },
         uCover: { value: 0.2 },
-        uSeed: { value: 8.7 + k },
+        uSeed: { value: noiseSeed(look.seed, 8) },
         uNear: { value: 1 },
-        uSun: { value: SUN },
+        uSun: { value: sun },
         uFogCol: groundU.uFogCol,
         uFogDist: groundU.uFogDist,
       },
@@ -836,7 +915,7 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
   const ejecta = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: groundCol, roughness: 0.95 }), nEj);
   ejecta.frustumCulled = false;
   impact.add(ejecta);
-  const r = rng(101 + k);
+  const r = rng(look.seed);
   const ejectaLaunch = Array.from({ length: nEj }, () => {
     const x = 0.25 + 0.75 * r();
     return { x, z: 0, vr: x ** -1.4, vy: 0.8 + 0.5 * r(), ang: r() * Math.PI * 2, s: 0.02 + 0.06 * r() ** 2, spin: r() * 10 };
@@ -859,6 +938,27 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
   );
   impact.add(ring);
+  // Smoke from a wrecked engine bay, drifting downwind.
+  const windA = r() * Math.PI * 2;
+  const smoke = pointsCloud(
+    160,
+    77 + k,
+    new THREE.ShaderMaterial({
+      vertexShader: SMOKE_VERT,
+      fragmentShader: DUST_FRAG,
+      uniforms: {
+        uPsi: { value: 0 },
+        uSrc: { value: new THREE.Vector3() },
+        uWind: { value: new THREE.Vector3(Math.cos(windA), 0, Math.sin(windA)).multiplyScalar(0.6 + 0.6 * r()) },
+        uSize: { value: size },
+        uColor: { value: new THREE.Color(0.3, 0.3, 0.3) },
+      },
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
+  smoke.renderOrder = 3;
+  impact.add(smoke);
   impact.traverse((o) => (o.frustumCulled = false));
   // A slow landing leaves the object (or what's left of it) wrecked in its dent.
   let wreck: Wreck | null = null;
@@ -867,7 +967,7 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
     const model = last === body ? buildModel(obj.id, body.shape) : last ? buildModel(obj.id, last.shape, last.name) : frag ? buildModel('stony-meteorite', tr.impact.shape, 'fragment') : null;
     if (model) {
       heatify(model, heatU);
-      wreck = new Wreck(model, tr.impact.body.name, 61 + k, sizeOf(tr.impact.shape));
+      wreck = new Wreck(model, tr.impact.body.name, look.seed, sizeOf(tr.impact.shape));
       mid.add(wreck.group);
     }
   }
@@ -914,6 +1014,7 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
     ejectaLaunch,
     dust,
     ring,
+    smoke,
     wreck,
     hull: { intact: hullOf(intact, spin), core: core && hullOf(core, spin), frag: frag && hullOf(frag, spin) },
     burst,
@@ -921,15 +1022,12 @@ function makeVis(run: Run, k: number, envTex: THREE.Texture, mid: THREE.Scene, n
     tSite: endTime(tr),
     thSite,
     tumbleAxis: new THREE.Vector3(0.3 + 0.4 * r(), 1, 0.5 * r() - 0.25).normalize(),
-    ...(() => {
-      // Its own, so different objects don't all come down alike.
-      const h = rng([...obj.id].reduce((a, ch) => Math.imul(a, 31) + ch.charCodeAt(0), 7 + k));
-      return { tumblePhase: h() * Math.PI * 2, landTilt: (h() - 0.5) * 1.1 };
-    })(),
+    tumblePhase: look.tumblePhase,
+    landTilt: look.landTilt,
+    camPhase: look.camPhase,
   };
   vis.trail = buildTrail(vis);
   if (vis.trail) mid.add(vis.trail);
-  void envTex;
   return vis;
 }
 
@@ -1042,6 +1140,7 @@ interface View {
   hemiNear: THREE.HemisphereLight;
   sunMid: THREE.DirectionalLight;
   hemiMid: THREE.HemisphereLight;
+  sun: THREE.Vector3;
   key: object;
   /** For the time-warp readout: last frame's video and sim times. */
 }
@@ -1053,11 +1152,15 @@ const view = sceneCache((s: SpaceDropState) => {
   const far = new THREE.Scene();
   const mid = new THREE.Scene();
   const near = new THREE.Scene();
-  const env = studioEnvironment('space-drop', (sc) => {
+  const SUN = new THREE.Vector3(...s.look.sun).normalize();
+  // Reflections only need the sun roughly right: one environment per band of sun height.
+  const band = SUN.y < 0.37 ? 0 : SUN.y < 0.74 ? 1 : 2;
+  const env = studioEnvironment(`space-drop-${band}`, (sc) => {
     sc.background = new THREE.Color(0x05070c);
-    const sun = new THREE.Mesh(new THREE.SphereGeometry(2, 16, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 28, 24) }));
-    sun.position.copy(SUN).multiplyScalar(20);
-    sc.add(sun);
+    const sunBall = new THREE.Mesh(new THREE.SphereGeometry(2, 16, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 28, 24) }));
+    const e = [0.2, 0.6, 1.1][band];
+    sunBall.position.set(-0.56 * Math.cos(e), Math.sin(e), 0.83 * Math.cos(e)).multiplyScalar(20);
+    sc.add(sunBall);
     const ground = new THREE.Mesh(
       new THREE.SphereGeometry(30, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: new THREE.Color(0.12, 0.16, 0.24), side: THREE.BackSide }),
@@ -1140,12 +1243,18 @@ const view = sceneCache((s: SpaceDropState) => {
   const hemiMid = new THREE.HemisphereLight(0x9cc0ff, 0x4a3c2c, 0.8);
   mid.add(hemiMid);
 
-  const vis = s.sim.runs.map((run, k) => makeVis(run, k, env, mid, near));
+  const vis = s.sim.runs.map((run, k) => makeVis(run, k, s.look.runs[k], SUN, mid, near));
   for (const v of vis) (v.ground.material as THREE.ShaderMaterial).uniforms.uType.value = GROUND_TYPE[s.p.ground];
   for (const v of vis) ((v.clouds.material as THREE.ShaderMaterial).uniforms.uCover.value as number) = s.p.ground === 'sand' ? 0.05 : s.p.ground === 'soil' ? 0.28 : 0.16;
   // `scene` only carries ownership for disposal: everything hangs off it.
   scene.add(far, mid, near);
-  return { scene, far, mid, near, camFar, camMid, camNear, sky, stars, earth, atmos, vis, sunNear, hemiNear, sunMid, hemiMid, key: {} } as View;
+  // A low sun is warmer and weaker.
+  const warm = smooth(0.45, 0.12, SUN.y);
+  for (const l of [sunNear, sunMid]) {
+    l.color.set(0xfff1dc).lerp(new THREE.Color(0xffb070), warm);
+    l.intensity *= 1 - 0.3 * warm;
+  }
+  return { scene, far, mid, near, camFar, camMid, camNear, sky, stars, earth, atmos, vis, sunNear, hemiNear, sunMid, hemiMid, sun: SUN, key: {} } as View;
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -1201,7 +1310,7 @@ function cameraFor(v: Vis, pose: Pose, d: AnyDirector, t: number, tag: string, o
   const alt = smp.h;
   // Seen from beside its path, looking a little down so the horizon (and how high it is) stays in
   // frame, swinging slowly round; tilting further down as it nears the ground, to watch it rush up.
-  const yaw = 0.35 * Math.sin(0.4 + t * 0.09);
+  const yaw = 0.35 * Math.sin(v.camPhase + t * 0.09);
   const low = smooth(30000, 4000, alt);
   const dist = size * (2.4 + 1.2 * glowRoom) * (1 + 0.5 * low) * zoomOut;
   const across = tmp.e.crossVectors(up, side).normalize();
@@ -1592,6 +1701,15 @@ function updateGround(v: Vis, cam: THREE.Vector3, camAlt: number, simT: number, 
       w.warm();
     }
   }
+  // What it leaves on the ground, and smoke from a wrecked engine.
+  const landed = Boolean(v.wreck && imp && cr && Number.isFinite(ti));
+  u.uScarW.value = landed ? v.wreck!.scar(u.uScar.value) : 0;
+  if (landed) v.wreck!.gouges(psi, u.uGouge.value);
+  else for (const g of u.uGouge.value as THREE.Vector4[]) g.w = 0;
+  // (Drawn throughout, invisible until it starts, so its shader is ready.)
+  const sm = (v.smoke.material as THREE.ShaderMaterial).uniforms;
+  v.smoke.visible = Boolean(v.wreck);
+  sm.uPsi.value = landed && v.wreck!.smokeSource(sm.uSrc.value) ? Math.max(0, psi - 0.3) : 0;
   // An airburst's fireball, high above.
   const tb = markAt(d, `burst${tag}`);
   const ab = v.run.tr.airburst;
@@ -1686,11 +1804,11 @@ export function drawSpaceDrop(rc: RenderCtx, s: SpaceDropState) {
     (v.earth.material as THREE.ShaderMaterial).uniforms.uTime.value = simT;
     // Lights: harsh sun in space, softened by sky light low down.
     const dens = Math.exp(-camAlt / 8000);
-    v.sunNear.position.copy(SUN).multiplyScalar(100);
+    v.sunNear.position.copy(v.sun).multiplyScalar(100);
     v.sunNear.target.position.set(0, 0, 0);
     v.hemiNear.intensity = 0.12 + 0.9 * dens;
     v.hemiNear.color.setRGB(0.55, 0.7, 1).lerp(tmp.col.setRGB(0.08, 0.1, 0.16), 1 - dens);
-    v.sunMid.position.copy(SUN).multiplyScalar(100);
+    v.sunMid.position.copy(v.sun).multiplyScalar(100);
     v.sunMid.target.position.set(0, 0, 0);
     v.near.environmentIntensity = 0.25 + 0.5 * dens;
     draw3DLayers(

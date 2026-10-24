@@ -44,6 +44,15 @@ export const CRUSH: Record<string, CrushSpec> = {
   'jet engine': { force: 2e7, max: 0.35, bounce: 0.04 },
 };
 
+/**
+ * How much of its height (along the hit) it's crushed by: the work done crushing it through d against
+ * force F takes all its kinetic energy, d = m v² / 2F, eased into the most it can give.
+ */
+export function crushFraction(spec: CrushSpec, mass: number, v: number, H: number): number {
+  const d = (mass * v * v) / (2 * spec.force);
+  return spec.max * (1 - Math.exp(-d / (H * spec.max)));
+}
+
 const G = 9.81;
 /** Sampling of the precomputed paths (physical s), and how long they run. */
 const STEP = 1 / 100;
@@ -58,7 +67,7 @@ export interface CraterShape {
 }
 
 /** Ground height of the finished crater at distance r from its centre (matches the ground shader). */
-function bowl(cr: CraterShape, r: number): number {
+export function bowl(cr: CraterShape, r: number): number {
   if (cr.R <= 0) return 0;
   const x = r / cr.R;
   return x < 1 ? -cr.depth * (1 - x * x) + cr.rim * x ** 5 : cr.rim * x ** -3;
@@ -258,6 +267,8 @@ interface Piece {
   kind: Detach;
   /** Per sample: position (3) and quaternion (4), in the wreck's frame. */
   path: Float32Array;
+  /** Where and when it first hit the ground, and how big it is (for the gouge it leaves). */
+  hit: { x: number; z: number; t: number; size: number } | null;
 }
 
 /** A shard or fragment: thrown at t0, flies, lands and skids to a stop lying flat. */
@@ -324,6 +335,11 @@ export class Wreck {
   private topT = 1;
   /** How far above the ground its lowest point ends up once it has toppled (settled out as it falls). */
   private restDrop = 0;
+  /** A burning engine bay (a marker in the model), where it is after the crush (root frame). */
+  private smokeMark: THREE.Object3D | null = null;
+  private smokeAt: THREE.Vector3 | null = null;
+  /** How wide it is across the ground, for the scrape it leaves. */
+  private width = 1;
 
   constructor(
     private readonly model: THREE.Group,
@@ -337,9 +353,14 @@ export class Wreck {
     this.group.visible = false;
     const walk = (o: THREE.Object3D) => {
       if (o !== model && o.userData.detach) {
-        this.pieces.push({ obj: o, kind: o.userData.detach as Detach, path: new Float32Array(0) });
+        this.pieces.push({ obj: o, kind: o.userData.detach as Detach, path: new Float32Array(0), hit: null });
+        // Its windows shatter too (a jet's cockpit, a tank's periscopes).
+        o.traverse((c) => {
+          if ((c as THREE.Mesh).isMesh && c.userData.glass) this.glass.push(c as THREE.Mesh);
+        });
         return;
       }
+      if (o.userData.smoke) this.smokeMark = o;
       if ((o as THREE.Mesh).isMesh) (o.userData.glass ? this.glass : this.body).push(o as THREE.Mesh);
       o.children.forEach(walk);
     };
@@ -402,8 +423,7 @@ export class Wreck {
     this.H = H;
     const v = Math.max(1, im.v);
     const spec = this.spec;
-    const d = spec ? (im.mass * v * v) / (2 * spec.force) : 0;
-    const c = spec ? spec.max * (1 - Math.exp(-d / (H * spec.max))) : 0;
+    const c = spec ? crushFraction(spec, im.mass, v, H) : 0;
     this.c = c;
     // It decelerates over the distance it crushes (plus a little give in the ground).
     this.tc = Math.max(0.008, (2 * (H * c + 0.02 * H)) / v);
@@ -438,6 +458,7 @@ export class Wreck {
     const cr = im.crater;
     const size = im.size;
     const centreY = H / 2;
+    this.width = Math.max(0.05, Math.min(box.max.x - box.min.x, box.max.z - box.min.z));
 
     // The crush, as a morph target on each body mesh: one mesh per job.
     if (c > 0.005) {
@@ -482,6 +503,11 @@ export class Wreck {
         y += b * (1 - 0.5 * s);
         w.set(dx, Math.max(y, ymin + b - 0.02 * H), dz);
       };
+      if (this.smokeMark) {
+        const w = new THREE.Vector3().applyMatrix4(relativeTo(this.smokeMark, this.group, M));
+        deform(w);
+        this.smokeAt = w.applyQuaternion(this.R.clone().invert());
+      }
       // In slices of a few thousand vertices.
       const CHUNK = 6000;
       for (const m of this.body) {
@@ -545,7 +571,7 @@ export class Wreck {
         p.obj.position.copy(pos0);
         p.obj.quaternion.copy(q0);
         p.obj.scale.copy(s0);
-        p.path = this.flingPiece(p.kind, pos0, q0, box, s0, centreY, im, r);
+        p.path = this.flingPiece(p, pos0, q0, box, s0, centreY, im, r);
       });
     this.jobs.push(() => {
       const seen = new Set<THREE.Material>();
@@ -576,6 +602,37 @@ export class Wreck {
       this.bits.count = Math.max(1, this.bitF.length);
       this.place(this.shards, this.shardF, -1);
       this.place(this.bits, this.bitF, -1);
+    });
+  }
+
+  /** The parts that tear off (in the wreck's frame once it has landed). */
+  get parts(): readonly THREE.Object3D[] {
+    return this.pieces.map((p) => p.obj);
+  }
+
+  /** Where smoke rises from (the wreck's frame), once it has landed; false if nothing burns. */
+  smokeSource(out: THREE.Vector3): boolean {
+    if (!this.smokeAt || !this.prepared) return false;
+    out.copy(this.smokeAt).applyQuaternion(this.root.quaternion).add(this.root.position);
+    out.y = Math.max(out.y, 0.1);
+    return true;
+  }
+
+  /** The scrape it leaves: from where it hit to where it is now (wreck frame), and how wide. */
+  scar(out: THREE.Vector4): number {
+    out.set(0, 0, this.root.position.x, this.root.position.z);
+    return Math.hypot(out.z, out.w) > 0.2 * this.width ? this.width * 0.7 : 0;
+  }
+
+  /** Gouges where the heaviest parts first hit, up to `out.length`: x, z, radius and how far formed. */
+  gouges(psi: number, out: THREE.Vector4[]) {
+    const hits = this.pieces
+      .map((p) => p.hit)
+      .filter((h): h is NonNullable<Piece['hit']> => h !== null)
+      .sort((a, b) => b.size - a.size);
+    out.forEach((g, i) => {
+      const h = hits[i];
+      g.set(h?.x ?? 0, h?.z ?? 0, (h?.size ?? 1) * 0.3, h ? smooth(h.t, h.t + 0.08, psi) : 0);
     });
   }
 
@@ -639,7 +696,8 @@ export class Wreck {
   }
 
   /** A torn-off part's path: crushed down with the body, thrown, bouncing, and settling flat. */
-  private flingPiece(kind: Detach, pos0: THREE.Vector3, q0: THREE.Quaternion, box: THREE.Box3, s0: THREE.Vector3, centreY: number, im: WreckImpact, r: () => number): Float32Array {
+  private flingPiece(piece: Piece, pos0: THREE.Vector3, q0: THREE.Quaternion, box: THREE.Box3, s0: THREE.Vector3, centreY: number, im: WreckImpact, r: () => number): Float32Array {
+    const kind = piece.kind;
     const path = new Float32Array(SAMPLES * 7);
     const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).multiply(s0));
     const extent = new THREE.Vector3().subVectors(box.max, box.min).multiply(s0);
@@ -685,6 +743,14 @@ export class Wreck {
     const sub = 4;
     const dt = STEP / sub;
     const dq = new THREE.Quaternion();
+    // Rolling (wheels): along `roll`, turning about `rollAxis`.
+    const axle = new THREE.Vector3();
+    const roll = new THREE.Vector3();
+    const rollAxis = new THREE.Vector3();
+    const radius = Math.max(0.05, Math.max(Math.abs(extent.x), Math.abs(extent.y)) / 2);
+    let rollSpeed = 0;
+    let rollAngle = 0;
+    let rollT = 0;
     let t = 0;
     for (let i = 0; i < SAMPLES; i++) {
       for (let k = 0; k < (i === 0 ? 0 : sub); k++) {
@@ -702,7 +768,26 @@ export class Wreck {
           if (lo < gy) {
             p.y += gy - lo;
             if (vel.y < 0) {
+              if (!piece.hit) piece.hit = { x: p.x, z: p.z, t, size: pieceSize };
               bounces++;
+              // A wheel that comes down on its tread rolls away.
+              axle.set(0, 0, 1).applyQuaternion(q);
+              const vh = Math.hypot(vel.x, vel.z);
+              if (kind === 'wheel' && Math.abs(axle.y) < 0.5 && vh > 2.5) {
+                const ah = axle.setY(0).normalize();
+                roll.set(vel.x, 0, vel.z).addScaledVector(ah, -(vel.x * ah.x + vel.z * ah.z));
+                if (roll.lengthSq() > 0.25) {
+                  roll.normalize();
+                  // Stood upright on its tread, turning about the axle as it goes.
+                  qs.setFromUnitVectors(tmp.b.set(0, 0, 1).applyQuaternion(q), ah).multiply(q);
+                  q.copy(qs);
+                  rollAxis.crossVectors(tmp.b.set(0, 1, 0), roll).normalize();
+                  rollSpeed = Math.hypot(vel.x, vel.z) * 0.85;
+                  rollT = t;
+                  phase = 3;
+                  continue;
+                }
+              }
               vel.y = -vel.y * 0.3;
               vel.x *= 0.6;
               vel.z *= 0.6;
@@ -717,8 +802,27 @@ export class Wreck {
               }
             }
           }
+        } else if (phase === 3) {
+          // Rolling: slowed by the ground, wobbling more as it slows, until it falls flat.
+          rollSpeed = Math.max(0, rollSpeed - (1.4 + 0.5 * rollSpeed * 0.1) * dt);
+          p.addScaledVector(roll, rollSpeed * dt);
+          rollAngle += (rollSpeed / radius) * dt;
+          const wob = 0.12 * (1 - Math.min(1, rollSpeed / 6)) * Math.sin((t - rollT) * 7);
+          q.copy(qs).premultiply(dq.setFromAxisAngle(rollAxis, rollAngle)).premultiply(tmp.q2.setFromAxisAngle(roll, wob));
+          // On its tread: the centre a radius up (its box's corners would make it bob).
+          p.y = bowl(im.crater, Math.hypot(p.x, p.z)) + radius;
+          if (rollSpeed < 1.2 || t - rollT > 5) {
+            // Falls over onto its side.
+            phase = 2;
+            ts = t;
+            ps.copy(p);
+            qs.copy(q);
+            qRest = restOf(q);
+            lift = -low(qRest);
+            vel.set(roll.x * rollSpeed, 0, roll.z * rollSpeed);
+          }
         } else {
-          const a = smooth(0, 0.35, t - ts);
+          const a = smooth(0, kind === 'wheel' ? 0.5 : 0.35, t - ts);
           q.slerpQuaternions(qs, qRest, a);
           const f = Math.exp(-dt / 0.2);
           vel.x *= f;
