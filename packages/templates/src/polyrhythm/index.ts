@@ -9,16 +9,22 @@ import { FIGURES, buildEpicycles, drawEpicycles, type Epicycles, type Figure } f
 import { MAX_LISSAJOUS, drawLissajous, lissajousColumnX } from './lissajous';
 import { MAX_PLANETS, drawOrrery, orbitRadius } from './orrery3d';
 import { drawRipples, ripplePan, rippleSyncS } from './ripples';
+import { MAX_GEARS, buildGearTrain, reachableRates, trainExtent, type Arbor } from './gears';
+import { drawGears } from './gears3d';
+import { MAX_LIGHTHOUSES, drawLighthouses, lighthousePan } from './lighthouse3d';
 
-export const POLYRHYTHM_STYLES = ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d', 'orrery', 'lissajous', 'fourier', 'ripples'] as const;
+export const POLYRHYTHM_STYLES = ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d', 'orrery', 'lissajous', 'fourier', 'ripples', 'gears', 'lighthouse'] as const;
 export type PolyrhythmStyle = (typeof POLYRHYTHM_STYLES)[number];
+
+/** Sidebar rule: show a setting only for the styles it affects. */
+const onlyFor = (...styles: PolyrhythmStyle[]) => ({ showWhen: { style: styles } });
 
 export const polyrhythmSchema = z.object({
   style: z.enum(POLYRHYTHM_STYLES).default('arcs').meta({ title: 'Style' }),
   pattern: z.enum(PATTERNS).default('linear').meta({ title: 'Speed pattern' }),
   count: z.number().int().min(5).max(32).default(18).meta({ title: 'Dots / pendulums (polygons: up to 10)' }),
   loopSeconds: z.number().min(12).max(75).default(36).meta({ title: 'Loop length (s)' }),
-  baseCycles: z.number().int().min(2).max(40).default(10).meta({ title: 'Cycles of slowest' }),
+  baseCycles: z.number().int().min(1).max(40).default(10).meta({ title: 'Cycles of slowest' }),
   cycleStep: z.number().int().min(1).max(3).default(1).meta({ title: 'Cycle step' }),
   scale: z.enum(['random', ...(Object.keys(SCALES) as ScaleName[])]).default('random').meta({ title: 'Scale' }),
   rootNote: z.number().int().min(36).max(72).default(55).meta({ title: 'Root note (MIDI)' }),
@@ -27,11 +33,13 @@ export const polyrhythmSchema = z.object({
   notes: z.enum(['scale', 'chord', 'chord7']).default('scale').meta({ title: 'Notes (chord: root, 3rd and 5th only; chord7 adds the 7th)' }),
   pitchRange: z.number().min(1).max(5).default(3.5).meta({ title: 'Pitch range (octaves above the root)', step: 0.5 }),
   soften: z.number().min(0).max(1).default(0.5).meta({ title: 'Soften high notes', step: 0.05 }),
-  figure: z.enum(['random', ...FIGURES]).default('random').meta({ title: 'Fourier figure' }),
-  orreryStart: z.enum(['aligned', 'scattered']).default('aligned').meta({ title: 'Orrery start (scattered: planets align only at the end)' }),
-  rippleLife: z.number().min(1).max(8).default(2.8).meta({ title: 'Ripple lifetime (s)', step: 0.1 }),
-  stringBrightness: z.number().min(0.1).max(2).default(1).meta({ title: 'String art: string brightness', step: 0.05 }),
-  stringLife: z.number().min(0).max(15).default(0).meta({ title: 'String art: string lifetime (s, 0 = build up all loop)', step: 0.5 }),
+  figure: z.enum(['random', ...FIGURES]).default('random').meta({ title: 'Figure', ...onlyFor('fourier') }),
+  orreryStart: z.enum(['aligned', 'scattered']).default('aligned').meta({ title: 'Planets start (scattered: they align only at the end)', ...onlyFor('orrery') }),
+  rippleLife: z.number().min(1).max(8).default(2.8).meta({ title: 'Ripple lifetime (s)', step: 0.1, ...onlyFor('ripples') }),
+  stringBrightness: z.number().min(0.1).max(2).default(1).meta({ title: 'String brightness', step: 0.05, ...onlyFor('string-art') }),
+  stringLife: z.number().min(0).max(15).default(0).meta({ title: 'String lifetime (s, 0 = build up all loop)', step: 0.5, ...onlyFor('string-art') }),
+  gearFlash: z.boolean().default(true).meta({ title: 'Flash each gear as it rings', ...onlyFor('gears') }),
+  gearLinks: z.boolean().default(true).meta({ title: 'Link gears that ring together', ...onlyFor('gears') }),
 });
 
 export type PolyrhythmParams = z.infer<typeof polyrhythmSchema>;
@@ -54,6 +62,8 @@ interface State {
   vel: number[];
   /** Fourier: the circles and the figure they draw. */
   epi?: Epicycles;
+  /** Gears: the train's arbors (empty for other styles). Element i turns on the arbor whose element is i. */
+  arbors: Arbor[];
   /**
    * Seconds the final sync is held after the loop (0: the video loops seamlessly). Styles that build
    * to a finish (a drawing completing, planets coming into line) end on the sync chord and hold it.
@@ -138,6 +148,8 @@ const STYLE_TEXT: Record<PolyrhythmStyle, string> = {
   orrery: 'a 3D orrery: planets circling a sun at whole-number laps, a note each time one crosses the alignment beam, all aligned again at the end',
   lissajous: 'a Lissajous table: orbiting dots along the top and side, every cell tracing the curve made by its row and column, all closing at the end',
   fourier: 'a chain of spinning circles (Fourier epicycles) whose pen draws a figure (heart, star, flower, infinity, butterfly) over the video, finishing exactly as everything lines up; each circle is a clock face that rings as its arm sweeps past each tick. "Watch what it draws" / "guess the shape" angles work',
+  gears: 'a 3D brass clockwork movement: a compound gear train (wheels in two layers on shared arbors, as in a real clock), each ringing gear turning a whole number of times per loop; each wears a coloured clock hand that starts pointing straight up and rings every time it comes back up, and every hand points up together at the end. "When will every hand point up again?" angles work',
+  lighthouse: 'lighthouses round a bay at night, their beams sweeping at different speeds; each flashes and rings its note when its beam swings round to face you, and they all flash together at the end',
   ripples: 'a ring of drops hanging from a rail over still water; each swells on its tip (its size shows when it will fall), falls and lands with a note and a ripple; the video opens with every drop falling together, and ends as they all let go together again',
 };
 
@@ -148,6 +160,10 @@ function elementCount(style: PolyrhythmStyle, count: number): number {
       return Math.min(MAX_POLYGONS, count);
     case 'orrery':
       return Math.min(MAX_PLANETS, count);
+    case 'gears':
+      return Math.min(MAX_GEARS, count);
+    case 'lighthouse':
+      return Math.min(MAX_LIGHTHOUSES, count);
     case 'lissajous':
       // Circles per side: the count is shared between the top row and the side column.
       return Math.max(3, Math.min(MAX_LISSAJOUS, Math.round(count / 2)));
@@ -171,12 +187,16 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
   searchBudget: 24,
   ownMusic: true,
   seamlessLoop: true,
-  glowScale: 0.8,
+  // Polished clockwork glares under full glow.
+  glowScale: (p) => (p.style === 'gears' ? 0.35 : 0.8),
   defaultCopy: DEFAULT_COPY,
   nudges: ['Comment the second they sync 👇', 'Rate this rhythm 1–10 👇', 'Which dot is your favourite? 👇', 'Can you hear the pattern? 👇', 'Guess when they line up 👇', 'Rate the sync moment 👇'],
 
   init({ params: p, rng }) {
-    const scale = p.scale === 'random' ? rng.pick(Object.keys(SCALES) as ScaleName[]) : p.scale;
+    // Drawn even when a scale is chosen, so the rest of the seed (gear layout, random speeds, colours)
+    // stays the same whichever scale plays.
+    const randomScale = rng.pick(Object.keys(SCALES) as ScaleName[]);
+    const scale = p.scale === 'random' ? randomScale : p.scale;
     const n = elementCount(p.style, p.count);
     let cycles = patternRates(p.pattern, n, p.baseCycles, p.cycleStep, rng);
     let sides: number[] = [];
@@ -184,6 +204,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     let degree = cycles.map((_, i) => i);
     let vel = cycles.map(() => 1);
     let epi: Epicycles | undefined;
+    let arbors: Arbor[] = [];
     let holdS = 0;
     let syncS = 0;
     let beatOffset: number[] | undefined;
@@ -234,6 +255,25 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
           holdS = HOLD_S;
         }
         break;
+      case 'gears': {
+        // A compound gear train built so each ringing arbor turns exactly its element's rate (the speed
+        // pattern, as in every other style); one note per turn as its hand comes back up. Elements the
+        // layout can't fit drop out (normally none), the rest keeping their order. Speeds no clock train
+        // can reach (a prime factor above 72) are nudged to the nearest one that can.
+        cycles = reachableRates(cycles);
+        const train = buildGearTrain(cycles, rng);
+        const keep = cycles.map((_, i) => i).filter((i) => !train.dropped.includes(i));
+        for (const a of train.arbors) if (a.element >= 0) a.element = keep.indexOf(a.element);
+        arbors = train.arbors;
+        cycles = keep.map((i) => cycles[i]);
+        notesPerLoop = cycles.slice();
+        degree = cycles.map((_, i) => i);
+        vel = cycles.map(() => 1);
+        break;
+      }
+      case 'lighthouse':
+        notesPerLoop = cycles.slice(); // one flash per turn, as the beam faces the camera
+        break;
       case 'ripples':
         // One note per drop. The landings are shifted a moment into the loop, so it opens (and ends)
         // with every drop in the air together.
@@ -258,6 +298,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
       degree,
       vel,
       epi,
+      arbors,
       holdS,
       syncS,
       beatRate: notesPerLoop.map((m, i) => m + offsets[i]),
@@ -351,6 +392,10 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         return drawEpicycles(ctx, { epi: s.epi!, p: s.p, hits: s.hits, flash: s.flash }, t, rc.frame, color, (u) => paletteAt(theme.palette, (u + s.colorShift) % 1));
       case 'ripples':
         return drawRipples(ctx, theme, s, t, color);
+      case 'gears':
+        return drawGears(ctx, theme, s, t);
+      case 'lighthouse':
+        return drawLighthouses(ctx, theme, s, t);
     }
   },
 
@@ -436,6 +481,12 @@ function panFor(s: State, i: number): number {
     }
     case 'ripples':
       return 0.8 * ripplePan(i, n);
+    case 'gears': {
+      // Where the gear sits across the train.
+      return (0.8 * s.arbors.find((a) => a.element === i)!.x) / trainExtent(s.arbors).w;
+    }
+    case 'lighthouse':
+      return 0.8 * lighthousePan(i, n);
   }
 }
 

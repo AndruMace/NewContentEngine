@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { Rng, Runner, getTheme } from '@sim/engine';
+import { Rng, Runner, getTheme, paramsJsonSchema, parseParams } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { PATTERNS, patternRates, polygonSides } from './patterns';
 import { FIGURES, buildEpicycles } from './epicycles';
+import { ADDENDUM, HUB, Z_MAX, Z_MIN, buildGearTrain, reachableRates, trainExtent } from './gears';
 import { POLYRHYTHM_STYLES, chordSteps, noteName, pitchDegrees, polyrhythm } from './index';
 
 const run = (params: Record<string, unknown>, seed = 1) =>
@@ -43,6 +44,19 @@ describe('polyrhythm', () => {
     });
   });
 
+  it.each(POLYRHYTHM_STYLES)('%s works with the slowest element at a single cycle per loop', (style) => {
+    const r = run({ style, baseCycles: 1, count: 12 });
+    expect(r.timedOut).toBe(false);
+    const s = r.state;
+    const hits = r.events.filter((e) => e.type === 'hit');
+    expect(Math.min(...s.cycles)).toBeGreaterThanOrEqual(1);
+    s.notesPerLoop.forEach((m, i) => {
+      expect(Number.isInteger(m)).toBe(true);
+      expect(m).toBeGreaterThanOrEqual(1);
+      expect(hits.filter((e) => e.i === i)).toHaveLength(s.holdS ? m + 1 : m);
+    });
+  });
+
   it('scattered orrery: planets start apart and all ring together only at the end', () => {
     const r = run({ style: 'orrery', orreryStart: 'scattered', count: 8 });
     const s = r.state;
@@ -62,6 +76,18 @@ describe('polyrhythm', () => {
     for (let k = 1; k < starts.length; k++) expect(starts[k] - starts[k - 1]).toBeGreaterThan(0.05);
   });
 
+  it('keeps the layout when only the scale changes', () => {
+    const init = (style: string, scale: string) =>
+      polyrhythm.init({ params: parseParams(polyrhythm, { style, scale, pattern: 'random' }), rng: new Rng(590062) } as never);
+    for (const style of POLYRHYTHM_STYLES) {
+      const a = init(style, 'random');
+      const b = init(style, 'hirajoshi');
+      expect(b.cycles).toEqual(a.cycles);
+      expect(b.arbors).toEqual(a.arbors);
+      expect(b.colorShift).toBe(a.colorShift);
+    }
+  });
+
   it('builds the speed patterns', () => {
     const rng = new Rng(1);
     expect(patternRates('linear', 5, 10, 1, rng)).toEqual([10, 11, 12, 13, 14]);
@@ -79,6 +105,7 @@ describe('polyrhythm', () => {
     expect(run({ style: 'polygons', count: 30 }).state.sides).toHaveLength(10);
     expect(run({ style: 'piano', count: 30 }).state.cycles).toHaveLength(24);
     expect(run({ style: 'orrery', count: 30 }).state.cycles).toHaveLength(8);
+    expect(run({ style: 'gears', count: 32 }).state.cycles).toHaveLength(32);
     // The ring has room for every drop the slider allows.
     expect(run({ style: 'ripples', count: 32 }).state.cycles).toHaveLength(32);
     // The count is shared between columns and rows, up to ten each.
@@ -115,6 +142,96 @@ describe('polyrhythm', () => {
     const r = run({ style: 'ripples', count: 32, scale: 'pentatonic', rootNote: 55, pitchRange: 2.5 });
     const midis = r.events.filter((e) => e.type === 'hit').map((e) => e.midi as number);
     expect(Math.max(...midis)).toBeLessThanOrEqual(55 + 30);
+  });
+
+  it.each(PATTERNS.flatMap((pattern) => [1, 2, 7, 10, 23].flatMap((base) => [3, 1].flatMap((step) => [12, 32].map((n) => [pattern, base, step, n] as const)))))(
+    'compound gear train (%s, base %i, step %i, %i gears) meshes, keeps every speed and loops',
+    (pattern, base, step, n) => {
+      const rates = reachableRates(patternRates(pattern, n, base, step, new Rng(3)));
+      const { arbors, dropped } = buildGearTrain(rates, new Rng(4));
+      expect(dropped).toEqual([]);
+      const frac = (x: number) => x - Math.floor(x);
+      const turns = (a: (typeof arbors)[number]) => a.num / a.den;
+      // Every element rings on exactly one arbor, turning exactly its rate.
+      for (let e = 0; e < n; e++) {
+        const mine = arbors.filter((a) => a.element === e);
+        expect(mine).toHaveLength(1);
+        expect(mine[0].den).toBe(1);
+        expect(mine[0].num).toBe(rates[e]);
+        // Its front wheel carries the hand.
+        expect(mine[0].wheels.some((w) => w.layer === 0)).toBe(true);
+      }
+      arbors.forEach((a, i) => {
+        // At most one wheel per layer, every size in range.
+        expect(new Set(a.wheels.map((w) => w.layer)).size).toBe(a.wheels.length);
+        for (const w of a.wheels) {
+          expect(w.z).toBeGreaterThanOrEqual(Z_MIN);
+          expect(w.z).toBeLessThanOrEqual(Z_MAX);
+          // Every wheel passes a whole number of teeth per loop, so the whole train looks the same at
+          // the end as at the start.
+          expect(Number.isInteger((a.num * w.z) / a.den)).toBe(true);
+        }
+        if (a.parent >= 0) {
+          const p = arbors[a.parent];
+          const pw = p.wheels.find((w) => w.layer === a.meshLayer)!;
+          const cw = a.wheels.find((w) => w.layer === a.meshLayer)!;
+          // Meshing wheels touch at their pitch circles, turn opposite ways at the tooth ratio…
+          expect(Math.hypot(a.x - p.x, a.y - p.y)).toBeCloseTo((pw.z + cw.z) / 2, 6);
+          expect(a.dir).toBe(-p.dir);
+          expect(turns(a)).toBeCloseTo((turns(p) * pw.z) / cw.z, 9);
+          // …and where they touch, a tooth of one faces a gap of the other.
+          const phi = Math.atan2(a.y - p.y, a.x - p.x);
+          const fp = frac((phi - pw.theta0) / ((2 * Math.PI) / pw.z));
+          const fc = frac((phi + Math.PI - cw.theta0) / ((2 * Math.PI) / cw.z));
+          expect(Math.min(frac(fp + fc - 0.5), 1 - frac(fp + fc - 0.5))).toBeLessThan(1e-6);
+        }
+        arbors.forEach((o, j) => {
+          if (j === i) return;
+          const d = Math.hypot(a.x - o.x, a.y - o.y);
+          const meshed = (a.parent === j || o.parent === i) && (a.parent === j ? a.meshLayer : o.meshLayer);
+          for (const w of a.wheels) {
+            // No wheel covers another arbor (except the one it meshes with, which it can't reach anyway).
+            if (!(meshed !== false && w.layer === meshed)) expect(d).toBeGreaterThanOrEqual(w.z / 2 + ADDENDUM + HUB - 1e-9);
+            // Wheels in the same layer that don't mesh stay clear of each other.
+            const ow = o.wheels.find((x) => x.layer === w.layer);
+            if (ow && !(meshed !== false && w.layer === meshed)) expect(d).toBeGreaterThan((w.z + ow.z) / 2 + 2 * ADDENDUM);
+          }
+        });
+      });
+    },
+  );
+
+  it('nudges speeds no clock train can reach to the nearest that can', () => {
+    // 79, 83 and 139 are primes above the largest wheel; 80, 84 and 140 aren't.
+    expect(reachableRates([10, 79, 83, 139])).toEqual([10, 80, 84, 140]);
+    // It never collides with a speed already in use: 97 → 98 is taken, so 96.
+    expect(reachableRates([98, 97])).toEqual([98, 96]);
+    expect(reachableRates([1, 2, 3, 71, 72])).toEqual([1, 2, 3, 71, 72]);
+  });
+
+  it('shapes big gear trains to the tall frame, using its width and height', () => {
+    for (const pattern of PATTERNS)
+      for (let seed = 1; seed <= 6; seed++) {
+        const { arbors } = buildGearTrain(reachableRates(patternRates(pattern, 32, 10, 1, new Rng(seed))), new Rng(seed));
+        const { w, h } = trainExtent(arbors);
+        // Width : height within a quarter of the frame's 3.74 : 4.94 (most within a tenth), so neither side
+        // is left mostly empty.
+        const shape = w / h / (3.74 / 4.94);
+        expect(shape).toBeGreaterThan(0.75);
+        expect(shape).toBeLessThan(1 / 0.75);
+      }
+  });
+
+  it('tells the sidebar which settings belong to which styles', () => {
+    const props = paramsJsonSchema(polyrhythm as never).properties as Record<string, { showWhen?: { style: string[] } }>;
+    expect(props.gearFlash.showWhen).toEqual({ style: ['gears'] });
+    expect(props.gearLinks.showWhen).toEqual({ style: ['gears'] });
+    expect(props.stringLife.showWhen).toEqual({ style: ['string-art'] });
+    expect(props.figure.showWhen).toEqual({ style: ['fourier'] });
+    // Settings every style uses carry no rule.
+    for (const k of ['style', 'count', 'pattern', 'cycleStep', 'voice', 'pitchRange', 'soften']) expect(props[k].showWhen).toBeUndefined();
+    // Every rule names real styles.
+    for (const p of Object.values(props)) for (const st of p.showWhen?.style ?? []) expect(POLYRHYTHM_STYLES).toContain(st);
   });
 
   it('can play chord tones only', () => {

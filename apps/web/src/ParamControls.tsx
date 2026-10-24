@@ -12,6 +12,9 @@ export function ParamControls({ schema, values, onChange }: Props) {
       {Object.entries(schema.properties).map(([key, prop]) => {
         // Settings that only apply to some modes are hidden for the others.
         if (Array.isArray(prop.modes) && !prop.modes.includes(values.mode ?? schema.properties.mode?.default)) return null;
+        // More generally, `showWhen: { param: [values] }` in a field's meta shows it only while each named
+        // param has one of those values (e.g. a setting for one style).
+        if (prop.showWhen && Object.entries(prop.showWhen as Record<string, unknown[]>).some(([p, ok]) => !ok.includes(values[p] ?? schema.properties[p]?.default))) return null;
         const label = prop.title ?? key;
         const value = values[key] ?? prop.default;
         if (prop.type === 'boolean') {
