@@ -28,7 +28,9 @@ export type SfxId =
   | 'impact' | 'smack' | 'crunch' | 'slash' | 'swish' | 'whip' | 'hoof' | 'step' | 'bodyfall' | 'flame'
   | 'roar' | 'growl' | 'snarl' | 'hiss' | 'whinny' | 'bellow' | 'screech' | 'grunt' | 'trumpet'
   | 'chestbeat' | 'shield'
-  | 'cheer' | 'gasp';
+  | 'cheer' | 'gasp'
+  // Falls from space: a sonic boom's double crack, a big explosion's thump and long rumble.
+  | 'sonicboom' | 'blast';
 
 export type AudioEvent =
   /** `bright` (0–1, default 1) scales the voice's overtones and filter: lower is darker and softer. */
@@ -44,8 +46,11 @@ export type AudioEvent =
    */
   | { t: number; kind: 'tone'; hz: number; hzEnd?: number; dur: number; vel: number; wave?: ToneWave; pan?: number };
 
-/** Timbres for held tones: a pure sine, a bowed string (filtered saw with vibrato), a glassy sine with a soft octave. */
-export type ToneWave = 'sine' | 'bowed' | 'glass';
+/**
+ * Timbres for held tones: a pure sine, a bowed string (filtered saw with vibrato), a glassy sine with a
+ * soft octave, or a roar (rumbling noise, low-passed at hz, as of air tearing past).
+ */
+export type ToneWave = 'sine' | 'bowed' | 'glass' | 'roar';
 
 export type AudioEventInput =
   | Omit<Extract<AudioEvent, { kind: 'note' }>, 't'>

@@ -226,6 +226,69 @@ export function draw3DComposed(
   ctx.drawImage(canvas as CanvasImageSource, 0, 0, canvas.width, canvas.height);
 }
 
+interface Layered {
+  composer: EffectComposer;
+  passes: RenderPass[];
+  bloom: UnrealBloomPass | null;
+}
+const layered = new WeakMap<object, Layered>();
+
+/**
+ * Render scenes on top of one another (each clearing only depth, so a far scene in kilometres, a
+ * near one in metres and a close-up in millimetres each keep their depth precision), then bloom
+ * and tone mapping over the lot. With `dest`, the frame is drawn into that rectangle of the 2D
+ * frame (render with the camera's aspect set to the rectangle's: the stretch undoes itself).
+ * One composer per `key`, reused.
+ */
+export function draw3DLayers(
+  ctx: Ctx2D,
+  key: object,
+  layers: { scene: THREE.Scene; camera: THREE.Camera }[],
+  opts: { exposure?: number; bloom?: { strength: number; radius: number; threshold: number }; dest?: { x: number; y: number; w: number; h: number } } = {},
+) {
+  const { renderer, canvas } = fit(ctx);
+  let c = layered.get(key);
+  if (!c || c.passes.length !== layers.length) {
+    c?.composer.dispose();
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(1);
+    composer.setSize(canvas.width, canvas.height);
+    const passes = layers.map((l, i) => {
+      const pass = new RenderPass(l.scene, l.camera);
+      if (i > 0) {
+        pass.clear = false;
+        pass.clearDepth = true;
+      }
+      composer.addPass(pass);
+      return pass;
+    });
+    let bloom: UnrealBloomPass | null = null;
+    if (opts.bloom) {
+      bloom = new UnrealBloomPass(new THREE.Vector2(canvas.width / 2, canvas.height / 2), opts.bloom.strength, opts.bloom.radius, opts.bloom.threshold);
+      composer.addPass(bloom);
+    }
+    composer.addPass(new OutputPass());
+    c = { composer, passes, bloom };
+    layered.set(key, c);
+  }
+  layers.forEach((l, i) => {
+    c.passes[i].scene = l.scene;
+    c.passes[i].camera = l.camera;
+  });
+  if (c.bloom && opts.bloom) {
+    c.bloom.strength = opts.bloom.strength;
+    c.bloom.radius = opts.bloom.radius;
+    c.bloom.threshold = opts.bloom.threshold;
+  }
+  const exposure = renderer.toneMappingExposure;
+  if (opts.exposure !== undefined) renderer.toneMappingExposure = opts.exposure;
+  c.composer.render();
+  renderer.toneMappingExposure = exposure;
+  const d = opts.dest;
+  if (d) ctx.drawImage(canvas as CanvasImageSource, 0, 0, canvas.width, canvas.height, d.x, d.y, d.w, d.h);
+  else ctx.drawImage(canvas as CanvasImageSource, 0, 0, canvas.width, canvas.height);
+}
+
 /**
  * One live scene per template module: building a scene for a new run disposes the previous run's
  * GPU resources (the Playground restarts runs constantly).

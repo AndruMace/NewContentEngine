@@ -376,7 +376,25 @@ function playTone(bus: SynthBus, ev: Extract<AudioEvent, { kind: 'tone' }>, when
     return o;
   };
   const wave = ev.wave ?? 'sine';
-  if (wave === 'sine') voice('sine', 1, 1, g);
+  if (wave === 'roar') {
+    // Air tearing past: looping noise, low-passed at hz (gliding to hzEnd), with a rumble under it.
+    const src = ctx.createBufferSource();
+    src.buffer = bus.noise;
+    src.loop = true;
+    src.playbackRate.value = 0.93;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 0.8;
+    lp.frequency.setValueAtTime(ev.hz, when);
+    if (ev.hzEnd && ev.hzEnd !== ev.hz) lp.frequency.exponentialRampToValueAtTime(ev.hzEnd, end);
+    const rumble = ctx.createBiquadFilter();
+    rumble.type = 'lowshelf';
+    rumble.frequency.value = 140;
+    rumble.gain.value = 9;
+    src.connect(lp).connect(rumble).connect(g);
+    src.start(when, noiseOffset(bus, when));
+    src.stop(end + 0.02);
+  } else if (wave === 'sine') voice('sine', 1, 1, g);
   else if (wave === 'glass') {
     voice('sine', 1, 0.8, g);
     voice('sine', 2.003, 0.22, g);
@@ -855,6 +873,29 @@ export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
       g.connect(dest);
       src.start(when, noiseOffset(bus, when));
       src.stop(when + 1.05);
+      break;
+    }
+    case 'sonicboom': {
+      // An N-wave passing: two sharp, deep cracks a moment apart (bow shock, then tail shock).
+      for (const [dt, k] of [[0, 1], [0.16, 0.8]] as const) {
+        noiseBurst(bus, when + dt, 0.09, dest, v * 0.9 * k, 'lowpass', 1600, 0.7, 300);
+        const o = osc(bus, 'sine', 90, when + dt, when + dt + 0.5, dest, v * 0.8 * k, 0.002, 0.35);
+        o.frequency.exponentialRampToValueAtTime(40, when + dt + 0.3);
+      }
+      break;
+    }
+    case 'blast': {
+      // A big explosion: a crack, a sub-bass thump, a roaring body and a long rolling rumble.
+      // pitch 0..1: low = huge (deeper and longer), high = small.
+      const p = ev.pitch ?? 0.5;
+      const len = 1.2 + (1 - p) * 4;
+      noiseBurst(bus, when, 0.06, dest, v * 0.8, 'highpass', 1500 + p * 3000);
+      const thump = osc(bus, 'sine', 70 + p * 60, when, when + len, dest, v * 1.2, 0.004, 0.9 + (1 - p) * 1.4);
+      thump.frequency.exponentialRampToValueAtTime(22 + p * 20, when + 0.9);
+      noiseBurst(bus, when, 0.4 + (1 - p) * 0.6, dest, v * 0.9, 'lowpass', 2400 + p * 2000, 0.6, 250);
+      noiseBurst(bus, when + 0.05, len, dest, v * 0.7, 'lowpass', 320 + p * 300, 0.8, 60);
+      // Debris and rumble trailing off.
+      for (let k = 0; k < 9; k++) noiseBurst(bus, when + 0.25 + k * 0.17 * (1 + (1 - p)) + ((k * 53) % 9) * 0.01, 0.05, dest, v * 0.18, 'bandpass', 600 + ((k * 677) % 1800), 1.2);
       break;
     }
     case 'ding': {
