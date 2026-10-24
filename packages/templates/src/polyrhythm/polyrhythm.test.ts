@@ -5,6 +5,7 @@ import { PATTERNS, patternRates, polygonSides } from './patterns';
 import { FIGURES, buildEpicycles } from './epicycles';
 import { ADDENDUM, HUB, Z_MAX, Z_MIN, buildGearTrain, reachableRates, trainExtent } from './gears';
 import { POLYRHYTHM_STYLES, chordSteps, noteName, pitchDegrees, polyrhythm } from './index';
+import { beamAngle, coastNoteU, groupGapU, shipAngle, shipLanes, shipLaps } from './lighthouse';
 
 const run = (params: Record<string, unknown>, seed = 1) =>
   new Runner(polyrhythm, { seed, theme: getTheme('neon-dark'), melody: getMelody('ode-to-joy'), params: { loopSeconds: 12, ...params }, visual: false }).runToEnd();
@@ -207,6 +208,66 @@ describe('polyrhythm', () => {
     // It never collides with a speed already in use: 97 → 98 is taken, so 96.
     expect(reachableRates([98, 97])).toEqual([98, 96]);
     expect(reachableRates([1, 2, 3, 71, 72])).toEqual([1, 2, 3, 71, 72]);
+  });
+
+  it('lighthouse ships: the beam finds each ship exactly at its notes, its rate times per loop', () => {
+    for (const pattern of PATTERNS)
+      for (const base of [1, 2, 10]) {
+        const rates = patternRates(pattern, 16, base, 1, new Rng(5));
+        const { beamTurns, laps } = shipLaps(rates);
+        expect(beamTurns).toBeGreaterThanOrEqual(1);
+        laps.forEach((k, i) => {
+          expect(k).toBeGreaterThanOrEqual(0);
+          // Opposite ways round, they meet beamTurns + laps times per loop: the ship's rate.
+          expect(beamTurns + k).toBe(rates[i]);
+          for (let j = 0; j < rates[i]; j++) {
+            const u = j / rates[i];
+            const gap = (((shipAngle(k, u) - beamAngle(beamTurns, u)) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+            expect(Math.min(gap, 2 * Math.PI - gap)).toBeLessThan(1e-9);
+          }
+        });
+        // Faster ships sail the inner lanes, every lane its own.
+        const lanes = shipLanes(laps);
+        expect(new Set(lanes).size).toBe(lanes.length);
+        laps.forEach((a, i) => laps.forEach((b, j) => a > b && expect(lanes[i]).toBeLessThan(lanes[j])));
+      }
+    // A bigger ship circle: the outer lane grows by the full amount, the inner (round the island) less,
+    // so the lanes spread further apart; the order is unchanged and the notes don't move.
+    const { laps } = shipLaps(patternRates('linear', 12, 10, 1, new Rng(1)));
+    const small = shipLanes(laps);
+    const big = shipLanes(laps, 2);
+    expect(Math.max(...big)).toBeCloseTo(2 * Math.max(...small), 9);
+    expect(Math.min(...big)).toBeCloseTo(Math.SQRT2 * Math.min(...small), 9);
+    big.forEach((r, i) => expect(r).toBeGreaterThan(small[i]));
+    const a = run({ style: 'lighthouse', count: 12 }).events.filter((e) => e.type === 'hit');
+    const b = run({ style: 'lighthouse', count: 12, shipSpread: 2 }).events.filter((e) => e.type === 'hit');
+    expect(b.map((e) => [e.t, e.i, e.midi])).toEqual(a.map((e) => [e.t, e.i, e.midi]));
+    b.forEach((e) => expect(Math.abs(e.side as number)).toBeLessThanOrEqual(0.8 + 1e-9));
+  });
+
+  it('lighthouse coast: each light flashes its code at the ship, every flash a note, all together at the start', () => {
+    for (const pattern of PATTERNS) {
+      const r = run({ style: 'lighthouse', lighthouseScene: 'coast', pattern, count: 30 });
+      const s = r.state;
+      expect(r.durationS).toBeCloseTo(12, 1);
+      expect(s.cycles.length).toBe(6);
+      expect([...s.codes].sort()).toEqual([1, 1, 2, 2, 3, 3]);
+      const hits = r.events.filter((e) => e.type === 'hit');
+      s.cycles.forEach((turns, i) => {
+        const mine = hits.filter((e) => e.i === i);
+        const us = coastNoteU(turns, s.codes[i], 12);
+        expect(mine).toHaveLength(turns * s.codes[i]);
+        expect(s.notesPerLoop[i]).toBe(turns * s.codes[i]);
+        expect(mine[0].t).toBe(0);
+        // Each note at its flash (events land on the step that crosses it).
+        mine.forEach((e, k) => expect(e.t).toBeCloseTo(12 * us[k], 1));
+        // The flashes of a group are evenly spaced and well inside a turn.
+        const gap = groupGapU(turns, s.codes[i], 12);
+        for (let k = 1; k < s.codes[i]; k++) expect(us[k] - us[k - 1]).toBeCloseTo(gap, 9);
+        expect(s.codes[i] * gap).toBeLessThan(1 / turns);
+      });
+    }
+    expect(run({ style: 'lighthouse', lighthouseScene: 'coast', count: 5 }).state.cycles.length).toBe(3);
   });
 
   it('shapes big gear trains to the tall frame, using its width and height', () => {

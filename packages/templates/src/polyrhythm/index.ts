@@ -11,7 +11,9 @@ import { MAX_PLANETS, drawOrrery, orbitRadius } from './orrery3d';
 import { drawRipples, ripplePan, rippleSyncS } from './ripples';
 import { MAX_GEARS, buildGearTrain, reachableRates, trainExtent, type Arbor } from './gears';
 import { drawGears } from './gears3d';
-import { MAX_LIGHTHOUSES, drawLighthouses, lighthousePan } from './lighthouse3d';
+import { MAX_SHIPS, coastCount, coastNoteU, coastPan, flashCodes, shipLanes, shipLaps, shipPan } from './lighthouse';
+import { drawLighthouse } from './lighthouse3d';
+import { drawCoast } from './coast3d';
 
 export const POLYRHYTHM_STYLES = ['arcs', 'pendulum-wave', 'polygons', 'string-art', 'piano', 'pendulum-3d', 'orrery', 'lissajous', 'fourier', 'ripples', 'gears', 'lighthouse'] as const;
 export type PolyrhythmStyle = (typeof POLYRHYTHM_STYLES)[number];
@@ -40,6 +42,16 @@ export const polyrhythmSchema = z.object({
   stringLife: z.number().min(0).max(15).default(0).meta({ title: 'String lifetime (s, 0 = build up all loop)', step: 0.5, ...onlyFor('string-art') }),
   gearFlash: z.boolean().default(true).meta({ title: 'Flash each gear as it rings', ...onlyFor('gears') }),
   gearLinks: z.boolean().default(true).meta({ title: 'Link gears that ring together', ...onlyFor('gears') }),
+  lighthouseScene: z
+    .enum(['ships', 'coast'])
+    .default('ships')
+    .meta({ title: 'Scene (ships: one lighthouse, ships circling it; coast: 3–6 lighthouses round a bay, each flashing its own code at one ship)', ...onlyFor('lighthouse') }),
+  shipSpread: z
+    .number()
+    .min(1)
+    .max(2.5)
+    .default(1)
+    .meta({ title: 'Ship circle size (the camera pulls back to fit)', step: 0.05, showWhen: { style: ['lighthouse'], lighthouseScene: ['ships'] } }),
 });
 
 export type PolyrhythmParams = z.infer<typeof polyrhythmSchema>;
@@ -74,6 +86,17 @@ interface State {
    * loop stays seamless: ripples open with every drop already falling and land together just after.
    */
   syncS: number;
+  /** Lighthouse ships: the beam's turns per loop, and each ship's laps and lane radius. */
+  beamTurns: number;
+  laps: number[];
+  lanes: number[];
+  /** Lighthouse coast: each lighthouse's flashes per group. */
+  codes: number[];
+  /**
+   * Notes that aren't evenly spaced (the coast's grouped flashes): for each element, where in the loop
+   * (fractions, ascending, from 0) its notes fall. Otherwise notes fall at k · T / notesPerLoop.
+   */
+  noteU?: number[][];
   /** With a hold: beats per loop (may be fractional) and where in its beat each element starts. */
   beatRate: number[];
   beatOffset: number[];
@@ -149,13 +172,14 @@ const STYLE_TEXT: Record<PolyrhythmStyle, string> = {
   lissajous: 'a Lissajous table: orbiting dots along the top and side, every cell tracing the curve made by its row and column, all closing at the end',
   fourier: 'a chain of spinning circles (Fourier epicycles) whose pen draws a figure (heart, star, flower, infinity, butterfly) over the video, finishing exactly as everything lines up; each circle is a clock face that rings as its arm sweeps past each tick. "Watch what it draws" / "guess the shape" angles work',
   gears: 'a 3D brass clockwork movement: a compound gear train (wheels in two layers on shared arbors, as in a real clock), each ringing gear turning a whole number of times per loop; each wears a coloured clock hand that starts pointing straight up and rings every time it comes back up, and every hand points up together at the end. "When will every hand point up again?" angles work',
-  lighthouse: 'lighthouses round a bay at night, their beams sweeping at different speeds; each flashes and rings its note when its beam swings round to face you, and they all flash together at the end',
+  lighthouse: 'a lighthouse at night with ships circling it in their own lanes (small fast boats inside, slow freighters outside); its beam sweeps one way, the ships sail the other, and each ship lights up and rings as the beam finds it; every ship starts and ends lined up in the beam. Coast scene: 3–6 lighthouses on headlands round a bay, each sweeping one anchored ship with its own flash code (groups of 1–3 flashes, as real lighthouses are told apart), ringing on every flash that crosses it; all their beams find the ship together at the start',
   ripples: 'a ring of drops hanging from a rail over still water; each swells on its tip (its size shows when it will fall), falls and lands with a note and a ripple; the video opens with every drop falling together, and ends as they all let go together again',
 };
 
 /** How many elements a style shows (some layouts only read up to a point). */
-function elementCount(style: PolyrhythmStyle, count: number): number {
-  switch (style) {
+function elementCount(p: Pick<PolyrhythmParams, 'style' | 'count' | 'lighthouseScene'>): number {
+  const count = p.count;
+  switch (p.style) {
     case 'polygons':
       return Math.min(MAX_POLYGONS, count);
     case 'orrery':
@@ -163,7 +187,7 @@ function elementCount(style: PolyrhythmStyle, count: number): number {
     case 'gears':
       return Math.min(MAX_GEARS, count);
     case 'lighthouse':
-      return Math.min(MAX_LIGHTHOUSES, count);
+      return p.lighthouseScene === 'coast' ? coastCount(count) : Math.min(MAX_SHIPS, count);
     case 'lissajous':
       // Circles per side: the count is shared between the top row and the side column.
       return Math.max(3, Math.min(MAX_LISSAJOUS, Math.round(count / 2)));
@@ -197,7 +221,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     // stays the same whichever scale plays.
     const randomScale = rng.pick(Object.keys(SCALES) as ScaleName[]);
     const scale = p.scale === 'random' ? randomScale : p.scale;
-    const n = elementCount(p.style, p.count);
+    const n = elementCount(p);
     let cycles = patternRates(p.pattern, n, p.baseCycles, p.cycleStep, rng);
     let sides: number[] = [];
     let notesPerLoop: number[];
@@ -208,6 +232,11 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
     let holdS = 0;
     let syncS = 0;
     let beatOffset: number[] | undefined;
+    let beamTurns = 0;
+    let laps: number[] = [];
+    let lanes: number[] = [];
+    let codes: number[] = [];
+    let noteU: number[][] | undefined;
     switch (p.style) {
       case 'polygons': {
         // Each shape's dot laps at its own whole-number rate (so the dots drift apart and meet again at
@@ -272,7 +301,21 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
         break;
       }
       case 'lighthouse':
-        notesPerLoop = cycles.slice(); // one flash per turn, as the beam faces the camera
+        if (p.lighthouseScene === 'coast') {
+          // Each lighthouse turns its pattern rate and crosses the ship with every flash of its code.
+          codes = flashCodes(n);
+          for (let k = codes.length - 1; k > 0; k--) {
+            const j = rng.int(0, k);
+            [codes[k], codes[j]] = [codes[j], codes[k]];
+          }
+          noteU = cycles.map((c, i) => coastNoteU(c, codes[i], p.loopSeconds));
+          notesPerLoop = noteU.map((us) => us.length);
+        } else {
+          // Each ship rings its pattern rate: the beam's turns plus its own laps the other way.
+          ({ beamTurns, laps } = shipLaps(cycles));
+          lanes = shipLanes(laps, p.shipSpread);
+          notesPerLoop = cycles.slice();
+        }
         break;
       case 'ripples':
         // One note per drop. The landings are shifted a moment into the loop, so it opens (and ends)
@@ -301,6 +344,11 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
       arbors,
       holdS,
       syncS,
+      beamTurns,
+      laps,
+      lanes,
+      codes,
+      noteU,
       beatRate: notesPerLoop.map((m, i) => m + offsets[i]),
       beatOffset: offsets,
       hits: cycles.map(() => -1),
@@ -320,7 +368,10 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
       // With a sync shift they fall at syncS + k · T / notesPerLoop. With a hold, notes fall at
       // (k + offset) · T / beatRate and the one at exactly t=T is the finale, so it plays.
       const m = s.notesPerLoop[i];
-      const k = s.holdS ? Math.floor((s.beatRate[i] * t1) / T - s.beatOffset[i] + 1e-9) : Math.min(Math.floor((m * (t1 - s.syncS)) / T + 1e-9), m - 1);
+      const us = s.noteU?.[i];
+      const k = us
+        ? countUpTo(us, t1 / T) - 1
+        : s.holdS ? Math.floor((s.beatRate[i] * t1) / T - s.beatOffset[i] + 1e-9) : Math.min(Math.floor((m * (t1 - s.syncS)) / T + 1e-9), m - 1);
       while (s.hits[i] < k) {
         s.hits[i]++;
         s.flash[i] = 1;
@@ -395,7 +446,7 @@ export const polyrhythm: Template<PolyrhythmParams, State> = {
       case 'gears':
         return drawGears(ctx, theme, s, t);
       case 'lighthouse':
-        return drawLighthouses(ctx, theme, s, t);
+        return s.p.lighthouseScene === 'coast' ? drawCoast(ctx, theme, s, t) : drawLighthouse(ctx, theme, s, t);
     }
   },
 
@@ -450,6 +501,13 @@ function holdFor(p: PolyrhythmParams): number {
 }
 
 
+/** How many of the ascending fractions `us` have come round by loop fraction u. */
+function countUpTo(us: number[], u: number): number {
+  let k = 0;
+  while (k < us.length && us[k] <= u + 1e-9) k++;
+  return k;
+}
+
 /** Stereo position of a note (-1..1): which side it sounds on, matching where it happens on screen. */
 function panFor(s: State, i: number): number {
   const n = s.notesPerLoop.length;
@@ -486,7 +544,7 @@ function panFor(s: State, i: number): number {
       return (0.8 * s.arbors.find((a) => a.element === i)!.x) / trainExtent(s.arbors).w;
     }
     case 'lighthouse':
-      return 0.8 * lighthousePan(i, n);
+      return 0.8 * (s.p.lighthouseScene === 'coast' ? coastPan(i, n) : shipPan(s.beamTurns, s.cycles[i], s.lanes[i], s.hits[i], s.p.shipSpread));
   }
 }
 
