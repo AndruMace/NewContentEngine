@@ -21,6 +21,8 @@ export interface ModeImpl<S = any> {
   renderTop(rc: RenderCtx, s: S): void;
   /** This run's rules in plain words, for the explainer at the bottom. */
   explain(s: S): string;
+  /** Plain-words captions on what's happening, timed to this run (shown when `captions` is on). */
+  captions(s: S): Caption[];
   /** Only sees this mode's events (see `modeOfEvent`). */
   audio(e: SimEvent, m: AudioMapCtx): AudioEventInput[];
   score(events: SimEvent[], info: ScoreInfo): DramaScore;
@@ -175,3 +177,68 @@ export function drawExplainer(ctx: Ctx2D, text: string, t: number): number {
   ctx.restore();
   return top;
 }
+
+/** A plain-words caption, shown from `at` (sim seconds) until the next one. */
+export interface Caption {
+  at: number;
+  text: string;
+}
+
+/** Least time a caption stays up before the next one (time to read it). */
+export const CAPTION_GAP = 3.8;
+
+/**
+ * Lay out wanted captions (each with a wanted time and a priority) between `from` and `until`: in
+ * time order, at least CAPTION_GAP apart, a later one pushed back if need be. When there isn't room
+ * for them all, the lowest priority ones are left out.
+ */
+export function placeCaptions(wanted: { at: number; text: string; priority: number }[], from: number, until: number): Caption[] {
+  let keep = [...wanted].sort((a, b) => a.at - b.at);
+  for (;;) {
+    const out: Caption[] = [];
+    let next = from;
+    for (const w of keep) {
+      const at = Math.max(w.at, next);
+      out.push({ at, text: w.text });
+      next = at + CAPTION_GAP;
+    }
+    // The last one needs its own reading time before `until` too.
+    if (!out.length || out[out.length - 1].at + CAPTION_GAP * 0.8 <= until) return out;
+    if (keep.length === 1) return out;
+    const least = keep.reduce((m, w) => (w.priority < m.priority ? w : m));
+    keep = keep.filter((w) => w !== least);
+  }
+}
+
+/**
+ * The caption showing at t, faded in and out, in a soft dark pill under the title. Nothing before
+ * the first one or from `hideAt` on (the outro, whose call to action takes the top of the frame).
+ */
+export function drawCaption(ctx: Ctx2D, list: Caption[], t: number, y: number, hideAt: number | null) {
+  let k = -1;
+  for (let q = 0; q < list.length && list[q].at <= t; q++) k = q;
+  if (k < 0 || (hideAt !== null && t >= hideAt)) return;
+  const end = Math.min(list[k + 1]?.at ?? Infinity, hideAt ?? Infinity);
+  const alpha = clamp01((t - list[k].at) / 0.35) * clamp01((end - t) / 0.35);
+  if (alpha <= 0) return;
+  const size = 36;
+  const lineH = 46;
+  ctx.save();
+  ctx.font = `800 ${size}px ${FONT_FAMILY}`;
+  const lines = wrap(ctx, list[k].text, 900);
+  const w = Math.min(980, Math.max(...lines.map((l) => ctx.measureText(l).width)) + 64);
+  const h = lines.length * lineH + 30;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.beginPath();
+  ctx.roundRect(540 - w / 2, y, w, h, 24);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach((l, i) => ctx.fillText(l, 540, y + 15 + lineH * (i + 0.5)));
+  ctx.restore();
+}
+
+/** Join phrases as "a, b and c". */
+export const listOf = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);

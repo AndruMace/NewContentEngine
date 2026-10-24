@@ -9,6 +9,10 @@ const melody = getMelody('ode-to-joy');
 /** Lighter settings for the heavy sims so the suite stays fast; determinism doesn't depend on size. */
 const TEST_PARAMS: Record<string, Record<string, unknown>> = {
   'sand-pour': { fillSeconds: 10, cellSize: 8 },
+  'slime-mold': { agents: 15000, targetS: 25 },
+  murmuration: { count: 300, targetS: 25 },
+  'chladni-plates': { grains: 6000 },
+  'tower-stack': { pieces: 8 },
 };
 
 /** Long-form loops are tested at a few minutes: the schedule logic doesn't depend on length. */

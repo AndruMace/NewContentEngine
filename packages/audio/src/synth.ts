@@ -351,12 +351,64 @@ function vocal(
   if (o.breath) noiseBurst(bus, when, o.dur, dest, o.peak * o.breath, 'bandpass', o.formants[0][0] * 1.5, 0.8);
 }
 
+/** A held tone: flat sustain with short fades, gliding exponentially to hzEnd over its length. */
+function playTone(bus: SynthBus, ev: Extract<AudioEvent, { kind: 'tone' }>, when: number, dest: AudioNode) {
+  const ctx = bus.ctx;
+  const fade = Math.min(0.04, ev.dur / 4);
+  const end = when + ev.dur;
+  const g = ctx.createGain();
+  const peak = ev.vel * 0.16;
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(peak, when + fade);
+  g.gain.setValueAtTime(peak, end - fade);
+  g.gain.linearRampToValueAtTime(0, end);
+  g.connect(dest);
+  const voice = (type: OscillatorType, ratio: number, level: number, into: AudioNode) => {
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(ev.hz * ratio, when);
+    if (ev.hzEnd && ev.hzEnd !== ev.hz) o.frequency.exponentialRampToValueAtTime(ev.hzEnd * ratio, end);
+    const lg = ctx.createGain();
+    lg.gain.value = level;
+    o.connect(lg).connect(into);
+    o.start(when);
+    o.stop(end + 0.02);
+    return o;
+  };
+  const wave = ev.wave ?? 'sine';
+  if (wave === 'sine') voice('sine', 1, 1, g);
+  else if (wave === 'glass') {
+    voice('sine', 1, 0.8, g);
+    voice('sine', 2.003, 0.22, g);
+    voice('sine', 3.01, 0.06, g);
+  } else {
+    // A bowed string: a sawtooth, darkened, with a slow vibrato.
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = Math.min(6000, Math.max(900, ev.hz * 5));
+    f.Q.value = 0.7;
+    f.connect(g);
+    const o = voice('sawtooth', 1, 0.55, f);
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 5.2;
+    const depth = ctx.createGain();
+    depth.gain.value = ev.hz * 0.005;
+    lfo.connect(depth).connect(o.frequency);
+    lfo.start(when);
+    lfo.stop(end + 0.02);
+  }
+}
+
 export function scheduleEvent(bus: SynthBus, ev: AudioEvent, when: number) {
   if (ev.kind === 'voice') {
     playLine(bus, ev.clip, ev.vel, when);
     return;
   }
   const dest = out(bus, ev.pan ?? 0);
+  if (ev.kind === 'tone') {
+    playTone(bus, ev, when, dest);
+    return;
+  }
   if (ev.kind === 'note') {
     playVoice(bus, ev.voice ?? 'marimba', ev.midi, ev.vel, when, ev.dur ?? 1, dest, ev.bright ?? 1);
     return;

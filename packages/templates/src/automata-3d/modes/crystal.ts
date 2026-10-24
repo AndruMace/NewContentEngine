@@ -15,7 +15,7 @@ import { CRYSTAL_PRESETS, CRYSTAL_PRESET_IDS, describeRule3, parseRule3, type Cr
 import { symmetricSeed } from '../seeds';
 import type { AutomataParams } from '../params';
 import { Dots, Palette, Voxels, detailFor, drawStage, fitDistance, makeStage, orbit, voxelMaterial } from '../view';
-import { EXPLAIN_LIFT, budgetFor, clamp01, drawCounter, durationFit, manualCap, drawExplainer, ev, evName, fmtInt, genSchedule, panOf, smooth, velOf, type ModeImpl } from '../shared';
+import { CAPTION_GAP, EXPLAIN_LIFT, budgetFor, clamp01, drawCaption, placeCaptions, type Caption, drawCounter, durationFit, manualCap, drawExplainer, ev, evName, fmtInt, genSchedule, panOf, smooth, velOf, type ModeImpl } from '../shared';
 
 const INTRO_S = 1.4;
 const OUTRO_S = 4.5;
@@ -71,6 +71,7 @@ interface State {
   finalReach: number;
   /** Current generation. */
   gen: number;
+  captionList: Caption[];
   /** Sim time of each generation. */
   times: number[];
   growEnd: number;
@@ -134,7 +135,7 @@ export const crystalMode: ModeImpl<State> = {
     const growEnd = INTRO_S + span;
     let most = 0;
     const reach = plan.radius.map((r) => (most = Math.max(most, r)));
-    return {
+    const s: State = {
       p,
       preset,
       rule,
@@ -149,7 +150,10 @@ export const crystalMode: ModeImpl<State> = {
       endT: growEnd + OUTRO_S,
       ended: false,
       t: 0,
+      captionList: [],
     };
+    s.captionList = crystalCaptions(s);
+    return s;
   },
 
   step(s, { dt, t, emit }) {
@@ -237,6 +241,7 @@ export const crystalMode: ModeImpl<State> = {
     const def = CRYSTAL_PRESETS[s.preset];
     const since = s.gen ? s.t - s.times[s.gen] : 1;
     const top = s.p.explain ? drawExplainer(ctx, crystalMode.explain(s), s.t) : null;
+    if (s.p.captions) drawCaption(ctx, s.captionList, s.t, 1920 * 0.165, s.ended ? s.growEnd : null);
     drawCounter(ctx, theme, {
       t: s.t,
       title: `${def.label} · ${SYMMETRY_LABEL[s.symmetry]}`,
@@ -247,6 +252,8 @@ export const crystalMode: ModeImpl<State> = {
       y: top === null ? undefined : top - 130,
     });
   },
+
+  captions: (s) => s.captionList,
 
   explain(s) {
     const seed = { none: 'a handful of random cells', mirror: 'a handful of cells mirrored 8 ways', cubic: 'a handful of cells copied 48 ways (every mirror and turn of a cube)' }[s.symmetry];
@@ -303,6 +310,64 @@ export const crystalMode: ModeImpl<State> = {
     return end ? `${end.preset}: ${end.kind}` : null;
   },
 };
+
+/**
+ * What's happening, in plain words, from this run's own numbers: how it started, how fast it spreads,
+ * how it fades, whether it churns or fills in, how big and how lacy it gets, and how it ends.
+ */
+function crystalCaptions(s: State): Caption[] {
+  const { plan, times, reach, rule } = s;
+  const G = plan.gens;
+  // Placed by time (generations speed up, so they bunch late), each saying how things stand then.
+  const span = s.growEnd - INTRO_S;
+  const when = (frac: number) => INTRO_S + frac * span;
+  const genAt = (t: number) => {
+    let g = 0;
+    while (g < G && times[g + 1] <= t) g++;
+    return g;
+  };
+  const wanted: { at: number; text: string; priority: number }[] = [];
+  const seed = { none: '', mirror: ', mirrored 8 ways', cubic: ', copied into all 48 mirror images and turns of a cube' }[s.symmetry];
+  wanted.push({ at: 3, priority: 9, text: `It starts as ${fmtInt(plan.alive[0])} cells${seed}. Each step, every cell counts its neighbours, and that alone decides what's born and what dies.` });
+  const g1 = genAt(when(0.2));
+  if (g1 >= 8) {
+    // How fast it's spreading so far (cells of radius per generation).
+    const v = (reach[g1] - reach[0]) / g1;
+    const speed =
+      v > 0.85
+        ? 'It spreads one cell per step: as fast as anything can here, since a cell only feels the cells touching it.'
+        : v > 0.08
+          ? `It creeps outward, about one cell every ${Math.round(1 / v)} steps.`
+          : "It isn't spreading: it reshapes itself where it is.";
+    wanted.push({ at: when(0.2), priority: 6, text: speed });
+  }
+  if (rule.states > 2) wanted.push({ at: when(0.36), priority: 4, text: `Dying cells don't vanish at once: they shrink and darken through ${rule.states - 2} ${rule.states === 3 ? 'stage' : 'stages'} first.` });
+  const g3 = genAt(when(0.52));
+  const births = plan.births.slice(1, g3 + 1).reduce((a, b) => a + b, 0);
+  const deaths = plan.deaths.slice(1, g3 + 1).reduce((a, b) => a + b, 0);
+  if (g3 >= 8 && births > 0)
+    wanted.push({
+      at: when(0.52),
+      priority: 5,
+      text: deaths / births > 0.5 ? 'Cells die almost as fast as new ones are born, so the inside keeps rearranging while the edge grows.' : 'New cells mostly stay put, so it fills in behind its growing edge.',
+    });
+  const g4 = genAt(when(0.68));
+  if (g4 >= 12) {
+    const r = reach[g4];
+    const fill = r > 0 ? plan.alive[g4] / ((4 / 3) * Math.PI * r ** 3) : 1;
+    const shape = fill < 0.3 ? 'Mostly empty space inside: a lattice, not a solid lump.' : fill > 0.6 ? "It's nearly solid all the way through." : 'About half of it is filled in.';
+    wanted.push({ at: when(0.68), priority: 3, text: `${fmtInt(plan.alive[g4])} live cells now, ${fmtInt(2 * r)} cells across. ${shape}` });
+  }
+  const spreading = G >= 10 && reach[G] > reach[Math.max(0, G - 10)] + 1;
+  const ending = {
+    dead: 'Every cell is about to die out, and nothing can be born from nothing.',
+    still: "It's freezing: soon not a single cell will change again.",
+    cycle: "It's settling into a loop: the same few shapes, repeating forever.",
+    cap: spreading ? "It's still growing as the video ends: nothing in it has stopped it yet." : "It's still changing, but no longer spreading.",
+  }[plan.end];
+  wanted.push({ at: s.growEnd - CAPTION_GAP, priority: 8, text: ending });
+  return placeCaptions(wanted, 3, s.growEnd);
+}
 
 function resultLine(s: State): string {
   const { plan } = s;

@@ -3,6 +3,7 @@ import { Playground } from './Playground';
 import { ReviewPage } from './ReviewPage';
 import { UploadPage } from './UploadPage';
 import { AmbientPage } from './AmbientPage';
+import { QUIET } from './api';
 
 type Route = 'playground' | 'ambient' | 'review' | 'upload';
 const routeFromHash = (): Route =>
@@ -41,6 +42,11 @@ export function App() {
             Batches &amp; Review
           </a>
         </nav>
+        {QUIET && (
+          <span className="chip quiet" title="Previews start muted in this browser. Open the app with ?quiet=0 to turn this off.">
+            Quiet mode
+          </span>
+        )}
       </header>
       {route === 'playground' ? <Playground /> : route === 'ambient' ? <AmbientPage /> : route === 'review' ? <ReviewPage /> : <UploadPage id={id} />}
     </div>

@@ -512,6 +512,7 @@ const TITLE_EMOJI: Record<string, string[]> = {
   'marble-machine': ['🎵', '⚙️', '👀'],
   'rube-goldberg': ['🔗', '😮\u200d💨', '⚙️'],
   'who-would-win': ['⚔️', '🤔', '🔥'],
+  'tower-stack': ['📏', '😱', '🧱'],
 };
 const DEFAULT_TITLE_EMOJI = ['🤯', '😱', '👀', '🔥'];
 

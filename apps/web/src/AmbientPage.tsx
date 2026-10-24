@@ -3,7 +3,7 @@ import { loopLengthOf, paramsJsonSchema, parseParams, type Recipe } from '@sim/e
 import { LONG_FORM_TEMPLATES, findTemplate, getTemplate } from '@sim/templates';
 import { ParamControls } from './ParamControls';
 import { useAmbientPlayer } from './useAmbientPlayer';
-import { api, longFormApi, type LongFormJob, type LongFormState } from './api';
+import { QUIET, api, longFormApi, type LongFormJob, type LongFormState } from './api';
 
 type LongRecipe = Recipe & { loopS: number; totalS: number };
 
@@ -51,6 +51,7 @@ export function AmbientPage() {
   const [recipe, setRecipe] = useState<LongRecipe>(loadSaved);
   const [notes, setNotes] = useState('');
   const [volume, setVolume] = useState(0.8);
+  const [muted, setMuted] = useState(QUIET);
   const [state, setState] = useState<LongFormState>({ jobs: [], current: null, shortsRendering: null });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,7 +61,7 @@ export function AmbientPage() {
   const template = getTemplate(recipe.templateId);
   const lf = template.longForm!;
   const schema = useMemo(() => paramsJsonSchema(template) as { properties: Record<string, any> }, [template]);
-  const player = useAmbientPlayer(canvasRef, recipe, volume);
+  const player = useAmbientPlayer(canvasRef, recipe, muted ? 0 : volume);
   const update = (patch: Partial<LongRecipe>) => setRecipe((r) => ({ ...r, ...patch }));
 
   useEffect(() => {
@@ -201,6 +202,7 @@ export function AmbientPage() {
           <span className="time">
             {clock(player.time)} / {clock(player.loopS)}
           </span>
+          <button onClick={() => setMuted((m) => !m)}>{muted ? 'Unmute' : 'Mute'}</button>
           <label className="volume" title="Preview volume only; renders are unaffected">
             <span>Vol</span>
             <input type="range" min={0} max={1} step={0.01} value={volume} onChange={(e) => setVolume(Number(e.target.value))} />

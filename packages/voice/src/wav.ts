@@ -36,3 +36,12 @@ export function trimSilence(samples: Float32Array, sampleRate: number, threshold
   const pad = Math.round(padS * sampleRate);
   return samples.slice(Math.max(0, a - pad), Math.min(samples.length, b + 1 + pad));
 }
+
+/** Mono float samples and sample rate of a WAV written by encodeWav. */
+export function decodeWav(wav: Buffer): { samples: Float32Array; sampleRate: number } {
+  const sampleRate = wav.readUInt32LE(24);
+  const n = wav.readUInt32LE(40) / 2;
+  const samples = new Float32Array(n);
+  for (let i = 0; i < n; i++) samples[i] = wav.readInt16LE(44 + i * 2) / 32767;
+  return { samples, sampleRate };
+}

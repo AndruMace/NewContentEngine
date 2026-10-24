@@ -17,6 +17,7 @@ export const automataSchema = z.object({
   durationS: z.number().min(20).max(60).default(32).meta({ title: 'Length (s)' }),
   look: z.enum(LOOKS).default('glossy').meta({ title: 'Look' }),
   explain: z.boolean().default(false).meta({ title: 'Explain the rules (text at the bottom)' }),
+  captions: z.boolean().default(false).meta({ title: "Captions: what's happening, in plain words (text at the top)" }),
   generations: z.number().int().min(0).max(10000).default(0).meta({ title: 'Generations (0 = until it ends by itself or time runs out)', step: 10 }),
   genRate: z.number().min(0).max(60).default(0).meta({ title: 'Generations per second (0 = paced to fit the length)', step: 0.5 }),
 

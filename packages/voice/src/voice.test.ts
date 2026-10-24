@@ -46,9 +46,36 @@ describe('line checks', () => {
 
   it('fills placeholders with words for the voice and digits for the screen', () => {
     expect(fillLine(beat, beat.fallback[0])).toEqual({
-      text: 'seven hundred three is odd, so triple it and add one: two thousand one hundred ten.',
+      text: 'Seven hundred three is odd, so triple it and add one: two thousand one hundred ten.',
       caption: '703 is odd, so triple it and add one: 2,110.',
     });
+  });
+
+  it('checks and fills a beat in parts sentence by sentence', () => {
+    const rules: NarrationBeat = {
+      id: 'rules',
+      about: 'three rules switch on',
+      facts: { n: 400 },
+      required: ['n'],
+      maxWords: 21,
+      parts: [
+        { about: 'separation on', maxWords: 9 },
+        { about: 'alignment on', maxWords: 6 },
+        { about: 'cohesion on', maxWords: 6 },
+      ],
+      fallback: ['Each of the {n} birds keeps its distance. | Then they line up. | Then they stay close.'],
+    };
+    expect(checkLine(rules, rules.fallback[0])).toBeNull();
+    expect(checkLine(rules, 'Keep apart. | Line up.')).toMatch(/3 sentences/);
+    expect(checkLine(rules, '{n} keep apart. | Line up and point the same way now please. | Close.')).toMatch(/sentence 2/);
+    expect(checkLine(beat, '{prev} is odd. | {value}.')).toMatch(/one sentence/);
+    const filled = fillLine(rules, rules.fallback[0]);
+    expect(filled.parts).toEqual([
+      { text: 'Each of the four hundred birds keeps its distance.', caption: 'Each of the 400 birds keeps its distance.' },
+      { text: 'Then they line up.', caption: 'Then they line up.' },
+      { text: 'Then they stay close.', caption: 'Then they stay close.' },
+    ]);
+    expect(filled.caption).toBe('Each of the 400 birds keeps its distance. Then they line up. Then they stay close.');
   });
 
   it('picks built-in lines per seed, only ones that fit', () => {
@@ -134,6 +161,16 @@ describe('prepareNarration', () => {
     expect(again).toBe(out);
     const other = await prepareNarration({ ...out, seed: 3 }, { useClaude: false, provider: fake });
     expect(other.voice!.factsHash).not.toBe(voice.factsHash);
+  });
+
+  it('voices a passage sentence by sentence into one clip, with each sentence\'s start', async () => {
+    const { voicePassage, PART_GAP_S } = await import('./cache');
+    const out = await voicePassage(fake, 'v', ['One two.', 'Three four five.']);
+    expect(out.parts).toHaveLength(2);
+    expect(out.parts[0].at).toBe(0);
+    expect(out.parts[1].at).toBeCloseTo(out.parts[0].durationS + PART_GAP_S, 6);
+    expect(out.durationS).toBeCloseTo(out.parts[1].at + out.parts[1].durationS, 2);
+    expect((await voicePassage(fake, 'v', ['One two.', 'Three four five.'])).clip).toBe(out.clip);
   });
 
   it('leaves recipes without narration alone', async () => {

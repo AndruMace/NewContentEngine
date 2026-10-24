@@ -14,7 +14,7 @@ import { THREE, sceneCache } from '../../three-layer';
 import type { AutomataParams } from '../params';
 import { IntList } from '../grid';
 import { Voxels, detailFor, drawStage, fitDistance, linear, makeStage, orbit, voxelMaterial } from '../view';
-import { EXPLAIN_LIFT, MANUAL_MAX_S, budgetFor, clamp01, drawExplainer, ev, evName, outlined, smooth, velOf, type ModeImpl } from '../shared';
+import { CAPTION_GAP, EXPLAIN_LIFT, MANUAL_MAX_S, budgetFor, clamp01, drawCaption, listOf, type Caption, drawExplainer, ev, evName, outlined, smooth, velOf, type ModeImpl } from '../shared';
 
 const GEN_RATE = 10;
 const OUTRO_S = 3;
@@ -96,6 +96,14 @@ interface State {
   smallest: number;
   lastTick: number;
   rushOn: boolean;
+  /** Captions written as the match plays out (when `captions` is on), the next one waiting its turn, and what's been said. */
+  captionList: Caption[];
+  /** Captions waiting their turn (a lead change replaces an older one still waiting). */
+  pending: { text: string; replaceable: boolean }[];
+  saidFull: boolean;
+  saidSnowball: boolean;
+  /** Colonies whose wipe-out has been announced. */
+  outSaid: boolean[];
   endAt: number | null;
   winner: number;
   out: boolean[];
@@ -225,6 +233,11 @@ export const warMode: ModeImpl<State> = {
       smallest: -1,
       lastTick: -1,
       rushOn: false,
+      captionList: [],
+      pending: [],
+      saidFull: false,
+      saidSnowball: false,
+      outSaid: teams.map(() => false),
       endAt: null,
       winner: -1,
       out: teams.map(() => false),
@@ -242,6 +255,7 @@ export const warMode: ModeImpl<State> = {
     if (rush && !s.rushOn) {
       s.rushOn = true;
       emit({ type: ev('war', 'rush') });
+      if (s.p.captions) say(s, t, 'Final rush: the arena shrinks, and every cell outside it is lost.', true);
     }
     if (rush) s.radius = s.r * (1 - (1 - RUSH_R) * smooth((t - (matchS - RUSH_S)) / RUSH_S)) + 0.5;
     if (s.t >= (s.gen + 1) / s.rate && (!s.p.generations || s.gen < s.p.generations)) {
@@ -257,9 +271,11 @@ export const warMode: ModeImpl<State> = {
       if (s.leader >= 0 && t > 3) {
         s.leadChanges++;
         emit({ type: ev('war', 'lead'), side: lead });
+        if (s.p.captions) say(s, t, `${s.teams[lead].label} takes the lead.`, false, true);
       }
       s.leader = lead;
     }
+    if (s.p.captions) commentate(s, t);
     const alive = s.out.filter((o) => !o).length;
     const left = matchS - t;
     if (alive > 1 && left <= 5 && left > 0 && Math.ceil(left) !== s.lastTick) {
@@ -355,6 +371,7 @@ export const warMode: ModeImpl<State> = {
     const precise = ended || s.matchS - s.t <= 5;
     drawShareBar(ctx, { x: 70, y: 1920 * 0.2, w: 940, h: 68, teams: s.teams, counts: Array.from(s.counts), leader: ended ? s.winner : s.leader, precise });
     const top = s.p.explain ? drawExplainer(ctx, warMode.explain(s), s.t) : null;
+    if (s.p.captions) drawCaption(ctx, s.captionList, s.t, 1920 * 0.255, s.endAt);
     drawClock(ctx, { left: s.matchS - s.t, rush: s.rushOn, ended, labelY: top === null ? 1920 * 0.8 : top - 60, bigY: 1920 * 0.5 - (top === null ? 0 : EXPLAIN_LIFT), text: theme.text, stroke: theme.textStroke });
     // The one-line reminder of the rule, unless the explainer already says it.
     if (!ended && s.t > 2.9 && top === null) {
@@ -362,6 +379,8 @@ export const warMode: ModeImpl<State> = {
       outlined(ctx, theme, label, 540, 1920 * 0.8 + 70, { size: 36, weight: 800, alpha: clamp01((s.t - 2.9) / 0.5) * 0.85 });
     }
   },
+
+  captions: (s) => s.captionList,
 
   explain(s) {
     const rush = s.p.finalRush ? ' In the final seconds the arena shrinks.' : '';
@@ -438,6 +457,49 @@ export const warMode: ModeImpl<State> = {
 function setFront(front: Uint32Array, j: number, on: boolean) {
   if (on) front[j >>> 5] |= 1 << (j & 31);
   else front[j >>> 5] &= ~(1 << (j & 31));
+}
+
+/**
+ * Queue a caption: urgent ones (a wipe-out, the rush) go up at once; others wait their turn until the
+ * last one has been up long enough to read. A replaceable one (who leads) replaces an older one still
+ * waiting, so it's never stale.
+ */
+function say(s: State, t: number, text: string, urgent: boolean, replaceable = false) {
+  if (urgent) {
+    const last = s.captionList[s.captionList.length - 1];
+    s.captionList.push({ at: Math.max(t, last ? last.at + 0.8 : 0), text });
+    s.pending = s.pending.filter((p) => !p.replaceable);
+    return;
+  }
+  if (replaceable) s.pending = s.pending.filter((p) => !p.replaceable);
+  s.pending.push({ text, replaceable });
+}
+
+/** Captions from how the match stands: the start, the arena filling up, wipe-outs, snowballing leads. */
+function commentate(s: State, t: number) {
+  const names = s.teams.map((tm) => tm.label);
+  if (!s.captionList.length && !s.pending.length && t >= 3) {
+    say(s, t, `${s.k} colonies start as small balls and spread into the empty space.`, false);
+    // Rock-paper-scissors: who beats whom, next.
+    if (s.cyclic) say(s, t, `Each colour can only take the one it beats: ${names[1]} takes ${names[0]}, ${names[2]} takes ${names[1]}, ${names[0]} takes ${names[2]}.`, false);
+  }
+  const occupied = s.counts.reduce((a, b) => a + b, 0);
+  if (!s.saidFull && occupied >= s.cells.length) {
+    s.saidFull = true;
+    say(s, t, s.cyclic ? 'The arena is full. Now each colour eats into the one it beats, and is eaten by the one that beats it.' : 'The arena is full. Now a cell changes sides when the colony around it outnumbers its own.', false);
+  }
+  if (!s.cyclic && !s.saidSnowball && t >= s.matchS * 0.55 && s.out.filter((o) => !o).length > 1) {
+    s.saidSnowball = true;
+    say(s, t, 'From here on, bigger colonies get stronger, so a lead starts to snowball.', false);
+  }
+  const gone = names.filter((_, q) => s.out[q] && !s.outSaid[q]);
+  if (gone.length) {
+    s.out.forEach((o, q) => (s.outSaid[q] ||= o));
+    const left = s.out.filter((o) => !o).length;
+    say(s, t, `${listOf(gone)} ${gone.length > 1 ? 'have' : 'has'} been wiped out.${left > 1 ? ` ${left} colonies left.` : ''}`, true);
+  }
+  const last = s.captionList[s.captionList.length - 1];
+  if (s.pending.length && (!last || t - last.at >= CAPTION_GAP)) s.captionList.push({ at: t, text: s.pending.shift()!.text });
 }
 
 /** Whether a cell (owned by o, 0 = empty) has a neighbour of another colony. */

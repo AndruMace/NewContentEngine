@@ -9,6 +9,7 @@ import { usePlayer } from './usePlayer';
 import { useAnalysis } from './useAnalysis';
 import { ExportPanel } from './ExportPanel';
 import type { SearchMessage, SearchResult } from './searchWorker';
+import { QUIET } from './api';
 
 const DEFAULT_RECIPE: Recipe = {
   templateId: TEMPLATES[0].id,
@@ -36,7 +37,7 @@ function loadSaved(): Recipe {
 
 export function Playground() {
   const [recipe, setRecipe] = useState<Recipe>(loadSaved);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(QUIET);
   const [volume, setVolume] = useState(() => {
     try {
       const v = Number(localStorage.getItem('playground.volume'));

@@ -27,11 +27,17 @@ import { dayTrain } from './day-train';
 import { deepSea } from './deep-sea';
 import { whoWouldWin } from './who-would-win';
 import { automata3d } from './automata-3d';
+import { geneticDrift } from './genetic-drift';
+import { plantRules } from './plant-rules';
+import { chladniPlates } from './chladni-plates';
+import { murmuration } from './murmuration';
+import { slimeMold } from './slime-mold';
+import { towerStack } from './tower-stack';
 export { DUELS as WHO_WOULD_WIN_DUELS, HORDES as WHO_WOULD_WIN_HORDES, creatureById, matchupId } from './who-would-win/roster';
 
-export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, whoWouldWin, automata3d, cabinStorm, orbitalViewport, nightTrain, dayTrain, deepSea, FOURIER_GUESS };
+export { ringEscape, marbleRace, ballBattle, polyrhythm, sandPour, growUntilFull, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, whoWouldWin, automata3d, geneticDrift, plantRules, chladniPlates, murmuration, slimeMold, towerStack, cabinStorm, orbitalViewport, nightTrain, dayTrain, deepSea, FOURIER_GUESS };
 
-export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, whoWouldWin, automata3d];
+export const TEMPLATES: Template[] = [ringEscape, growUntilFull, marbleRace, ballBattle, polyrhythm, sandPour, sortingRace, territoryWar, snakeAi, shellEscape, gravityFunnel, mathCuriosities, pathfindingRace, fourierDrawing, spinBattle, bounceKeys, rpsBattle, trickShot, marbleMachine, rubeGoldberg, marbleRace3d, whoWouldWin, automata3d, geneticDrift, plantRules, chladniPlates, murmuration, slimeMold, towerStack];
 
 /**
  * Long-form ambient templates (hours-long background videos). Kept out of TEMPLATES on purpose: that

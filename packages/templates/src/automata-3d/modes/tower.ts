@@ -16,7 +16,7 @@ import { LIFE_RULES, describeRule2, parseRule2, type LifeRuleId, type Rule2 } fr
 import { LIFE_PATTERNS, LIFE_PATTERN_IDS, lifeStart, type LifePatternId } from '../seeds';
 import type { AutomataParams } from '../params';
 import { Palette, Voxels, drawStage, fitDistance, makeStage, orbit, voxelMaterial } from '../view';
-import { EXPLAIN_LIFT, budgetFor, clamp01, drawCounter, durationFit, manualCap, drawExplainer, ev, evName, fmtInt, genSchedule, lerp, smooth, velOf, type ModeImpl } from '../shared';
+import { CAPTION_GAP, EXPLAIN_LIFT, budgetFor, clamp01, drawCaption, placeCaptions, type Caption, drawCounter, durationFit, manualCap, drawExplainer, ev, evName, fmtInt, genSchedule, lerp, smooth, velOf, type ModeImpl } from '../shared';
 
 const INTRO_S = 1.4;
 const OUTRO_S = 5;
@@ -57,7 +57,11 @@ interface Plan {
   alive: Int32Array;
   births: Int32Array;
   deaths: Int32Array;
+  /** Furthest live cell from where the pattern started (cells), every EXTENT_EVERY generations. */
+  extent: number[];
 }
+
+const EXTENT_EVERY = 8;
 
 interface State {
   p: AutomataParams;
@@ -72,6 +76,7 @@ interface State {
   layerGens: number[];
   /** Current generation, and how many layers are stacked by now. */
   gen: number;
+  captionList: Caption[];
   layer: number;
   start: number;
   peak: number;
@@ -102,9 +107,28 @@ function planRun(b: Life2, rule: Rule2, cap: number): Plan {
   const deaths = new Int32Array(cap + 1);
   alive[0] = b.population;
   const watch = new CycleWatch(MAX_PERIOD);
-  const done = (gens: number, end: EndKind, period: number): Plan => ({ gens, end, period, alive, births, deaths });
+  const extent: number[] = [];
+  // Where the pattern started (its middle), to measure how far it has spread.
+  const start = b.liveCells();
+  let sx = 0;
+  let sy = 0;
+  for (let q = 0; q < start.length; q += 2) {
+    sx += start[q];
+    sy += start[q + 1];
+  }
+  sx /= Math.max(1, start.length / 2);
+  sy /= Math.max(1, start.length / 2);
+  const measure = () => {
+    const c = b.liveCells();
+    let far = 0;
+    for (let q = 0; q < c.length; q += 2) far = Math.max(far, Math.abs(c[q] - sx), Math.abs(c[q + 1] - sy));
+    extent.push(far);
+  };
+  measure();
+  const done = (gens: number, end: EndKind, period: number): Plan => ({ gens, end, period, alive, births, deaths, extent });
   for (let k = 1; k <= cap; k++) {
     const st = b.step(rule);
+    if (k % EXTENT_EVERY === 0) measure();
     alive[k] = st.alive;
     births[k] = st.births;
     deaths[k] = st.deaths;
@@ -164,7 +188,7 @@ export const towerMode: ModeImpl<State> = {
     const times = (g: number) => INTRO_S + schedule(g);
     let peak = 0;
     for (let g = 0; g <= plan.gens; g++) peak = Math.max(peak, plan.alive[g]);
-    return {
+    const s: State = {
       p,
       pattern,
       ruleId,
@@ -182,7 +206,10 @@ export const towerMode: ModeImpl<State> = {
       endT: INTRO_S + used + OUTRO_S,
       ended: false,
       t: 0,
+      captionList: [],
     };
+    s.captionList = towerCaptions(s, !rate && plan.gens > START_RATE * used * 1.15);
+    return s;
   },
 
   step(s, { dt, t, emit }) {
@@ -261,6 +288,7 @@ export const towerMode: ModeImpl<State> = {
   renderTop({ ctx, theme }, s) {
     const label = `${LIFE_PATTERNS[s.pattern].label} · ${LIFE_RULES[s.ruleId].label}`;
     const top = s.p.explain ? drawExplainer(ctx, towerMode.explain(s), s.t) : null;
+    if (s.p.captions) drawCaption(ctx, s.captionList, s.t, 1920 * 0.165, s.ended ? s.growEnd : null);
     drawCounter(ctx, theme, {
       t: s.t,
       title: label,
@@ -271,6 +299,8 @@ export const towerMode: ModeImpl<State> = {
       endAt: s.ended ? s.growEnd : undefined,
     });
   },
+
+  captions: (s) => s.captionList,
 
   explain(s) {
     return `${LIFE_RULES[s.ruleId].label}: ${describeRule2(s.rule)} Each generation is stacked on the last, so the tower is the pattern's whole history.`;
@@ -318,6 +348,70 @@ export const towerMode: ModeImpl<State> = {
     return end ? `${end.pattern}: ${end.kind}` : null;
   },
 };
+
+/**
+ * What's happening, in plain words, from this run's own numbers: how it starts, what the tower is,
+ * the board it's on, when it explodes, whether it's sped up, and how it ends (dying, freezing,
+ * blinking, or settling while pieces fly off for good).
+ */
+function towerCaptions(s: State, speedsUp: boolean): Caption[] {
+  const { plan, times } = s;
+  const G = plan.gens;
+  // Placed by time (generations speed up, so they bunch late), each saying how things stand then.
+  const span = s.growEnd - INTRO_S;
+  const when = (frac: number) => INTRO_S + frac * span;
+  const genAt = (t: number) => {
+    let lo = 0;
+    let hi = G;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (times(mid) <= t) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+  const wanted: { at: number; text: string; priority: number }[] = [];
+  wanted.push({ at: 3, priority: 9, text: `It starts with just ${fmtInt(s.start)} live cells. Each step, every square counts its 8 neighbours, and that decides whether it lives.` });
+  wanted.push({ at: 6.8, priority: 7, text: 'Each step is frozen as a new layer, so the tower is its whole history: oldest at the bottom, newest on top.' });
+  if (s.p.wrap) wanted.push({ at: when(0.3), priority: 4, text: 'The board wraps around like a donut: anything leaving one edge comes back on the other.' });
+  // Busy: lots changing at once, the stretch where nothing short of running it says what comes next.
+  const gm = genAt(when(0.42));
+  const busy = gm > 0 && plan.births[gm] + plan.deaths[gm] > 0.15 * Math.max(1, plan.alive[gm]);
+  if (busy && G > 60) wanted.push({ at: when(0.42), priority: 3, text: "There's no shortcut to what it does next: the only way to find out is to run it, one step at a time." });
+  let peakGen = 0;
+  for (let g = 1; g <= G; g++) if (plan.alive[g] > plan.alive[peakGen]) peakGen = g;
+  const exploded = s.peak >= 3 * s.start && peakGen > G * 0.05;
+  if (exploded && times(peakGen) < s.growEnd - 2 * CAPTION_GAP) wanted.push({ at: times(peakGen), priority: 5, text: `It has exploded from ${fmtInt(s.start)} cells to ${fmtInt(s.peak)}.` });
+  if (speedsUp) {
+    // Once it runs at twice its starting pace.
+    let g = 1;
+    while (g < G && times(g + 1) - times(g) > 1 / (2 * START_RATE)) g++;
+    // (After the tower itself has been explained.)
+    wanted.push({ at: Math.max(times(g), 7), priority: 2, text: 'Its life is long, so the steps speed up to fit it all in.' });
+  }
+  // Pieces flying off for good: the furthest live cell keeps getting further away towards the end.
+  // (Not on a torus: there nothing leaves, it comes back round.)
+  const ext = (g: number) => plan.extent[Math.min(plan.extent.length - 1, Math.floor(g / EXTENT_EVERY))] ?? 0;
+  const flying = !s.p.wrap && G >= 80 && ext(G) > ext(Math.round(G * 0.6)) + 20;
+  const life = s.ruleId === 'life';
+  const pieces = life ? 'gliders' : 'pieces';
+  if (flying && life) {
+    // When the first one is clear of the rest: the pattern's reach passes 40 cells.
+    let g = 0;
+    while (g < G && ext(g) <= 40) g += EXTENT_EVERY;
+    if (g < G) wanted.push({ at: times(g), priority: 6, text: 'Those diagonal streaks are gliders: little 5-cell shapes that crawl away forever.' });
+  }
+  const grew = exploded && !(times(peakGen) < s.growEnd - 2 * CAPTION_GAP) ? `It grew from ${fmtInt(s.start)} cells to as many as ${fmtInt(s.peak)}. ` : '';
+  const ending = {
+    dead: "And now it's about to vanish completely.",
+    still: "It's about to freeze into shapes that never change again.",
+    cycle: "It's settling down: what's left will blink on and off forever.",
+    escape: flying ? `It's about to settle down; only the ${pieces} keep going.` : "It's about to settle into a steady rhythm.",
+    cap: plan.alive[G] > MAX_POP ? 'It keeps filling space without end, so the video stops here.' : flying ? `It never settles: it keeps sending out ${pieces} that fly away forever.` : 'Still churning, with no sign of settling.',
+  }[plan.end];
+  wanted.push({ at: s.growEnd - CAPTION_GAP, priority: 8, text: grew + ending });
+  return placeCaptions(wanted, 3, s.growEnd);
+}
 
 function resultLine(s: State): string {
   const g = fmtInt(s.plan.gens);

@@ -244,6 +244,22 @@ export function formatBytes(n: number) {
   return n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`;
 }
 
+/**
+ * Quiet mode, for previews Claude drives while testing: open the app with `?quiet` and every preview
+ * starts muted (each page's Mute button still turns sound on when a test needs it). It sticks in this
+ * browser until the app is opened with `?quiet=0`.
+ */
+export const QUIET = (() => {
+  try {
+    const q = new URLSearchParams(location.search).get('quiet');
+    if (q === '0') localStorage.removeItem('preview.quiet');
+    else if (q !== null) localStorage.setItem('preview.quiet', '1');
+    return localStorage.getItem('preview.quiet') === '1';
+  } catch {
+    return false;
+  }
+})();
+
 /** Preview-only volume shared with the Playground slider. */
 export function previewVolume(): number {
   try {
@@ -265,6 +281,7 @@ export function previewVideoRef(v: HTMLVideoElement | null) {
   if (!v || volumeReady.has(v)) return;
   volumeReady.add(v);
   v.volume = previewVolume();
+  v.muted = QUIET;
   v.addEventListener('volumechange', () => {
     if (v.muted) return;
     try {

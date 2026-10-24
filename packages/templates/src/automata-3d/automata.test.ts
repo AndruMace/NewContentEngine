@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { Rng, Runner, getTheme, hashString } from '@sim/engine';
 import { getMelody } from '@sim/audio';
-import { automata3d } from './index';
+import { MODE_IMPLS, automata3d } from './index';
+import { CAPTION_GAP } from './shared';
 import { CycleWatch, Grid3, Life2 } from './grid';
 import { CRYSTAL_PRESETS, countsText, describeRule2, parseRule2, parseRule3, type Rule3 } from './rules';
 import { lifeStart, symmetricSeed } from './seeds';
@@ -207,6 +208,55 @@ describe('modes', () => {
     const war = run({ mode: 'war', warSize: 28, generations: 60, genRate: 20 }, 1).events;
     expect(war.filter((e) => e.type === 'war:gen').length).toBeLessThanOrEqual(60);
     expect(war.find((e) => e.type === 'war:end')!.t).toBeLessThan(3.1);
+  });
+
+  describe('captions', () => {
+    const captions = (params: Record<string, unknown>, seed = 1) => {
+      const r = run({ ...params, captions: true }, seed);
+      const st = r.state as { mode: 'crystal' | 'tower' | 'war'; inner: unknown };
+      return { r, caps: MODE_IMPLS[st.mode].captions(st.inner) };
+    };
+
+    it("don't change the run", () => {
+      for (const params of [{ mode: 'tower', pattern: 'diehard' }, { mode: 'war', warSize: 28 }, { mode: 'crystal', preset: 'frost', generations: 20 }]) {
+        expect(hash(run({ ...params, captions: true }, 4))).toBe(hash(run(params, 4)));
+      }
+    });
+
+    it('say how a tower run actually ends', () => {
+      const diehard = captions({ mode: 'tower', pattern: 'diehard' }).caps;
+      expect(diehard.at(-1)!.text).toContain('vanish');
+      const r = captions({ mode: 'tower', pattern: 'r-pentomino' }).caps.map((c) => c.text);
+      expect(r.some((t) => t.includes('gliders: little 5-cell shapes'))).toBe(true);
+      expect(r.at(-1)).toContain('settle');
+      // A torus has nowhere to fly off to.
+      const torus = captions({ mode: 'tower', pattern: 'r-pentomino', wrap: true, board: 96 }).caps.map((c) => c.text);
+      expect(torus.some((t) => t.includes('donut'))).toBe(true);
+      expect(torus.some((t) => t.includes('forever') && t.includes('glider'))).toBe(false);
+    });
+
+    it("describe the crystal's own rule and seed", () => {
+      const frost = captions({ mode: 'crystal', preset: 'frost', symmetry: 'mirror' }).caps.map((c) => c.text);
+      expect(frost[0]).toContain('mirrored 8 ways');
+      // Frost has 5 states: alive, 3 fading stages, empty.
+      expect(frost.some((t) => t.includes('through 3 stages'))).toBe(true);
+      const crystal = captions({ mode: 'crystal', preset: 'crystal' }).caps.map((c) => c.text);
+      expect(crystal.some((t) => t.includes('stages'))).toBe(false);
+    });
+
+    it('come in order, with time to read each, within the run', () => {
+      for (const params of [{ mode: 'crystal', preset: 'frost' }, { mode: 'tower', pattern: 'acorn' }, { mode: 'tower', pattern: 'diehard' }]) {
+        const { r, caps } = captions(params);
+        const end = r.events.find((e) => e.type.endsWith(':end'))!;
+        for (let k = 1; k < caps.length; k++) expect(caps[k].at - caps[k - 1].at).toBeGreaterThanOrEqual(CAPTION_GAP - 1e-9);
+        expect(caps.at(-1)!.at).toBeLessThan(end.t);
+      }
+    });
+
+    it('call out who beats whom in a rock-paper-scissors war', () => {
+      const texts = captions({ mode: 'war', warSize: 28, warRule: 'cyclic' }).caps.map((c) => c.text);
+      expect(texts).toContain('Each colour can only take the one it beats: Blue takes Red, Gold takes Blue, Red takes Gold.');
+    });
   });
 
   it('keeps colony counts equal to the cells they hold', () => {

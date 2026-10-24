@@ -37,13 +37,22 @@ export type AudioEvent =
   /** A recorded sound from assets/ambient (e.g. 'audio/thunder-close-1.opus'), at a playback rate. */
   | { t: number; kind: 'sample'; name: string; vel: number; rate?: number; pan?: number }
   /** A narrated line (a clip in the voice cache): plays on its own path and ducks everything else. */
-  | { t: number; kind: 'voice'; clip: string; vel: number };
+  | { t: number; kind: 'voice'; clip: string; vel: number }
+  /**
+   * A held tone at a frequency, gliding to `hzEnd` (exponentially) if given: flat sustain for `dur`
+   * seconds with short fades, for sounds that are a pitch rather than a note (a vibrating plate).
+   */
+  | { t: number; kind: 'tone'; hz: number; hzEnd?: number; dur: number; vel: number; wave?: ToneWave; pan?: number };
+
+/** Timbres for held tones: a pure sine, a bowed string (filtered saw with vibrato), a glassy sine with a soft octave. */
+export type ToneWave = 'sine' | 'bowed' | 'glass';
 
 export type AudioEventInput =
   | Omit<Extract<AudioEvent, { kind: 'note' }>, 't'>
   | Omit<Extract<AudioEvent, { kind: 'sfx' }>, 't'>
   | Omit<Extract<AudioEvent, { kind: 'sample' }>, 't'>
-  | Omit<Extract<AudioEvent, { kind: 'voice' }>, 't'>;
+  | Omit<Extract<AudioEvent, { kind: 'voice' }>, 't'>
+  | Omit<Extract<AudioEvent, { kind: 'tone' }>, 't'>;
 
 /** One voiced line of a narration: what is said, the clip that says it and how long it runs. */
 export interface NarrationLine {
@@ -54,6 +63,19 @@ export interface NarrationLine {
   caption: string;
   /** File name in the voice cache (data/voice-cache). */
   clip: string;
+  durationS: number;
+  /**
+   * For a beat written in parts (see NarrationBeat.parts): each sentence, where it starts in the clip
+   * and how long it runs, so the picture can change exactly as each one begins.
+   */
+  parts?: NarrationLinePart[];
+}
+
+export interface NarrationLinePart {
+  text: string;
+  caption: string;
+  /** Seconds into the line's clip. */
+  at: number;
   durationS: number;
 }
 
@@ -81,8 +103,23 @@ export interface NarrationBeat {
   /** Placeholders the line must use. */
   required: string[];
   maxWords: number;
-  /** Hand-written lines (with placeholders), for when no model writes them. */
+  /**
+   * Hand-written lines (with placeholders), for when no model writes them. A beat in parts has one
+   * sentence per part, separated by " | ".
+   */
   fallback: string[];
+  /**
+   * Set when the beat is a short passage of sentences, each spoken as something on screen happens
+   * (a rule switched on, a branch sprouting): one sentence per part, in order. Each is voiced on its
+   * own, so its start is known exactly. maxWords is then the passage's total.
+   */
+  parts?: NarrationPart[];
+}
+
+export interface NarrationPart {
+  /** What happens on screen as this sentence starts. */
+  about: string;
+  maxWords: number;
 }
 
 /** A template that can be narrated. */

@@ -20,8 +20,25 @@ export const wordCount = (line: string, facts: Record<string, string | number> =
     .split(/\s+/)
     .filter(Boolean).length;
 
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Separates the sentences of a beat written in parts. */
+export const PART_BREAK = '|';
+
+/** A line's sentences, for a beat in parts (one per part, in order). */
+export const splitParts = (line: string) => line.split(PART_BREAK).map((p) => p.trim());
+
 /** Why a written line can't be used, or null when it's fine. */
 export function checkLine(beat: NarrationBeat, line: string): string | null {
+  if (beat.parts) {
+    const parts = splitParts(line);
+    if (parts.length !== beat.parts.length) return `beat "${beat.id}": write ${beat.parts.length} sentences separated by "${PART_BREAK}", got ${parts.length}`;
+    for (let k = 0; k < parts.length; k++) {
+      if (!parts[k]) return `beat "${beat.id}": sentence ${k + 1} is empty`;
+      const n = wordCount(parts[k], beat.facts);
+      if (n > beat.parts[k].maxWords) return `beat "${beat.id}": sentence ${k + 1} has ${n} words spoken, the limit is ${beat.parts[k].maxWords}`;
+    }
+  } else if (line.includes(PART_BREAK)) return `beat "${beat.id}": one sentence only, no "${PART_BREAK}"`;
   const used = [...line.matchAll(PLACEHOLDER)].map((m) => m[1]);
   const unknown = used.filter((u) => !(u in beat.facts));
   if (unknown.length) return `beat "${beat.id}": unknown placeholder ${unknown.map((u) => `{${u}}`).join(', ')}`;
@@ -35,14 +52,22 @@ export function checkLine(beat: NarrationBeat, line: string): string | null {
   return null;
 }
 
-/** Fill a line's placeholders: words for the voice, digits for the screen. */
-export function fillLine(beat: NarrationBeat, line: string): { text: string; caption: string } {
-  const fill = (spoken: boolean) =>
-    line.replace(PLACEHOLDER, (_, key: string) => {
-      const v = beat.facts[key];
-      return typeof v === 'number' ? (spoken ? numberToWords(v) : numberForScreen(v)) : String(v);
-    });
-  return { text: fill(true), caption: fill(false) };
+/**
+ * Fill a line's placeholders: words for the voice, digits for the screen. A beat in parts also gets
+ * each sentence filled on its own (`text`/`caption` are then the sentences joined).
+ */
+export function fillLine(beat: NarrationBeat, line: string): { text: string; caption: string; parts?: { text: string; caption: string }[] } {
+  // A sentence that starts with a placeholder ("{winner} takes over") still starts with a capital.
+  const fill = (src: string, spoken: boolean) =>
+    capitalise(
+      src.replace(PLACEHOLDER, (_, key: string) => {
+        const v = beat.facts[key];
+        return typeof v === 'number' ? (spoken ? numberToWords(v) : numberForScreen(v)) : String(v);
+      }),
+    );
+  if (!beat.parts) return { text: fill(line, true), caption: fill(line, false) };
+  const parts = splitParts(line).map((p) => ({ text: fill(p, true), caption: fill(p, false) }));
+  return { text: parts.map((p) => p.text).join(' '), caption: parts.map((p) => p.caption).join(' '), parts };
 }
 
 /**
@@ -59,7 +84,7 @@ export function fallbackLines(beats: NarrationBeat[], seed: number): Lines {
   );
 }
 
-const SYSTEM = `You write voiceover lines for short vertical maths videos (YouTube Shorts, TikTok, Reels). Each line is spoken over one moment of an animation while it happens, so it must match that moment exactly and be easy to follow by ear.
+const SYSTEM = `You write voiceover lines for short vertical maths and science videos (YouTube Shorts, TikTok, Reels). Each line is spoken over one moment of an animation while it happens, so it must match that moment exactly and be easy to follow by ear.
 
 Rules:
 - Write every number as its {placeholder}, never as digits or words, and never invent a number or a fact.
@@ -67,7 +92,8 @@ Rules:
 - No maths symbols: say "times", "plus", "divided by", "equals".
 - Stay within each beat's word limit, counted as spoken: a placeholder counts as the words its value takes to say (given as spokenWords). Leave out an optional placeholder whose number is long. Shorter is better.
 - Plain spoken English, natural rhythm, no emojis, no hashtags, no "Hey guys", no filler.
-- Each line should flow from the one before it; together they explain the idea step by step.`;
+- Each line should flow from the one before it; together they explain the idea step by step.
+- Some beats come in parts: something new appears on screen as each part starts. Write one short sentence per part, in order, separated by " | ", each about its own part's moment and within that part's word limit.`;
 
 const outputSchema = (beats: NarrationBeat[]) => ({
   type: 'object',
@@ -93,6 +119,7 @@ function userPrompt(beats: NarrationBeat[], style: string, problem?: string) {
     placeholders: Object.fromEntries(Object.entries(b.facts).map(([k, v]) => [k, { value: v, spokenWords: spokenWords(v) }])),
     required: b.required,
     maxWords: b.maxWords,
+    ...(b.parts ? { parts: b.parts.map((p) => ({ moment: p.about, maxWords: p.maxWords })) } : {}),
     example: b.fallback[0],
   }));
   return [
