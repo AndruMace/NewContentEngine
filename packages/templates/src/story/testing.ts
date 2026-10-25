@@ -25,5 +25,5 @@ export function fakeVoice(template: Template, params: Record<string, unknown>, s
     });
     return { beat: b.id, text: b.id, caption: b.id, clip: `${b.id}.wav`, durationS: at - PART_GAP_S, parts };
   });
-  return { provider: 'fake', voiceId: 'v', factsHash: 'x', writer: 'fallback', lines };
+  return { provider: 'fake', voiceId: 'v', factsHash: 'x', lines };
 }

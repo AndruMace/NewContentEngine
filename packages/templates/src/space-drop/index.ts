@@ -83,7 +83,14 @@ export function buildRuns(p: SpaceDropParams): Run[] {
   return objs.map((obj) => {
     const body = obj.id === 'tungsten-rod' ? rodBody(p.rodTonnes * 1000, p.rodFlight) : obj.body;
     const tr = fall(body, start, obj.group === 'space' ? 250 : 290);
-    return { obj, body, start, tr, crater: craterOf(tr, p.ground), energy: impactEnergy(tr) };
+    return {
+      obj,
+      body,
+      start,
+      tr,
+      crater: craterOf(tr, p.ground),
+      energy: impactEnergy(tr),
+    };
   });
 }
 
@@ -99,7 +106,12 @@ function impactSounds(energy: number, wreck: unknown, gain: number): AudioEventI
   // Bigger impacts sound deeper.
   const size = Math.min(1, Math.max(0, (Math.log10(energy + 1) - 2) / 12));
   const out: AudioEventInput[] = [
-    { kind: 'sfx', name: 'blast', vel: (0.5 + 0.5 * size) * gain, pitch: 1 - size },
+    {
+      kind: 'sfx',
+      name: 'blast',
+      vel: (0.5 + 0.5 * size) * gain,
+      pitch: 1 - size,
+    },
     { kind: 'sfx', name: 'crunch', vel: 0.7 * gain, pitch: 0.3 },
   ];
   // Metal folding up, parts tearing off; a vehicle's windows bursting.
@@ -151,9 +163,28 @@ function emitBetween(s: SpaceDropState, from: number, to: number, emit: (e: Omit
   s.sim.runs.forEach((r, k) => {
     for (const e of r.tr.events) {
       if (e.t <= from || e.t > to) continue;
-      if (e.kind === 'impact') emit({ type: 'drop:impact', run: k, energy: r.energy, v: e.v, wreck: wreckOf(r, e.v) });
-      else if (e.kind === 'airburst') emit({ type: 'drop:airburst', run: k, energy: e.value ?? 0, alt: e.alt });
-      else if (e.kind === 'breakup') emit({ type: 'drop:breakup', run: k, alt: e.alt, rock: r.body.breakup?.kind === 'pancake' });
+      if (e.kind === 'impact')
+        emit({
+          type: 'drop:impact',
+          run: k,
+          energy: r.energy,
+          v: e.v,
+          wreck: wreckOf(r, e.v),
+        });
+      else if (e.kind === 'airburst')
+        emit({
+          type: 'drop:airburst',
+          run: k,
+          energy: e.value ?? 0,
+          alt: e.alt,
+        });
+      else if (e.kind === 'breakup')
+        emit({
+          type: 'drop:breakup',
+          run: k,
+          alt: e.alt,
+          rock: r.body.breakup?.kind === 'pancake',
+        });
       else if (e.kind === 'subsonic') emit({ type: 'drop:boom', run: k });
       else if (e.kind === 'entry') emit({ type: 'drop:entry', run: k });
       else if (e.kind === 'burnup') emit({ type: 'drop:burnup', run: k });
@@ -206,7 +237,15 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
     const runs = buildRuns(p);
     const { sim, script } = buildFall(runs, p.units, p.ground, p.replay);
     const dir = storyDirector(script, ctx, 1);
-    const s: SpaceDropState = { p, sim, dir, look: makeLook(ctx.fxRng, p.sun, runs.length), visual: ctx.visual, t: 0, hist: { t: [], simT: [] } };
+    const s: SpaceDropState = {
+      p,
+      sim,
+      dir,
+      look: makeLook(ctx.fxRng, p.sun, runs.length),
+      visual: ctx.visual,
+      t: 0,
+      hist: { t: [], simT: [] },
+    };
     dir.onSpan = (sim, emit, span) => {
       if (span.seconds <= 0) return;
       const a = roarLevel(sim, simTimeAt(sim, span.from));
@@ -236,14 +275,23 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
       const hit = r0 + REPLAY.lead;
       if (was < hit && t >= hit)
         s.sim.runs.forEach((r, k) => {
-          if (r.tr.impact) emit({ type: 'drop:replay', run: k, energy: r.energy, wreck: wreckOf(r, r.tr.impact.v) });
+          if (r.tr.impact)
+            emit({
+              type: 'drop:replay',
+              run: k,
+              energy: r.energy,
+              wreck: wreckOf(r, r.tr.impact.v),
+            });
         });
     }
   },
 
   isDone: (s) => s.dir.done,
 
-  hud: (s) => ({ answer: s.sim.answer, outro: s.t >= markAt(s.dir, 'outro') + 0.4 }),
+  hud: (s) => ({
+    answer: s.sim.answer,
+    outro: s.t >= markAt(s.dir, 'outro') + 0.4,
+  }),
 
   overlays(p, copy) {
     const hook = copy.hook === DEFAULT_HOOK ? hookFor(p) : copy.hook;
@@ -262,13 +310,34 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
     switch (e.type) {
       case 'drop:drone':
         return [
-          { kind: 'tone', hz: 41.2, dur: e.dur as number, vel: 0.5, wave: 'sine' },
-          { kind: 'tone', hz: 110, dur: e.dur as number, vel: 0.08, wave: 'glass' },
+          {
+            kind: 'tone',
+            hz: 41.2,
+            dur: e.dur as number,
+            vel: 0.5,
+            wave: 'sine',
+          },
+          {
+            kind: 'tone',
+            hz: 110,
+            dur: e.dur as number,
+            vel: 0.08,
+            wave: 'glass',
+          },
         ];
       case 'drop:roar': {
         const a = e.from as number;
         const b = e.to as number;
-        return [{ kind: 'tone', hz: 180 + 2200 * a * a, hzEnd: 180 + 2200 * b * b, dur: e.dur as number, vel: 0.15 + 1.6 * Math.max(a, b), wave: 'roar' }];
+        return [
+          {
+            kind: 'tone',
+            hz: 180 + 2200 * a * a,
+            hzEnd: 180 + 2200 * b * b,
+            dur: e.dur as number,
+            vel: 0.15 + 1.6 * Math.max(a, b),
+            wave: 'roar',
+          },
+        ];
       }
       case 'drop:boom':
         return [{ kind: 'sfx', name: 'sonicboom', vel: 0.9 }];
@@ -301,7 +370,10 @@ export const spaceDrop: Template<SpaceDropParams, SpaceDropState> = {
 
   score(events, { durationS, targetS }) {
     const hits = events.filter((e) => e.type === 'drop:impact' || e.type === 'drop:airburst').length;
-    return weighted({ length: [lengthFit(durationS, targetS), 2], payoff: [Math.min(1, hits), 1] });
+    return weighted({
+      length: [lengthFit(durationS, targetS), 2],
+      payoff: [Math.min(1, hits), 1],
+    });
   },
 
   outcome(events) {

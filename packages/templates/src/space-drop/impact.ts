@@ -74,14 +74,15 @@ export const impactEnergy = (tr: Trajectory) => (tr.impact ? 0.5 * tr.impact.mas
 /** Earthquake magnitude the impact would register as (only meaningful above about 1). */
 export const seismicMagnitude = (energyJ: number) => 0.67 * (dm.log(Math.max(1, energyJ)) / Math.LN10) - 5.87;
 
-/** Energies people have a feel for (J), smallest first. */
+/** Energies people have a feel for (J), smallest first (never TNT: the TNT figure is always said beside it). */
 export const REFERENCES: { J: number; name: string }[] = [
   { J: 0.74, name: 'an apple falling off a table' },
   { J: 116, name: 'a fastball pitch' },
-  { J: 5.8e5, name: 'a car crashing at 100 km/h' },
-  { J: 4.184e6, name: 'a kilogram of TNT' },
+  { J: 3.5e3, name: 'a rifle bullet' },
+  { J: 5.8e5, name: 'a car crash at highway speed' },
+  { J: 1.5e7, name: 'a loaded semi truck crashing at highway speed' },
+  { J: 1.2e8, name: 'a gallon of gasoline burning' },
   { J: 1e9, name: 'a lightning bolt' },
-  { J: 4.184e9, name: 'a tonne of TNT' },
   { J: 4.6e10, name: 'the biggest non-nuclear bomb ever used' },
   { J: 6.3e13, name: 'the Hiroshima bomb' },
   { J: 2.1e15, name: 'the Chelyabinsk meteor' },

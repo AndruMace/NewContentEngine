@@ -1,11 +1,10 @@
-import type Anthropic from '@anthropic-ai/sdk';
-import { Runner, getTheme, hashString, parseParams, type NarrationBeat, type NarrationLine, type Recipe, type VoiceTrack } from '@sim/engine';
+import { Runner, getTheme, hashString, parseParams, type NarrationBeat, type NarrationLine, type Recipe } from '@sim/engine';
 import { getMelody } from '@sim/audio';
 import { getTemplate } from '@sim/templates';
 import { hasClip, voiceLine, voicePassage } from './cache';
 import { kokoro } from './kokoro';
 import type { TtsProvider } from './provider';
-import { fillLine, writeLines } from './writer';
+import { fallbackLines, fillLine } from './writer';
 
 const PROVIDERS: Record<string, TtsProvider> = { kokoro };
 
@@ -16,13 +15,9 @@ export const getProvider = (id: string): TtsProvider => {
 };
 
 export interface PrepareOptions {
-  /** Let Claude write the lines (default: when credentials are set and the planner isn't mocked). */
-  useClaude?: boolean;
-  client?: Anthropic;
   provider?: TtsProvider;
   /** Rewrite and re-voice even if the recipe already has lines for these facts. */
   force?: boolean;
-  onWarning?: (message: string) => void;
 }
 
 /** This run's beats: facts come from a headless run (they don't depend on line lengths). */
@@ -35,7 +30,9 @@ export function beatsFor(recipe: Recipe): { beats: NarrationBeat[]; params: unkn
   return { beats: spec.beats(params, run.events), params };
 }
 
-const factsHash = (beats: NarrationBeat[], provider: string, voice: string) => hashString(JSON.stringify([provider, voice, beats.map((b) => [b.id, b.facts])]));
+/** Bumped when the way lines are made changes (units spoken in full; hand-written lines only), so old voicings are redone. */
+const LINES_VERSION = 3;
+const factsHash = (beats: NarrationBeat[], provider: string, voice: string) => hashString(JSON.stringify([LINES_VERSION, provider, voice, beats.map((b) => [b.id, b.facts])]));
 
 /**
  * Write and voice a recipe's narration, returning the recipe with `voice` set (or cleared, for a
@@ -53,16 +50,9 @@ export async function prepareNarration(recipe: Recipe, opts: PrepareOptions = {}
   const current = recipe.voice;
   if (!opts.force && current?.factsHash === hash && current.lines.every((l) => hasClip(l.clip))) return recipe;
 
-  const useClaude = opts.useClaude ?? process.env.SIM_PLANNER !== 'mock';
   // Keep the words if only the clips went missing (e.g. a cleared cache): same video, same lines.
   const reuse = !opts.force && current?.factsHash === hash ? current : undefined;
-  let written: { lines: Record<string, string>; writer: VoiceTrack['writer'] };
-  if (reuse) written = { lines: {}, writer: reuse.writer };
-  else {
-    const w = await writeLines(found.beats, { style: spec.style, seed: recipe.seed, useClaude, client: opts.client });
-    if (w.warning) opts.onWarning?.(w.warning);
-    written = w;
-  }
+  const written = reuse ? {} : fallbackLines(found.beats, recipe.seed);
   const lines: NarrationLine[] = [];
   for (const beat of found.beats) {
     const prior = reuse?.lines.find((l) => l.beat === beat.id);
@@ -70,7 +60,7 @@ export async function prepareNarration(recipe: Recipe, opts: PrepareOptions = {}
       lines.push(prior);
       continue;
     }
-    const filled = prior ? { text: prior.text, caption: prior.caption, parts: prior.parts } : fillLine(beat, written.lines[beat.id]);
+    const filled = prior ? { text: prior.text, caption: prior.caption, parts: prior.parts } : fillLine(beat, written[beat.id]);
     if (beat.parts && filled.parts) {
       // A passage: each sentence voiced on its own, so the picture can change exactly as it starts.
       const { clip, durationS, parts } = await voicePassage(provider, voiceId, filled.parts.map((p) => p.text));
@@ -81,5 +71,5 @@ export async function prepareNarration(recipe: Recipe, opts: PrepareOptions = {}
       lines.push({ beat: beat.id, text: filled.text, caption: filled.caption, clip, durationS });
     }
   }
-  return { ...recipe, voice: { provider: provider.id, voiceId, factsHash: hash, writer: written.writer, lines } };
+  return { ...recipe, voice: { provider: provider.id, voiceId, factsHash: hash, lines } };
 }

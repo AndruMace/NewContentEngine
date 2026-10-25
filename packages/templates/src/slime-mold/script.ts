@@ -44,7 +44,7 @@ const INTRO: BeatSpec = {
   id: 'intro',
   about: 'A yellow slime mold sits in a petri dish: it is a single giant cell, with no brain and no nerves.',
   maxWords: 14,
-  fallback: ['This yellow blob is a slime mold: one single cell, with no brain.', 'Meet a slime mold. One cell. No brain at all.'],
+  fallback: ['This yellow blob is a slime mold: a single giant cell, with no brain.', 'Meet a slime mold: one enormous cell, with no brain at all.'],
 };
 
 /** Oat flakes scattered over the dish, not too close to the middle or each other. */
@@ -95,33 +95,33 @@ function network(p: MoldParams, rng: Rng, tokyo: boolean): Built {
   const s = new Script<MoldSim>();
   const n = dish.food.length - 1;
   // The opening lines barely move it: the search starts as the narration says so.
-  sayGrowing(s, tokyo ? { ...INTRO, id: 'intro', about: 'A slime mold, a single cell with no brain, starts in the middle; oat flakes sit where the cities around Tokyo are.', fallback: ['A slime mold, one cell with no brain. The oat flakes sit where cities around Tokyo are.', 'One brainless cell, and oat flakes placed like the towns around Tokyo.'], maxWords: 18 } : INTRO, undefined, undefined, 0.03);
-  if (p.guess) sayGrowing(s, { id: 'guess', about: 'The viewer is asked whether the slime mold can connect all {n} oat flakes efficiently.', maxWords: 11, required: ['n'], fallback: ['Can it connect all {n} oat flakes efficiently? Guess.', '{n} flakes of food. Can a brainless cell link them?'] }, () => ({ n }), undefined, 0.03);
+  sayGrowing(s, tokyo ? { ...INTRO, id: 'intro', about: 'A slime mold, a single cell with no brain, starts in the middle; oat flakes sit where the cities around Tokyo are.', fallback: ['This slime mold is a single cell with no brain. The oat flakes sit where the cities around Tokyo are.', 'One brainless cell, and oat flakes laid out like the towns around Tokyo.'], maxWords: 21 } : INTRO, undefined, undefined, 0.03);
+  if (p.guess) sayGrowing(s, { id: 'guess', about: 'The viewer is asked whether the slime mold can connect all {n} oat flakes efficiently.', maxWords: 13, required: ['n'], fallback: ['Can a brainless cell connect all {n} oat flakes? Make your guess.', 'Here are {n} flakes of food. Can a brainless cell link them all?'] }, () => ({ n }), undefined, 0.03);
   sayGrowing(
     s,
     {
       id: 'explore',
       about: 'The slime mold explores.',
-      maxWords: 15,
+      maxWords: 18,
       parts: [
-        { about: 'it spreads out across the dish, searching', maxWords: 6 },
-        { about: 'tubes grow thicker wherever it finds food', maxWords: 9 },
+        { about: 'it spreads out across the dish, searching', maxWords: 8 },
+        { about: 'tubes grow thicker wherever it finds food', maxWords: 10 },
       ],
-      fallback: ['It spreads out, searching. | Wherever it finds food, its tubes grow thicker.', 'First it explores. | Then the tubes that lead to food thicken.'],
+      fallback: ['First it spreads out across the dish, searching. | Wherever it finds food, its tubes grow thicker.', 'It starts by exploring in every direction. | Then the tubes that lead to food grow thicker.'],
     },
     () => ({}),
   );
   // The search is shown sped up (it's the slow part of a real slime mold's day, too).
   s.until((sim) => found(sim) >= Math.ceil(n / 2), { tps: TPS * 1.5, maxTicks: 1400, estTicks: 500 });
-  sayGrowing(s, { id: 'half', about: '{found} of the {n} oat flakes have been found so far.', maxWords: 10, required: ['found', 'n'], fallback: ['{found} of the {n} flakes found.', 'Already {found} of {n}.'] }, (sim) => ({ found: found(sim), n: total(sim) }));
+  sayGrowing(s, { id: 'half', about: '{found} of the {n} oat flakes have been found so far.', maxWords: 12, required: ['found', 'n'], fallback: ['It has already found {found} of the {n} oat flakes.', 'So far, it has found {found} of the {n} flakes.'] }, (sim) => ({ found: found(sim), n: total(sim) }));
   s.until((sim) => found(sim) >= n, { tps: TPS * 2.2, maxTicks: 1300, estTicks: 700 });
-  sayGrowing(s, { id: 'all', about: 'The slime mold has now reached {found} of the {n} oat flakes and links them with tubes.', maxWords: 11, required: ['found', 'n'], fallback: ['{found} of {n} flakes, all linked up.', 'Now it has reached {found} of the {n}.'] }, (sim) => ({ found: found(sim), n: total(sim) }));
+  sayGrowing(s, { id: 'all', about: 'The slime mold has now reached {found} of the {n} oat flakes and links them with tubes.', maxWords: 13, required: ['found', 'n'], fallback: ['Now it has reached {found} of the {n} flakes, all linked by tubes.', '{found} of the {n} flakes are now connected by its network.'] }, (sim) => ({ found: found(sim), n: total(sim) }));
   s.play(420, TPS, { elastic: true });
   s.mark('reveal');
   if (p.overlay)
     sayGrowing(
       s,
-      { id: 'compare', about: 'A white overlay shows the shortest possible network linking all the food; the slime mold adds extra loops, so one broken tube does not cut anything off.', maxWords: 20, fallback: ['In white: the shortest possible network. The slime adds loops, so one broken tube cuts nothing off.', 'White is the shortest network. The slime keeps a few extra loops, as backup.'] },
+      { id: 'compare', about: 'A white overlay shows the shortest possible network linking all the food; the slime mold adds extra loops, so one broken tube does not cut anything off.', maxWords: 16, fallback: ['The white lines show the shortest possible network. The slime mold adds extra loops, as backups.', 'In white, the shortest possible network. The slime mold keeps extra loops, just in case.'] },
       () => ({}),
       [showRoute],
     );
@@ -129,8 +129,8 @@ function network(p: MoldParams, rng: Rng, tokyo: boolean): Built {
   sayGrowing(
     s,
     tokyo
-      ? { id: 'lesson', about: 'The history: in {year} scientists in Japan did exactly this, and the slime mold grew a network much like the real railway around Tokyo.', maxWords: 18, required: ['year'], fallback: ['In {year}, scientists did exactly this. The slime grew a network much like Tokyo\'s real railways.', 'Japanese scientists tried this in {year}. The result looked like the Tokyo rail map.'] }
-      : { id: 'lesson', about: 'The history: in {year} scientists placed oat flakes like the cities around Tokyo, and a slime mold grew a network much like the real railway.', maxWords: 20, required: ['year'], fallback: ['In {year}, scientists placed oats like the cities around Tokyo. The slime grew a network like the railway.', 'Scientists once laid oats out like Tokyo\'s cities, in {year}. The slime rebuilt the rail map.'] },
+      ? { id: 'lesson', about: 'The history: in {year} scientists in Japan did exactly this, and the slime mold grew a network much like the real railway around Tokyo.', maxWords: 22, required: ['year'], fallback: ['In {year}, scientists in Japan did exactly this, and the slime mold grew a network much like Tokyo’s real railway.', 'Japanese scientists tried this in {year}, and the result looked remarkably like the Tokyo rail map.'] }
+      : { id: 'lesson', about: 'The history: in {year} scientists placed oat flakes like the cities around Tokyo, and a slime mold grew a network much like the real railway.', maxWords: 19, required: ['year'], fallback: ['In {year}, scientists tried this with oats placed like Tokyo’s cities, and it grew a map of the railway.', 'Back in {year}, scientists placed oats like the cities around Tokyo, and the slime mold rebuilt the rail map.'] },
     () => ({ year: '2010' }),
   );
   s.mark('outro');
@@ -149,19 +149,19 @@ function maze(p: MoldParams, rng: Rng): Built {
   seedAgents(mold, 0, 0, Infinity);
   const sim: MoldSim = { mold, route: [mz.path], showRoute: false, peak: 0, answer: 'SOLVED' };
   const s = new Script<MoldSim>();
-  sayGrowing(s, { id: 'intro', about: 'A slime mold, a single cell with no brain, has spread into every corridor of a maze.', maxWords: 14, fallback: ['A slime mold has filled every corridor of this maze. One cell, no brain.', 'One brainless cell, spread through an entire maze.'] });
-  if (p.guess) sayGrowing(s, { id: 'guess', about: 'The viewer is asked whether the slime mold can find the shortest way through the maze.', maxWords: 10, fallback: ['Can it find the shortest way through? Guess.', 'Can it solve the maze? Lock in your guess.'] });
+  sayGrowing(s, { id: 'intro', about: 'A slime mold, a single cell with no brain, has spread into every corridor of a maze.', maxWords: 19, fallback: ['This slime mold has spread into every corridor of a maze. It’s a single cell, with no brain.', 'One brainless cell has filled every corridor of this maze.'] });
+  if (p.guess) sayGrowing(s, { id: 'guess', about: 'The viewer is asked whether the slime mold can find the shortest way through the maze.', maxWords: 12, fallback: ['Can it find the shortest way through? Make your guess.', 'Do you think it can solve the maze? Lock in your guess.'] });
   sayGrowing(
     s,
     {
       id: 'food',
       about: 'Food is placed at both ends of the maze.',
-      maxWords: 10,
+      maxWords: 15,
       parts: [
-        { about: 'an oat flake is placed at the entrance', maxWords: 5 },
-        { about: 'and another at the exit', maxWords: 5 },
+        { about: 'an oat flake is placed at the entrance', maxWords: 8 },
+        { about: 'and another at the exit', maxWords: 7 },
       ],
-      fallback: ['Food at the entrance, | and food at the exit.', 'Put an oat flake here, | and another one there.'],
+      fallback: ['An oat flake goes at the entrance, | and another one at the exit.', 'We put some food here, at the entrance, | and some more at the exit.'],
     },
     () => ({}),
     [
@@ -176,11 +176,11 @@ function maze(p: MoldParams, rng: Rng): Built {
     ],
   );
   s.play(1100, TPS, { elastic: true });
-  sayGrowing(s, { id: 'prune', about: 'The dead ends dry up; only the tube between the two food sources survives.', maxWords: 12, fallback: ['The dead ends dry up. Only the path between the food survives.', 'Everything that leads nowhere fades away.'] });
+  sayGrowing(s, { id: 'prune', about: 'The dead ends dry up; only the tube between the two food sources survives.', maxWords: 17, fallback: ['The dead ends slowly dry up, and only the path between the two pieces of food survives.', 'Everything that leads nowhere fades away.'] });
   s.play(240, TPS, { elastic: true });
   s.mark('reveal');
-  sayGrowing(s, { id: 'route', about: 'A white line shows the shortest path through the maze: the slime mold found it.', maxWords: 10, fallback: ['The shortest path, in white. It found it.', 'There is the shortest route. Solved, without a brain.'] }, () => ({}), [showRoute]);
-  sayGrowing(s, { id: 'lesson', about: 'The history: scientists in Japan first showed a slime mold solving a maze in {year}; since then it has been used to model road and rail networks.', maxWords: 18, required: ['year'], fallback: ['Scientists first showed this in {year}. Since then, slime molds have helped model road networks.', 'This was first done in {year}. Now slime molds help design transport networks.'] }, () => ({ year: '2000' }));
+  sayGrowing(s, { id: 'route', about: 'A white line shows the shortest path through the maze: the slime mold found it.', maxWords: 16, fallback: ['The white line shows the shortest path through the maze. The slime mold found it.', 'That’s the shortest route, found without a brain.'] }, () => ({}), [showRoute]);
+  sayGrowing(s, { id: 'lesson', about: 'The history: scientists in Japan first showed a slime mold solving a maze in {year}; since then it has been used to model road and rail networks.', maxWords: 20, required: ['year'], fallback: ['Scientists first showed this in {year}. Since then, slime molds have even helped model road and rail networks.', 'This was first done in {year}, and today slime molds help people design transport networks.'] }, () => ({ year: '2000' }));
   s.mark('outro');
   s.play(140, TPS);
   return { sim, script: s };
@@ -194,15 +194,15 @@ function foraging(p: MoldParams, rng: Rng): Built {
   const n = food.length - 1;
   const s = new Script<MoldSim>();
   sayGrowing(s, INTRO, undefined, undefined, 0.03);
-  if (p.guess) sayGrowing(s, { id: 'guess', about: 'The viewer is asked to guess where the slime mold will grow.', maxWords: 8, fallback: ['Where will it grow? Guess now.', 'Guess which way it goes.'] }, undefined, undefined, 0.03);
-  sayGrowing(s, { id: 'explore', about: 'It spreads out in every direction at once, searching for food.', maxWords: 10, fallback: ['It spreads in every direction at once, searching.', 'No map, no plan: it just spreads out.'] });
+  if (p.guess) sayGrowing(s, { id: 'guess', about: 'The viewer is asked to guess where the slime mold will grow.', maxWords: 10, fallback: ['Where do you think it’ll grow? Make your guess.', 'Guess which way it’ll go.'] }, undefined, undefined, 0.03);
+  sayGrowing(s, { id: 'explore', about: 'It spreads out in every direction at once, searching for food.', maxWords: 12, fallback: ['It spreads out in every direction at once, searching for food.', 'No map and no plan. It simply spreads out everywhere.'] });
   s.until((sim) => found(sim) >= Math.ceil(n * 0.6), { tps: TPS * 1.5, maxTicks: 1500, estTicks: 600 });
-  sayGrowing(s, { id: 'found', about: 'It has found {found} of the {n} oat flakes; it covers {cover} percent of the dish.', maxWords: 13, required: ['found'], fallback: ['It has found {found} flakes, covering {cover} percent of the dish.', '{found} flakes found so far.'] }, (sim) => ({ found: found(sim), n: total(sim), cover: Math.round(coverage(sim.mold) * 100) }));
+  sayGrowing(s, { id: 'found', about: 'It has found {found} of the {n} oat flakes; it covers {cover} percent of the dish.', maxWords: 17, required: ['found'], fallback: ['So far it has found {found} flakes, and it covers {cover} percent of the dish.', 'It has found {found} flakes so far.'] }, (sim) => ({ found: found(sim), n: total(sim), cover: Math.round(coverage(sim.mold) * 100) }));
   s.play(700, TPS, { elastic: true });
-  sayGrowing(s, { id: 'prune', about: 'Now it pulls back from the empty places, keeping only the tubes that lead to food; it covers {cover} percent now, down from {peak}.', maxWords: 18, required: ['cover', 'peak'], fallback: ['Then it pulls back from empty places. From {peak} percent of the dish down to {cover}.', 'It retreats from where there is nothing: {peak} percent down to {cover}.'] }, (sim) => ({ cover: Math.round(coverage(sim.mold) * 100), peak: Math.round(sim.peak * 100) }));
+  sayGrowing(s, { id: 'prune', about: 'Now it pulls back from the empty places, keeping only the tubes that lead to food; it covers {cover} percent now, down from {peak}.', maxWords: 20, required: ['cover', 'peak'], fallback: ['Then it pulls back from the empty places, shrinking from {peak} percent of the dish down to {cover}.', 'It retreats from wherever there’s nothing to eat, from {peak} percent of the dish down to {cover}.'] }, (sim) => ({ cover: Math.round(coverage(sim.mold) * 100), peak: Math.round(sim.peak * 100) }));
   s.mark('reveal');
   s.act(showRoute);
-  sayGrowing(s, { id: 'lesson', about: 'The lesson: with no brain and no nerves, it still solves a problem, explore then keep only what pays off, that engineers find hard.', maxWords: 16, fallback: ['No brain, no nerves. Yet it solves a problem engineers find hard.', 'Explore everything, keep only what works. No brain needed.'] });
+  sayGrowing(s, { id: 'lesson', about: 'The lesson: with no brain and no nerves, it still solves a problem, explore then keep only what pays off, that engineers find hard.', maxWords: 17, fallback: ['It has no brain and no nerves, yet it solves a problem that engineers find hard.', 'Explore everything, then keep only what works. No brain required.'] });
   s.mark('outro');
   s.play(140, TPS);
   return { sim, script: s };

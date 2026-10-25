@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseParams, type Recipe, type Runner } from '@sim/engine';
-import { createBus, scheduleEvent, type SynthBus } from '@sim/audio';
+import { createBus, playLine, scheduleEvent, type SynthBus } from '@sim/audio';
 import { getTemplate, setAssetBase } from '@sim/templates';
 import { makeRunner } from './recipe';
 
@@ -152,7 +152,16 @@ export function usePlayer(canvasRef: React.RefObject<HTMLCanvasElement | null>, 
       audioRef.current = { ctx, bus: createBus(ctx, { reverb, destination: out, samples: samplesRef.current, lenient: true }), reverb, out };
     }
     await audioRef.current.ctx.resume();
-    clockRef.current = { origin: audioRef.current.ctx.currentTime + 0.06 - runnerRef.current.t, audioIdx: runnerRef.current.audio.length };
+    const runner = runnerRef.current;
+    clockRef.current = { origin: audioRef.current.ctx.currentTime + 0.06 - runner.t, audioIdx: runner.audio.length };
+    // Resuming mid-line: pick the narration up where the pause cut it off.
+    if (!mutedRef.current)
+      for (const ev of runner.audio) {
+        if (ev.kind !== 'voice') continue;
+        const into = runner.t - ev.t;
+        const length = samplesRef.current.get(ev.clip)?.duration ?? 0;
+        if (into > 0 && into < length - 0.05) playLine(audioRef.current.bus, ev.clip, ev.vel, audioRef.current.ctx.currentTime + 0.06, into);
+      }
     setStatus('playing');
     rafRef.current = requestAnimationFrame(tick);
     // eslint-disable-next-line react-hooks/exhaustive-deps

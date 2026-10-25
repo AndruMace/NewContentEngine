@@ -21,7 +21,8 @@ import { buildModel, debrisGeometry } from './models';
 import { sizeOf, type Shape } from './objects';
 import { sampleAt, type Sample } from './physics';
 import { REPLAY, endTime, type Run } from './script';
-import { Wreck, relativeTo, type WreckImpact } from './wreck';
+import { GROUNDS, type Ground } from './impact';
+import { Wreck, colourOf, relativeTo, type WreckImpact } from './wreck';
 import { simTimeAtVideo, type SpaceDropState } from './index';
 
 const V = () => new THREE.Vector3();
@@ -753,7 +754,7 @@ function heatify(group: THREE.Object3D, u: HeatUniforms) {
         Object.assign(sh.uniforms, u);
         sh.fragmentShader = sh.fragmentShader
           .replace('#include <common>', '#include <common>\nuniform float uHeat;\nuniform vec3 uHeatColor;\nuniform vec3 uFlow;\nuniform float uChar;')
-          .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= 1.0 - uChar * 0.7;')
+          .replace('#include <color_fragment>', '#include <color_fragment>\n diffuseColor.rgb *= 1.0 - uChar * 0.45;')
           .replace(
             '#include <emissivemap_fragment>',
             '#include <emissivemap_fragment>\n float facing = max(dot(normal, uFlow), 0.0);\n totalEmissiveRadiance += uHeatColor * uHeat * (0.04 + pow(facing, 3.0) * 1.4);',
@@ -932,8 +933,19 @@ function makeVis(run: Run, k: number, look: Look['runs'][number], sun: THREE.Vec
   holder.add(flare);
   let debris: THREE.InstancedMesh | null = null;
   if (tr.breakup) {
-    const n = tr.breakup.debris;
-    debris = new THREE.InstancedMesh(debrisGeometry(), new THREE.MeshStandardMaterial({ color: 0x777777, roughness: 0.6, metalness: 0.4, emissive: 0xff5a1a, emissiveIntensity: 0 }), n);
+    // A machine tears into panels of its own colours (and bare metal); a rock into chunks.
+    const plates = body.breakup?.kind === 'core';
+    const n = tr.breakup.debris * (plates ? 2 : 1);
+    debris = new THREE.InstancedMesh(debrisGeometry(plates), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.4, emissive: 0xff5a1a, emissiveIntensity: 0 }), n);
+    const main = mainColour(intact, new THREE.Color());
+    const rc = rng(look.seed + 9);
+    const c = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      if (!plates) c.set(0x777777);
+      else if (rc() < 0.6) c.copy(main).multiplyScalar(0.7 + 0.4 * rc());
+      else c.setRGB(0.35, 0.36, 0.38).multiplyScalar(0.7 + 0.5 * rc());
+      debris.setColorAt(i, c);
+    }
     debris.visible = false;
     debris.frustumCulled = false;
     holder.add(debris);
@@ -1183,6 +1195,22 @@ function makeVis(run: Run, k: number, look: Look['runs'][number], sun: THREE.Vec
   return vis;
 }
 
+/** The colour of a model's biggest part (its paint, panels or hull). */
+function mainColour(model: THREE.Object3D, out: THREE.Color): THREE.Color {
+  let best = -1;
+  model.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    m.geometry.computeBoundingSphere();
+    const r = m.geometry.boundingSphere!.radius * Math.max(m.scale.x, m.scale.y, m.scale.z);
+    if (r > best) {
+      best = r;
+      colourOf((Array.isArray(m.material) ? m.material[0] : m.material) as THREE.MeshStandardMaterial, out);
+    }
+  });
+  return out;
+}
+
 /** Position on the landing site's frame (m) for a sample: the site turns with the Earth. */
 function sitePos(v: Vis, s: Sample, out: THREE.Vector3): THREE.Vector3 {
   const site = v.thSite - OMEGA * (v.tSite - s.t);
@@ -1307,15 +1335,17 @@ const view = sceneCache((s: SpaceDropState) => {
   const SUN = new THREE.Vector3(...s.look.sun).normalize();
   // Reflections only need the sun roughly right: one environment per band of sun height.
   const band = SUN.y < 0.37 ? 0 : SUN.y < 0.74 ? 1 : 2;
-  const env = studioEnvironment(`space-drop-${band}`, (sc) => {
-    sc.background = new THREE.Color(0x05070c);
+  // What metal and gloss reflect: a dim sky above and the bright Earth below (without them, metal
+  // sides away from the sun go black).
+  const env = studioEnvironment(`space-drop-lit-${band}`, (sc) => {
+    sc.background = new THREE.Color().setRGB(0.2, 0.24, 0.32);
     const sunBall = new THREE.Mesh(new THREE.SphereGeometry(2, 16, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(30, 28, 24) }));
     const e = [0.2, 0.6, 1.1][band];
     sunBall.position.set(-0.56 * Math.cos(e), Math.sin(e), 0.83 * Math.cos(e)).multiplyScalar(20);
     sc.add(sunBall);
     const ground = new THREE.Mesh(
       new THREE.SphereGeometry(30, 32, 16, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.12, 0.16, 0.24), side: THREE.BackSide }),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.42, 0.46, 0.55), side: THREE.BackSide }),
     );
     sc.add(ground);
   });
@@ -1392,7 +1422,7 @@ const view = sceneCache((s: SpaceDropState) => {
   near.add(hemiNear);
   const sunMid = new THREE.DirectionalLight(0xfff1dc, 2.6);
   mid.add(sunMid, sunMid.target);
-  const hemiMid = new THREE.HemisphereLight(0x9cc0ff, 0x4a3c2c, 0.8);
+  const hemiMid = new THREE.HemisphereLight(0x9cc0ff, 0x5a4a38, 1.05);
   mid.add(hemiMid);
 
   const vis = s.sim.runs.map((run, k) => makeVis(run, k, s.look.runs[k], SUN, mid, near));
@@ -1481,7 +1511,9 @@ function cameraFor(v: Vis, pose: Pose, d: AnyDirector, t: number, tag: string, o
   const side = tmp.side.crossVectors(dir, up);
   if (side.lengthSq() < 1e-6) side.set(0, 0, 1);
   side.normalize();
-  const size = pose.size;
+  // After a breakup, ease in from the whole object to what's left, so the break itself is seen.
+  const tbk = markAt(d, `break${tag}`);
+  const size = smp.phase === 1 && t > tbk ? lerp(sizeOf(v.run.body.shape), pose.size, smooth(tbk + 0.5, tbk + 3.5, t)) : pose.size;
   const glowRoom = 1 + 1.4 * plasmaOf(smp.heat) * (pose.width / size);
   const alt = smp.h;
   // Seen from beside its path, looking a little down so the horizon (and how high it is) stays in
@@ -1629,7 +1661,7 @@ function lowest(hull: Float32Array, q: THREE.Quaternion, s: THREE.Vector3, up: T
 }
 
 /** How it lies the instant it touches down (settled since `ta`, or as it was at `ti`), for its wreck. */
-function wreckImpact(v: Vis, ta: number, ti: number): WreckImpact {
+function wreckImpact(v: Vis, ta: number, ti: number, ground: Ground): WreckImpact {
   const tr = v.run.tr;
   const smp = sampleAt(tr, endTime(tr));
   const dir = flightDir(v, smp, V());
@@ -1647,6 +1679,8 @@ function wreckImpact(v: Vis, ta: number, ti: number): WreckImpact {
     mass: im.mass,
     size: sizeOf(im.shape),
     crater: cr ? { R: cr.diameter / 2, depth: cr.depth, rim: cr.depth * 0.18 } : { R: 0, depth: 0, rim: 0 },
+    // Loose sand gives way most easily; granite hardly at all.
+    ground: { rho: GROUNDS[ground].rho, strength: Math.max(0.2e6, 2 * GROUNDS[ground].Y) },
   };
 }
 
@@ -1739,7 +1773,7 @@ function updateVis(v: Vis, pose: Pose, cam: THREE.Vector3, d: AnyDirector, t: nu
         const out = tmp.a.set(r() - 0.5, r() - 0.5, r() - 0.5).normalize();
         const sp = L0 * (0.4 + r() * 1.4);
         const lag = L0 * (0.6 + r() * 2.5);
-        const sz = L0 * (0.03 + 0.09 * r() ** 2);
+        const sz = L0 * (0.04 + 0.1 * r() ** 2);
         const p = tmp.b
           .copy(out)
           .multiplyScalar(sp * (1 - Math.exp(-since * 1.5)))
@@ -1912,7 +1946,7 @@ function updateGround(v: Vis, cam: THREE.Vector3, camAlt: number, simT: number, 
     const w = v.wreck;
     w.group.position.set(0, 0, 0).sub(cam);
     const ta = markAt(d, `approach${tag}`);
-    if (Number.isFinite(ta) || Number.isFinite(ti)) w.prepare(() => wreckImpact(v, ta, ti));
+    if (Number.isFinite(ta) || Number.isFinite(ti)) w.prepare(() => wreckImpact(v, ta, ti, ground as Ground));
     if (imp && cr && t >= ti) w.update(psi, grow, dustColour(ground, tmp.col2));
     else {
       if (Number.isFinite(ta)) w.work(6);
@@ -2030,11 +2064,14 @@ export function drawSpaceDrop(rc: RenderCtx, s: SpaceDropState) {
     const dens = Math.exp(-camAlt / 8000);
     v.sunNear.position.copy(v.sun).multiplyScalar(100);
     v.sunNear.target.position.set(0, 0, 0);
-    v.hemiNear.intensity = 0.12 + 0.9 * dens;
-    v.hemiNear.color.setRGB(0.55, 0.7, 1).lerp(tmp.col.setRGB(0.08, 0.1, 0.16), 1 - dens);
+    // Fill for the sides the sun misses, so every part of it reads: sky light low down, and in space
+    // the sunlit Earth below (it reflects about a third of the sunlight back up).
+    v.hemiNear.intensity = 0.95 + 0.45 * dens;
+    v.hemiNear.color.setRGB(0.55, 0.7, 1).lerp(tmp.col.setRGB(0.32, 0.35, 0.42), 1 - dens);
+    v.hemiNear.groundColor.setRGB(0.4, 0.34, 0.27).lerp(tmp.col.setRGB(0.45, 0.52, 0.66), 1 - dens);
     v.sunMid.position.copy(v.sun).multiplyScalar(100);
     v.sunMid.target.position.set(0, 0, 0);
-    v.near.environmentIntensity = 0.25 + 0.5 * dens;
+    v.near.environmentIntensity = 0.55 + 0.4 * dens;
     draw3DLayers(
       ctx,
       v.key,

@@ -271,10 +271,9 @@ app.get<{ Params: { id: string }; Querystring: { name: string; inline?: string }
 
 /** Write and voice a recipe's narration (Playground "Voice it"); returns the recipe with its lines. */
 app.post<{ Body: { recipe: Recipe; force?: boolean } }>('/api/narration/prepare', async (req, reply) => {
-  const warnings: string[] = [];
   try {
-    const recipe = await prepareNarration(req.body.recipe, { force: req.body.force, onWarning: (m) => warnings.push(m) });
-    return { voice: recipe.voice ?? null, warnings };
+    const recipe = await prepareNarration(req.body.recipe, { force: req.body.force });
+    return { voice: recipe.voice ?? null };
   } catch (e) {
     return reply.code(500).send({ error: (e as Error).message });
   }

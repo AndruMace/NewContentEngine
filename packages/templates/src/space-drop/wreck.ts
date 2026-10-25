@@ -43,7 +43,7 @@ export const CRUSH: Record<string, CrushSpec> = {
   'diesel engine': { force: 1e8, max: 0.12, bounce: 0.04 },
   'jet engine': { force: 2e7, max: 0.35, bounce: 0.04 },
   'hull section': { force: 2e8, max: 0.6, bounce: 0.01 },
-  'steel docking frame': { force: 3e7, max: 0.3, bounce: 0.04 },
+  'steel docking frame': { force: 5e6, max: 0.35, bounce: 0.02 },
 };
 
 /** Brittle things that burst apart rather than crumple: how many chunks they break into. */
@@ -196,7 +196,7 @@ export function subdivide(geo: THREE.BufferGeometry, maxEdge: number, maxTris = 
 }
 
 /** A material's overall colour (its texture's average, if it has one). */
-function colourOf(m: THREE.MeshStandardMaterial, out: THREE.Color): THREE.Color {
+export function colourOf(m: THREE.MeshStandardMaterial, out: THREE.Color): THREE.Color {
   out.copy(m.color);
   const img = m.map?.image as (HTMLCanvasElement & OffscreenCanvas) | undefined;
   try {
@@ -305,6 +305,17 @@ export interface WreckImpact {
   /** The object's size (m) and the crater it digs. */
   size: number;
   crater: CraterShape;
+  /** The ground: its density (kg/m³) and how hard it resists being pushed through (Pa). */
+  ground: { rho: number; strength: number };
+}
+
+/**
+ * How deep something digs into the ground (m): Poncelet's law, the ground resisting with its strength
+ * plus a drag-like ½ρv² on the area it hits with, x = m / (ρ A) · ln(1 + ρ v² / 2σ).
+ */
+export function penetration(mass: number, area: number, v: number, ground: { rho: number; strength: number }): number {
+  const c1 = 0.5 * ground.rho;
+  return (mass / (2 * c1 * Math.max(1e-4, area))) * Math.log(1 + (c1 * v * v) / Math.max(1e4, ground.strength));
 }
 
 const tmp = { a: new THREE.Vector3(), b: new THREE.Vector3(), q: new THREE.Quaternion(), q2: new THREE.Quaternion(), m: new THREE.Matrix4() };
@@ -337,6 +348,8 @@ export class Wreck {
   private tc = 0.01;
   private vb = 0;
   private sink = 0;
+  /** How far it digs into the ground as it stops (m). */
+  private embed = 0;
   private slide = new THREE.Vector3();
   private carry = new THREE.Vector3();
   private rockAxis = new THREE.Vector3(1, 0, 0);
@@ -454,12 +467,40 @@ export class Wreck {
     this.root.quaternion.copy(im.q);
     this.model.scale.copy(im.scale);
     const M = new THREE.Matrix4();
-    // Its extent, over every part, in level site axes.
+    // Its extent, over every part, in level site axes, and its outline seen from above.
     const box = new THREE.Box3();
+    const foot: number[] = [];
     for (const m of meshesUnder(this.model)) {
       relativeTo(m, this.group, M);
       const pts = (m.userData.hull as Float32Array | undefined) ?? ((m.geometry.attributes.position as THREE.BufferAttribute).array as Float32Array);
-      for (let i = 0; i < pts.length; i += 3) box.expandByPoint(tmp.a.set(pts[i], pts[i + 1], pts[i + 2]).applyMatrix4(M));
+      const stride = Math.max(1, Math.floor(pts.length / 3 / 400)) * 3;
+      for (let i = 0; i < pts.length; i += 3) {
+        box.expandByPoint(tmp.a.set(pts[i], pts[i + 1], pts[i + 2]).applyMatrix4(M));
+        if (i % stride === 0) foot.push(tmp.a.x, tmp.a.z);
+      }
+    }
+    // Its narrowest width across the ground, which way that is, and its widest.
+    let thinW = Infinity;
+    let thinA = 0;
+    let thinMid = 0;
+    let wideW = 0;
+    for (let k = 0; k < 36; k++) {
+      const a = (k / 36) * Math.PI;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (let i = 0; i < foot.length; i += 2) {
+        const p = foot[i] * ca + foot[i + 1] * sa;
+        lo = Math.min(lo, p);
+        hi = Math.max(hi, p);
+      }
+      wideW = Math.max(wideW, hi - lo);
+      if (hi - lo < thinW) {
+        thinW = hi - lo;
+        thinA = a;
+        thinMid = (lo + hi) / 2;
+      }
     }
     const ymin = box.min.y;
     const ymax = box.max.y;
@@ -473,7 +514,11 @@ export class Wreck {
     // It decelerates over the distance it crushes (plus a little give in the ground).
     this.tc = Math.max(0.008, (2 * (H * c + 0.02 * H)) / v);
     this.vb = Math.min(6, (spec?.bounce ?? 0.03) * v);
-    this.sink = spec ? 0 : im.crater.depth * 0.55;
+    // It digs in: a crumpling wreck follows the crater's bowl (in its crush) and pushes on below; a
+    // solid one sits in the crater and digs in further, never quite out of sight.
+    const embed = Math.min(penetration(im.mass, 0.75 * thinW * wideW, v, im.ground), (spec ? 0.5 : 0.35) * H * (1 - c));
+    this.embed = embed;
+    this.sink = spec ? 0 : im.crater.depth;
     // It skids on a little the way it was going (the crater soaks up most of that), never far.
     this.slide.set(im.vh.x * 0.09 + (r() - 0.5) * 0.01 * v, 0, im.vh.z * 0.09 + (r() - 0.5) * 0.01 * v);
     this.slide.clampLength(0, 0.4 * im.crater.R + 0.3 * im.size);
@@ -482,20 +527,17 @@ export class Wreck {
     const ra = r() * Math.PI * 2;
     this.rockAxis.set(Math.cos(ra), 0, Math.sin(ra));
     this.rock0 = (0.05 + 0.08 * r()) * (spec ? 1 : 0.5);
-    // Crushed end-on and left taller than it is wide, it falls over across its narrower side (the
-    // way it was moving, if it was), pivoting on the bottom edge on that side.
-    const wx = (box.max.x - box.min.x) * (1 + 0.16 * c);
-    const wz = (box.max.z - box.min.z) * (1 + 0.16 * c);
+    // Left standing taller than it is wide (crushed end-on, or a ring on its edge), it falls over
+    // across its narrowest side (the way it was moving, if it was), pivoting on the bottom edge on
+    // that side; unless it's dug in deep enough to stay standing.
+    const thinNow = thinW * (1 + 0.16 * c);
     const Hc = H * (1 - c);
     this.topple = 0;
-    if (Hc > 1.25 * Math.min(wx, wz)) {
-      const alongX = wx < wz;
-      const sgn = Math.sign(alongX ? im.vh.x : im.vh.z) || (r() < 0.5 ? -1 : 1);
-      const d = new THREE.Vector3(alongX ? sgn : 0, 0, alongX ? 0 : sgn);
-      const half = (alongX ? wx : wz) / 2;
-      const mid = alongX ? (box.min.x + box.max.x) / 2 : (box.min.z + box.max.z) / 2;
-      const edge = mid + sgn * half;
-      this.pivot.set(alongX ? edge : 0, 0, alongX ? 0 : edge);
+    if (Hc > 1.25 * thinNow && embed < 0.25 * Hc) {
+      const n = new THREE.Vector3(Math.cos(thinA), 0, Math.sin(thinA));
+      const sgn = Math.sign(n.dot(im.vh)) || (r() < 0.5 ? -1 : 1);
+      const d = n.clone().multiplyScalar(sgn);
+      this.pivot.copy(n).multiplyScalar(thinMid + (sgn * thinNow) / 2);
       this.topAxis.crossVectors(new THREE.Vector3(0, 1, 0), d).normalize();
       this.topple = (Math.PI / 2) * (0.9 + 0.08 * r());
       this.topT = 1.4 * Math.sqrt((2 * Hc) / G);
@@ -923,7 +965,7 @@ export class Wreck {
       }
     }
     const sl = 1 - Math.exp(-Math.max(0, psi) / 0.35);
-    this.root.position.set(this.slide.x * sl, -this.ymin - this.sink * grow, this.slide.z * sl);
+    this.root.position.set(this.slide.x * sl, -this.ymin - this.sink * grow - this.embed * prog, this.slide.z * sl);
     if (this.topple > 0) {
       // Falls over, gathering speed, then a small jolt as it lands on its side.
       const u = Math.min(1, Math.max(0, tau) / this.topT);

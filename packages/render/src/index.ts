@@ -47,8 +47,6 @@ export async function renderRecipe(
     onProgress?: (frame: number, est: number) => void;
     /** ('voice' →) 'frames' → 'audio' → 'mastering' → 'qc' */
     onStage?: (stage: RenderStage) => void;
-    /** Something worked, but not as asked (e.g. narration fell back to the built-in lines). */
-    onWarning?: (message: string) => void;
     /** Keep video.mp4/audio.wav intermediates (final.mp4 + events.json can always regenerate them). */
     keepIntermediates?: boolean;
   } = {},
@@ -59,7 +57,7 @@ export async function renderRecipe(
   // Narrated templates: write and voice the lines first; their lengths time the sim.
   if (getTemplate(recipe.templateId).narration) {
     opts.onStage?.('voice');
-    recipe = await prepareNarration(recipe, { onWarning: opts.onWarning });
+    recipe = await prepareNarration(recipe);
     if (recipe.voice) {
       await mkdir(join(dir, 'voice'), { recursive: true });
       await Promise.all(recipe.voice.lines.map((l) => copyFile(clipPath(l.clip), join(dir, 'voice', l.clip))));

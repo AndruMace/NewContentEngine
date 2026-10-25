@@ -76,32 +76,32 @@ const BEAT: Record<string, BeatDef> = {
   intro: {
     about: 'People walk into a room one at a time, each with a random birthday. The question: how many until two share a birthday? Ask the viewer to guess.',
     required: [],
-    maxWords: 12,
-    fallback: ['One by one, people walk in. When do two share a birthday?', 'Fill a room with people. When do two share a birthday?'],
+    maxWords: 17,
+    fallback: ['One by one, people walk into a room. How many until two of them share a birthday?', 'Let’s fill a room with people. When do two of them share a birthday?'],
   },
   arrivals: {
     about: 'Each person lights up their birthday on a calendar of {days} days. With that many days, a match feels a long way off.',
     required: ['days'],
     maxWords: 12,
-    fallback: ['Each one lights up a day, out of {days}.', '{days} possible birthdays. A match should take ages… right?'],
+    fallback: ['Each person lights up their birthday, out of {days} days.', 'With {days} possible birthdays, a match should take ages… right?'],
   },
   match: {
     about: 'Two people in the room share a birthday, after {count} people walked in.',
     required: ['count'],
-    maxWords: 9,
-    fallback: ['A match! After {count} people.', 'There it is: a shared birthday, {count} people in.'],
+    maxWords: 11,
+    fallback: ['A match! After just {count} people.', 'There it is, a shared birthday, {count} people in.'],
   },
   revealOne: {
     about: 'It took {count} people for two to share a birthday. In fact just {half} people give a {odds} percent chance of a match.',
     required: ['half', 'odds'],
-    maxWords: 15,
-    fallback: ['{count} people! Just {half} gives a {odds} percent chance of a match.', 'Only {half} people give you a {odds} percent chance. Surprised?'],
+    maxWords: 18,
+    fallback: ['It took {count} people! In fact, just {half} people give a {odds} percent chance of a match.', 'Just {half} people give you a {odds} percent chance. Surprised?'],
   },
   revealMany: {
     about: 'Across {rooms} rooms, a shared birthday turned up after {fewest} to {most} people. In fact just {half} people give a {odds} percent chance of a match.',
     required: ['half', 'odds'],
-    maxWords: 15,
-    fallback: ['Every room matched within {most} people. Just {half} gives a {odds} percent chance.', 'Only {half} people give you a {odds} percent chance. Surprised?'],
+    maxWords: 18,
+    fallback: ['Every room found a match within {most} people. Just {half} people give a {odds} percent chance.', 'Just {half} people give you a {odds} percent chance. Surprised?'],
   },
 };
 

@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { NarrationBeat, Recipe } from '@sim/engine';
 import { numberForScreen, numberToWords } from './numbers';
-import { checkLine, claudeLines, fallbackLines, fillLine, wordCount, writeLines } from './writer';
+import { spokenText } from './speech';
+import { checkLine, fallbackLines, fillLine, wordCount } from './writer';
 import type { TtsProvider } from './provider';
 
 const beat: NarrationBeat = {
@@ -26,6 +27,29 @@ describe('number words', () => {
     expect(numberToWords(250504)).toBe('two hundred fifty thousand five hundred four');
     expect(numberToWords(1_000_000)).toBe('one million');
     expect(numberForScreen(250504)).toBe('250,504');
+  });
+});
+
+describe('spoken units', () => {
+  it.each([
+    ['It hits at 116 mph.', 'It hits at 116 miles per hour.'],
+    ['It reaches 26,000 km/h.', 'It reaches 26,000 kilometers per hour.'],
+    ['The surface reaches 1,220 °F.', 'The surface reaches 1,220 degrees Fahrenheit.'],
+    ['Squeezed to 6,200 °C.', 'Squeezed to 6,200 degrees Celsius.'],
+    ['At 38 miles, 62 km up, 300 m, 12 ft, 4.5 cm.', 'At 38 miles, 62 kilometers up, 300 meters, 12 feet, 4.5 centimeters.'],
+    ['It weighs 1.5 t, or 180 kg.', 'It weighs 1.5 tonnes, or 180 kilograms.'],
+    ['That is 853 g of TNT, or 3.6 MJ.', 'That is 853 grams of TNT, or 3.6 megajoules.'],
+    ['It brakes at twelve g.', 'It brakes at twelve g.'],
+    ['93% of it burned away; 1 km to go.', '93 percent of it burned away; 1 kilometer to go.'],
+    ['twenty-five m/s, one hundred mph', 'twenty-five meters per second, one hundred miles per hour'],
+    ['A team of 5 in a room, at 3 t.', 'A team of 5 in a room, at 3 tonnes.'],
+  ])('%s', (written, spoken) => expect(spokenText(written)).toBe(spoken));
+
+  it('the voice hears units in full while the caption keeps them short', () => {
+    const b: NarrationBeat = { id: 'v', about: '', maxWords: 20, required: ['speed'], fallback: ['It hits at {speed}.'], facts: { speed: '116 mph' } };
+    const out = fillLine(b, 'It hits at {speed}.');
+    expect(out.text).toBe('It hits at 116 miles per hour.');
+    expect(out.caption).toBe('It hits at 116 mph.');
   });
 });
 
@@ -85,51 +109,6 @@ describe('line checks', () => {
   });
 });
 
-/** A stand-in client returning canned answers in turn (and recording the prompts). */
-function mockClient(answers: (string | 'refusal')[]) {
-  const prompts: string[] = [];
-  const create = vi.fn(async (req: { messages: { content: string }[] }) => {
-    prompts.push(req.messages[0].content);
-    const a = answers.shift() ?? 'refusal';
-    return a === 'refusal'
-      ? { stop_reason: 'refusal', content: [] }
-      : { stop_reason: 'end_turn', content: [{ type: 'text', text: a }] };
-  });
-  return { client: { messages: { create } } as never, prompts, create };
-}
-
-const answer = (lines: Record<string, string>) => JSON.stringify({ lines: Object.entries(lines).map(([b, line]) => ({ beat: b, line })) });
-
-describe('Claude line writer', () => {
-  const intro: NarrationBeat = { id: 'intro', about: 'start', facts: { n: 703 }, required: ['n'], maxWords: 10, fallback: ['Start with {n}.'] };
-
-  it('retries with the problem spelled out, keeping lines that already passed', async () => {
-    const m = mockClient([answer({ intro: "Let's take {n}.", step1: '{prev} goes to {next}' }), answer({ intro: 'ignored', step1: '{prev} is odd, so: {value}.' })]);
-    const out = await claudeLines(m.client, [intro, beat], 'style');
-    expect(out.missing).toEqual([]);
-    expect(out.lines).toEqual({ intro: "Let's take {n}.", step1: '{prev} is odd, so: {value}.' });
-    expect(m.prompts[1]).toMatch(/unknown placeholder \{next\}/);
-  });
-
-  it('falls back beat by beat when Claude never gets one right, and entirely on refusal', async () => {
-    const bad = answer({ intro: 'Take {n}.', step1: 'no numbers here at all' });
-    const partial = await writeLines([intro, beat], { style: 's', seed: 1, useClaude: true, client: mockClient([bad, bad, bad]).client });
-    expect(partial.writer).toBe('claude');
-    expect(partial.lines.intro).toBe('Take {n}.');
-    expect(beat.fallback).toContain(partial.lines.step1);
-    expect(partial.warning).toMatch(/step1/);
-    const refused = await writeLines([intro, beat], { style: 's', seed: 1, useClaude: true, client: mockClient(['refusal']).client });
-    expect(refused.writer).toBe('fallback');
-  });
-
-  it('uses the built-in lines without asking Claude when told not to', async () => {
-    const m = mockClient([]);
-    const out = await writeLines([intro, beat], { style: 's', seed: 1, useClaude: false, client: m.client });
-    expect(out.writer).toBe('fallback');
-    expect(m.create).not.toHaveBeenCalled();
-  });
-});
-
 describe('prepareNarration', () => {
   const dir = mkdtempSync(join(tmpdir(), 'voice-cache-'));
   vi.stubEnv('SIM_VOICE_CACHE', dir);
@@ -149,7 +128,7 @@ describe('prepareNarration', () => {
 
   it('writes, voices and times every beat, and reuses them for the same facts', async () => {
     const { prepareNarration } = await import('./prepare');
-    const out = await prepareNarration(recipe, { useClaude: false, provider: fake });
+    const out = await prepareNarration(recipe, { provider: fake });
     const voice = out.voice!;
     expect(voice.lines.map((l) => l.beat)).toEqual(['intro', 'step1', 'repeat', 'reveal']);
     for (const l of voice.lines) {
@@ -157,9 +136,9 @@ describe('prepareNarration', () => {
       expect(l.durationS).toBeGreaterThan(0.5);
     }
     expect(voice.lines[0].caption).toMatch(/703/);
-    const again = await prepareNarration(out, { useClaude: false, provider: fake });
+    const again = await prepareNarration(out, { provider: fake });
     expect(again).toBe(out);
-    const other = await prepareNarration({ ...out, seed: 3 }, { useClaude: false, provider: fake });
+    const other = await prepareNarration({ ...out, seed: 3 }, { provider: fake });
     expect(other.voice!.factsHash).not.toBe(voice.factsHash);
   });
 

@@ -90,18 +90,16 @@ export interface VoiceTrack {
   voiceId: string;
   /** Hash of the beats' facts: a different seed or settings means the lines must be rewritten. */
   factsHash: string;
-  /** Who wrote the lines. */
-  writer: 'claude' | 'fallback';
   lines: NarrationLine[];
 }
 
 /**
  * A moment the narration speaks to. Lines are written with {placeholders} for every number, filled
- * in afterwards (spelled out), so whoever writes them can't get a fact wrong.
+ * in afterwards (spelled out), so a line can't get a fact wrong.
  */
 export interface NarrationBeat {
   id: string;
-  /** What the moment shows, for the writer. */
+  /** What the moment shows (a note for whoever writes the lines). */
   about: string;
   /** Placeholder values, e.g. { n: 703, value: 2110 }. Numbers are spoken as words. */
   facts: Record<string, string | number>;
@@ -109,8 +107,8 @@ export interface NarrationBeat {
   required: string[];
   maxWords: number;
   /**
-   * Hand-written lines (with placeholders), for when no model writes them. A beat in parts has one
-   * sentence per part, separated by " | ".
+   * The hand-written lines (with placeholders); one that fits maxWords is picked by seed. A beat in
+   * parts has one sentence per part, separated by " | ".
    */
   fallback: string[];
   /**
@@ -132,7 +130,7 @@ export interface NarrationSpec<P> {
   enabled(params: P): boolean;
   /** Voice id for the provider (e.g. Kokoro's 'af_heart'). */
   voice(params: P): string;
-  /** Tone and audience for the writer. */
+  /** Tone and audience the lines are written for. */
   style: string;
   /**
    * This run's beats, from the event log of a headless run (facts are seed-dependent; timing isn't

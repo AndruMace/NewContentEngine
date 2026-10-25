@@ -149,11 +149,10 @@ async function main() {
         process.stdout.write(`  ${last}%`);
       }
     },
-    onWarning: (m) => console.warn(`Warning: ${m}`),
   });
   process.stdout.write('\n');
   if (out.recipe.voice) {
-    console.log(`Narration (${out.recipe.voice.writer}, ${out.recipe.voice.provider}/${out.recipe.voice.voiceId}):`);
+    console.log(`Narration (${out.recipe.voice.provider}/${out.recipe.voice.voiceId}):`);
     for (const l of out.recipe.voice.lines) console.log(`  ${l.beat.padEnd(8)} ${l.durationS.toFixed(2)}s  ${l.caption}`);
   }
   const t = out.timings;

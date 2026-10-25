@@ -9,13 +9,12 @@ const factsKey = (r: Recipe) => JSON.stringify([r.templateId, r.seed, r.params])
 
 /**
  * Voiceover for templates that have one. Whenever narration is on and the preview has no lines for
- * its current settings, they're written (Claude, or the built-in set) and voiced on the server
+ * its current settings, the template's hand-written lines are filled in and voiced on the server
  * automatically; the Playground holds Play until they're ready.
  */
 export function NarrationPanel({ recipe, onVoice, onState }: { recipe: Recipe; onVoice: (voice: Recipe['voice']) => void; onState: (s: VoiceState) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
   const voice = recipe.voice;
   const key = factsKey(recipe);
   // The settings a request was made for: an answer for settings that have since changed is dropped.
@@ -30,7 +29,6 @@ export function NarrationPanel({ recipe, onVoice, onState }: { recipe: Recipe; o
     try {
       const res = await api.prepareNarration(recipe, force);
       if (current.current !== asked) return;
-      setWarnings(res.warnings);
       onVoice(res.voice ?? undefined);
       onState('idle');
     } catch (e) {
@@ -57,21 +55,16 @@ export function NarrationPanel({ recipe, onVoice, onState }: { recipe: Recipe; o
     <section>
       <h3>Narration</h3>
       <div className="row">
-        <span className="hint">{busy ? 'Writing and voicing the lines…' : voice ? 'Voiced ✓' : error ? 'Not voiced' : 'Waiting…'}</span>
-        <button disabled={busy} onClick={() => run(true)} title="Write new lines and voice them again">
-          {voice ? 'Rewrite' : 'Retry'}
+        <span className="hint">{busy ? 'Voicing the lines…' : voice ? 'Voiced ✓' : error ? 'Not voiced' : 'Waiting…'}</span>
+        <button disabled={busy} onClick={() => run(true)} title="Voice the lines again">
+          {voice ? 'Re-voice' : 'Retry'}
         </button>
       </div>
       {error && <p className="hint error">{error} — the preview plays without a voice.</p>}
-      {warnings.map((w) => (
-        <p key={w} className="hint">
-          {w}
-        </p>
-      ))}
       {voice && (
         <>
           <p className="hint">
-            Lines by {voice.writer === 'claude' ? 'Claude' : 'the built-in set'} · {voice.provider} / {voice.voiceId}
+            Hand-written lines · {voice.provider} / {voice.voiceId}
           </p>
           <ol className="narration-lines">
             {voice.lines.map((l) => (

@@ -179,33 +179,62 @@ function soundDelay(h: number): number {
 
 const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
+const COUNT_WORDS: Record<number, string> = { 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten' };
+
+/** What the narrator calls it mid-sentence ("the car", "the space station module"). */
+const spokenName = (obj: Run['obj']) => (obj.id === 'steel-cube' ? 'steel cube' : lower(obj.name));
+
+/** With its article, for introducing it: "a car", "an anvil". */
+export function aName(obj: Run['obj']): string {
+  if (obj.id === 'steel-cube') return 'a steel cube as heavy as the Eiffel Tower';
+  const n = spokenName(obj);
+  return `${/^[aeiou]/.test(n) ? 'an' : 'a'} ${n}`;
+}
+
 /** The beats for one fall's events between entry and the ground (shared by both modes). */
 function fallMoments(run: Run, u: Units, versus: boolean, tag: string): Moment[] {
   const { tr, obj } = run;
-  const name = versus ? obj.short.replace(/^the /, '') : lower(obj.name);
+  const name = versus ? obj.short.replace(/^the /, '') : spokenName(obj);
   const out: Moment[] = [];
   const bu = tr.breakup;
   if (bu) {
     const alt = altText(bu.alt, u);
     if (bu.core) {
-      const facts = { alt, name, core: bu.core.name, coreMass: massText(bu.core.mass * bu.count, u), cause: bu.cause === 'pressure' ? 'the air pressure' : 'its skin burning through' };
+      const facts = {
+        alt,
+        name,
+        // Several alike survive (a jet's four engines): "its four jet engines".
+        core: bu.count > 1 ? `${COUNT_WORDS[bu.count] ?? bu.count} ${bu.core.name}s` : bu.core.name,
+        coreMass: massText(bu.core.mass * bu.count, u),
+        cause: bu.cause === 'pressure' ? 'the force of the air finally wins' : 'its thin outer skin burns through',
+      };
       out.push({
         t: bu.t,
         kind: 'say',
         beat: versus
           ? {
               id: `break${tag}`,
-              about: 'The {name} comes apart at {alt}; only its {core} keeps falling.',
-              maxWords: 12,
+              about: 'The {name} breaks apart at {alt}, and only its {core} keeps falling.',
+              maxWords: 14,
               required: ['name'],
-              fallback: ['The {name} breaks apart at {alt}. Only the {core} is left.'],
+              fallback:
+                bu.count > 1
+                  ? ['The {name} breaks apart at {alt}. Only its {core} keep falling.', 'At {alt}, the {name} comes apart, leaving just its {core}.']
+                  : ['The {name} breaks apart at {alt}. Only its {core} keeps falling.', 'At {alt}, the {name} comes apart, leaving just its {core}.'],
             }
           : {
               id: `break${tag}`,
-              about: 'At {alt}, {cause} tears the {name} apart; only the {core} ({coreMass}) keeps falling.',
-              maxWords: 18,
+              about: 'At {alt}, {cause} and the {name} tears apart; only the {core} survives and keeps falling.',
+              maxWords: 22,
               required: ['alt', 'core'],
-              fallback: ['At {alt}, it tears apart. Only the {core} survives.', '{alt} up, the {name} comes apart. The {core} falls on alone.'],
+              fallback:
+                bu.count > 1
+                  ? ['At {alt}, {cause}, and the {name} rips apart. Only its {core} survive.', '{alt} up, the {name} can’t take any more and breaks apart. Only its {core} are still falling.']
+                  : [
+                      'At {alt}, {cause}, and the {name} rips apart. Only the {core} survives.',
+                      'At {alt}, the {name} tears itself to pieces. From here on, only the {core} is still falling.',
+                      '{alt} up, the {name} can’t take any more and breaks apart. All that’s left is the {core}.',
+                    ],
             },
         facts,
         cover: 0.6,
@@ -217,10 +246,13 @@ function fallMoments(run: Run, u: Units, versus: boolean, tag: string): Moment[]
         kind: 'say',
         beat: {
           id: `crush${tag}`,
-          about: 'At {alt}, the air pressure in front crushes the {name}: it flattens and spreads out like a pancake.',
-          maxWords: 14,
+          about: 'At {alt}, the air pushes on it so hard that the rock cracks and spreads out, flattening like a pancake.',
+          maxWords: 20,
           required: ['alt'],
-          fallback: ['At {alt}, the air crushes it. It flattens and spreads.'],
+          fallback: [
+            'At {alt}, the air hits it so hard that the rock starts to crack and spread out, flattening like a pancake.',
+            '{alt} up, the pressure of the air starts crushing the rock flat, like a pancake.',
+          ],
         },
         facts: { alt, name },
         cover: 0.9,
@@ -235,13 +267,22 @@ function fallMoments(run: Run, u: Units, versus: boolean, tag: string): Moment[]
       t: ab.t,
       kind: 'say',
       beat: versus
-        ? { id: `burst${tag}`, about: 'The {name} explodes in the air at {alt}, with {tnt}.', maxWords: 12, required: ['name', 'tnt'], fallback: ['The {name} explodes {alt} up: {tnt}.'] }
+        ? {
+            id: `burst${tag}`,
+            about: 'The {name} explodes high in the air, at {alt}, with {tnt}.',
+            maxWords: 15,
+            required: ['name', 'tnt'],
+            fallback: ['The {name} explodes high in the air, at {alt}, with the force of {tnt}.', 'At {alt}, the {name} blows apart in midair, releasing {tnt}.'],
+          }
         : {
             id: `burst${tag}`,
-            about: '{alt} up, it explodes in the air, releasing {tnt}: {times} {ref}.',
-            maxWords: 18,
+            about: '{alt} up, it explodes in a blinding flash, releasing as much energy as {tnt}: {times} {ref}.',
+            maxWords: 24,
             required: ['alt', 'tnt'],
-            fallback: ['It explodes {alt} up: {tnt}. That is {times} {ref}.', '{alt} up, it blows apart, with {tnt}.'],
+            fallback: [
+              'At {alt}, it explodes in a blinding flash, releasing as much energy as {tnt}. That’s {times} {ref}.',
+              '{alt} up, the whole thing blows apart at once, with the force of {tnt}, {times} {ref}.',
+            ],
           },
       facts: { alt: altText(ab.alt, u), name, tnt: tntLabel(ab.energy), times: timesLabel(cmp.times), ref: cmp.ref.name },
       cover: 0.25,
@@ -253,10 +294,10 @@ function fallMoments(run: Run, u: Units, versus: boolean, tag: string): Moment[]
         kind: 'say',
         beat: {
           id: 'shock',
-          about: 'The shock wave from the burst takes {delay} to reach the ground below; only small fragments fall on.',
+          about: 'The boom from that blast takes {delay} to reach the ground below.',
           maxWords: 16,
           required: ['delay'],
-          fallback: ['Its shock wave takes {delay} to reach the ground.'],
+          fallback: ['Down on the ground, the boom from that blast won’t arrive for another {delay}.', 'The shock wave from the blast takes {delay} to reach the ground below.'],
         },
         facts: { delay: durationText(soundDelay(ab.alt)) },
         cover: 0.4,
@@ -271,17 +312,20 @@ function fallMoments(run: Run, u: Units, versus: boolean, tag: string): Moment[]
       beat: versus
         ? {
             id: `gone${tag}`,
-            about: 'The {name} has burned up completely at {alt}: nothing reaches the ground.',
-            maxWords: 11,
+            about: 'The {name} burns up completely at {alt}; none of it reaches the ground.',
+            maxWords: 14,
             required: ['name'],
-            fallback: ['The {name} burns up at {alt}. Nothing left.'],
+            fallback: ['The {name} burns up completely at {alt}. None of it reaches the ground.'],
           }
         : {
             id: `gone${tag}`,
-            about: 'At {alt} it has burned up completely, like a shooting star: nothing reaches the ground.',
-            maxWords: 15,
+            about: 'By {alt} it has burned away completely, like a shooting star; nothing reaches the ground.',
+            maxWords: 18,
             required: ['alt'],
-            fallback: ['At {alt}, it is gone. Burned up, like a shooting star.'],
+            fallback: [
+              'By {alt}, there’s nothing left. It has burned away completely, like a shooting star.',
+              'At {alt}, the last of it burns away, like a shooting star. None of it reaches the ground.',
+            ],
           },
       facts: { alt, name },
       mark: `gone${tag}`,
@@ -304,9 +348,12 @@ function heatSpan(tr: Trajectory): { t0: number; t1: number; peak: number; tPeak
 
 const rodLesson: BeatSpec = {
   id: 'lesson',
-  about: 'The lesson: no explosive at all, just a heavy rod and speed. This is the "Rods from God" idea, and it took {time} from release.',
-  maxWords: 20,
-  fallback: ['No explosives at all. Just mass and speed. This is the idea called Rods from God.', 'No warhead, just a heavy rod and speed. That is Rods from God.'],
+  about: 'No explosive at all, just a heavy rod and a lot of speed: the idea people call Rods from God.',
+  maxWords: 21,
+  fallback: [
+    'No explosives at all, just a heavy rod and a lot of speed. That’s the idea people call Rods from God.',
+    'There’s no warhead here, only mass and speed. That’s the idea known as Rods from God.',
+  ],
 };
 
 function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallSim>; ticks: number[]; ts: number[]; answer: string } {
@@ -314,7 +361,7 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
   const plan = new Plan(s);
   const { tr, obj, body, start } = run;
   const tEnd = endTime(tr);
-  const name = lower(obj.name);
+  const name = spokenName(obj);
   const mass = massText(body.mass, u);
   const dims = dimsLabel(body.shape);
   const entry = findEvent(tr, 'entry');
@@ -322,30 +369,33 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
   const moments: Moment[] = [];
 
   // Release.
-  const introFacts = { name, mass, dims, alt: altText(start.mode === 'meteor' ? 200_000 : start.altitude, u), speed: speedText(tr.v[0], u) };
+  const introFacts = { name, aName: aName(obj), mass, dims, alt: altText(start.mode === 'meteor' ? 200_000 : start.altitude, u), speed: speedText(tr.v[0], u) };
   const intro: BeatSpec =
     start.mode === 'drop'
       ? {
           id: 'intro',
-          about: 'A {name} ({mass}, {dims}) hangs {alt} above the Earth, at rest, about to be let go.',
-          maxWords: 17,
+          about: 'This is {aName}, weighing {mass}, hanging {alt} above the Earth, about to be let go.',
+          maxWords: 20,
           required: ['alt'],
-          fallback: ['This is a {name}. It weighs {mass}. We let it go {alt} above the Earth.', 'A {name}, weighing {mass}, {alt} up. Let it go.'],
+          fallback: ['This is {aName}, weighing {mass}. We’re about to let it go {alt} above the Earth.', 'Here’s {aName} weighing {mass}, hanging {alt} above the Earth. Let’s drop it.'],
         }
       : start.mode === 'orbit'
         ? {
             id: 'intro',
-            about: 'A {name} ({mass}) is in orbit {alt} up, doing {speed}; a short burn slows it so it starts to fall.',
-            maxWords: 18,
+            about: '{aName} weighing {mass} is in orbit {alt} up, at {speed}; a short engine burn slows it just enough to start falling.',
+            maxWords: 24,
             required: ['speed'],
-            fallback: ['A {name} weighing {mass}, in orbit {alt} up at {speed}. One burn, and it falls.'],
+            fallback: [
+              '{aName} weighing {mass} is circling the Earth {alt} up, at {speed}. A short engine burn slows it just enough to fall.',
+              'This is {aName}, in orbit {alt} up and moving at {speed}. One short burn, and it starts to fall.',
+            ],
           }
         : {
             id: 'intro',
-            about: 'A {name} ({mass}, {dims}) from deep space is about to hit Earth’s air at {speed}.',
-            maxWords: 16,
+            about: '{aName} from deep space, weighing {mass}, is about to hit our atmosphere at {speed}.',
+            maxWords: 18,
             required: ['speed'],
-            fallback: ['A {name} weighing {mass}, coming in from deep space at {speed}.'],
+            fallback: ['{aName} from deep space, weighing {mass}, is about to hit our atmosphere at {speed}.', 'Out in space, {aName} weighing {mass} is heading straight for us at {speed}.'],
           };
   moments.push({ t: 0, kind: 'say', beat: intro, facts: introFacts, cover: 1 });
   if (tEntry > 25) {
@@ -357,17 +407,20 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
         start.mode === 'drop'
           ? {
               id: 'space',
-              about: 'With no air up here nothing slows it: it falls for {time} and reaches {speed} by the edge of space.',
-              maxWords: 16,
+              about: 'With no air up here nothing slows it: after {time} of free fall it is doing {speed}.',
+              maxWords: 20,
               required: ['time', 'speed'],
-              fallback: ['No air up here, so nothing slows it. After {time} it is doing {speed}.'],
+              fallback: [
+                'With no air up here, nothing slows it down. After {time} of free fall, it’s already doing {speed}.',
+                'There’s no air this high to hold it back. In {time}, gravity alone gets it up to {speed}.',
+              ],
             }
           : {
               id: 'space',
-              about: 'It coasts around the planet for {time}, slowly dropping toward the air, now at {speed}.',
-              maxWords: 14,
+              about: 'For the next {time} it glides around the planet, slowly sinking toward the air.',
+              maxWords: 16,
               required: ['time'],
-              fallback: ['It coasts for {time}, dropping toward the air.'],
+              fallback: ['For the next {time}, it glides around the planet, slowly sinking toward the air.', 'It spends {time} coasting around the Earth, slowly losing height.'],
             },
       facts: { time: durationText(tEntry), speed: speedText(vEntry, u) },
       cover: 0.85,
@@ -382,23 +435,42 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
           tr.t.findIndex((t) => t >= tEntry),
         )
       ];
+    const vTop = findEvent(tr, 'maxSpeed')?.v ?? entry.v;
+    // Dropped from about the edge of space it starts in the air's first wisps, barely moving: the
+    // story there is how fast it gets before the air takes hold.
+    const fromEdge = entry.v < 300;
     moments.push({
       t: tEntry,
       kind: 'say',
-      beat: {
-        id: 'entry',
-        about: 'It crosses the edge of space, 100 km up, at {speed}; the first thin air starts pushing back.',
-        maxWords: 14,
-        required: ['speed'],
-        fallback: ['100 km up: the edge of space. It hits the air at {speed}.', 'The edge of space. {speed}, and now there is air.'],
-      },
-      facts: { speed: speedText(entry.v, u), mach: Math.round(mach) },
+      beat: fromEdge
+        ? {
+            id: 'entry',
+            about: 'There is almost no air this high, so nothing holds it back: it keeps speeding up, to {top} at its fastest.',
+            maxWords: 20,
+            required: ['top'],
+            fallback: [
+              'There’s almost no air this high, so nothing holds it back. It just keeps speeding up, to {top} at its fastest.',
+              'At first it falls through almost empty air, faster and faster, until it’s doing {top}.',
+            ],
+          }
+        : {
+            id: 'entry',
+            about: 'It reaches the edge of space at {speed}, and for the first time there is air to push against.',
+            maxWords: 19,
+            required: ['speed'],
+            fallback: [
+              'It reaches the edge of space at {speed}, and for the first time there’s air to push against.',
+              'Now it crosses the edge of space at {speed}. From here on, the air starts fighting back.',
+            ],
+          },
+      facts: { speed: speedText(entry.v, u), top: speedText(vTop, u), mach: Math.round(mach) },
       cover: 0.7,
       gapS: 1,
     });
   }
   const heat = heatSpan(tr);
-  const glows = tr.maxTs > 800;
+  // It glows if it gets hot enough to (or melts, or burns away entirely).
+  const glows = tr.maxTs > 800 || tr.end === 'burnup' || Boolean(findEvent(tr, 'melt'));
   if (heat && heat.t0 > tEntry) {
     moments.push({
       t: heat.t0,
@@ -406,17 +478,20 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
       beat: glows
         ? {
             id: 'heat',
-            about: 'The air in front can’t get out of the way: squeezed to {shock}, hotter than {ref}; its surface reaches {skin}.',
-            maxWords: 20,
+            about: 'The air in front can’t get out of the way, so it is squeezed and heated to {shock}, hotter than {ref}; the surface reaches {skin}.',
+            maxWords: 24,
             required: ['shock', 'skin'],
-            fallback: ['The air ahead is crushed to {shock}. Its surface hits {skin}.', 'Air piles up in front at {shock}. The surface reaches {skin}.'],
+            fallback: [
+              'The air in front can’t get out of the way, so it’s squeezed and heated to {shock}. The surface itself reaches {skin}.',
+              'The air ahead is compressed so hard it glows, at {shock}, hotter than {ref}. The surface climbs to {skin}.',
+            ],
           }
         : {
             id: 'heat',
-            about: 'It is too slow and the air too thin to burn: the air in front reaches only {shock}, its surface {skin}.',
+            about: 'It is falling too slowly, through air this thin, to really heat up: its surface only reaches {skin}.',
             maxWords: 18,
             required: ['skin'],
-            fallback: ['It warms up, but only to {skin}. Too slow to burn.'],
+            fallback: ['It’s falling too slowly, through air this thin, to really heat up. Its surface only reaches {skin}.'],
           },
       facts: { shock: tempText(heat.shock, u), skin: tempText(heat.skin, u), ref: hotRef(heat.shock) },
       cover: 0.8,
@@ -440,19 +515,24 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
         beat: slowed
           ? {
               id: 'brake',
-              about: 'The thickening air brakes it at up to {g} g, down to {speed}: as fast as it can fall through air this thick.',
-              maxWords: 18,
+              about: 'The thickening air brakes it hard, at up to {g} times the pull of gravity, until it is down to {speed}.',
+              maxWords: 22,
               required: ['speed'],
-              fallback: ['Thick air brakes it at {g} g, down to {speed}.', 'The air slows it right down, to {speed}.'],
+              fallback: [
+                'The thickening air brakes it hard, at up to {g} times the pull of gravity, until it’s down to {speed}.',
+                'Lower down, the air is thick enough to fight back. It slows the {name} right down, to {speed}.',
+              ],
             }
           : {
               id: 'brake',
-              about: 'The air can barely slow something this heavy: it is still doing {speed}.',
-              maxWords: 13,
+              about: 'The air can hardly slow something this heavy: it is still doing {speed}.',
+              maxWords: 14,
               required: ['speed'],
-              fallback: ['The air can barely slow it. Still {speed}.'],
+              fallback: ['The air can hardly slow something this heavy. It’s still doing {speed}.', 'Even the thick air near the ground barely slows it. It’s still doing {speed}.'],
             },
         facts: {
+          // By now it may be only what survived the breakup.
+          name: tr.breakup?.core ? (tr.breakup.count > 1 ? `${tr.breakup.core.name}s` : tr.breakup.core.name) : name,
           g: Math.round(maxG),
           speed: speedText(
             slowed
@@ -483,13 +563,19 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
       {
         id: 'impact',
         about: 'The impact.',
-        maxWords: 20,
+        maxWords: 26,
         required: ['speed', 'tnt'],
         parts: [
-          { about: 'the moment it hits the ground at {speed}', maxWords: 7 },
-          { about: 'the energy it brings: {tnt} ({energy}), {times} {ref}', maxWords: 13 },
+          { about: 'the moment it hits the ground at {speed}', maxWords: 10 },
+          { about: 'the energy it brings: as much as {tnt}, {times} {ref}', maxWords: 18 },
         ],
-        fallback: ['Impact at {speed}. | That is {tnt}: {times} {ref}.', 'It hits at {speed}. | {tnt} of energy, {times} {ref}.'],
+        fallback:
+          tr.breakup || tr.airburst
+            ? [
+                'What’s left of it hits the ground at {speed}. | That’s as much energy as {tnt}, {times} {ref}.',
+                'What survives slams into the ground at {speed}. | The energy of {tnt}, or {times} {ref}.',
+              ]
+            : ['It hits the ground at {speed}. | That’s as much energy as {tnt}, {times} {ref}.', 'It slams into the ground at {speed}. | The energy of {tnt}, or {times} {ref}.'],
       },
       { speed: speedText(im.v, u), tnt: tntLabel(E), energy: energyLabel(E), times: timesLabel(cmp.times), ref: cmp.ref.name },
       tEnd,
@@ -503,14 +589,26 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
         mag >= 1.5
           ? {
               id: 'crater',
-              about: 'It digs a crater {diameter} wide and shakes the ground like a magnitude {mag} earthquake.',
-              maxWords: 17,
+              about: 'It blasts out a crater {diameter} across and shakes the ground like a magnitude {mag} earthquake.',
+              maxWords: 19,
               required: ['diameter', 'mag'],
-              fallback: ['It leaves a crater {diameter} wide, and a magnitude {mag} earthquake.'],
+              fallback: ['It blasts out a crater {diameter} across, and shakes the ground like a magnitude {mag} earthquake.'],
             }
           : big
-            ? { id: 'crater', about: 'It leaves a crater {diameter} wide and {depth} deep.', maxWords: 12, required: ['diameter'], fallback: ['It leaves a crater {diameter} wide.'] }
-            : { id: 'crater', about: 'All it leaves is a dent {diameter} wide.', maxWords: 10, required: ['diameter'], fallback: ['All that, for a dent {diameter} wide.'] },
+            ? {
+                id: 'crater',
+                about: 'It leaves a crater {diameter} across and {depth} deep.',
+                maxWords: 13,
+                required: ['diameter'],
+                fallback: ['It leaves a crater {diameter} across and {depth} deep.', 'It leaves behind a crater {diameter} across.'],
+              }
+            : {
+                id: 'crater',
+                about: 'After all that, it leaves only a dent {diameter} across.',
+                maxWords: 12,
+                required: ['diameter'],
+                fallback: ['And after all that, it leaves a dent just {diameter} across.'],
+              },
         { diameter: lengthText(cr.diameter, u), depth: lengthText(cr.depth, u), mag: (Math.round(mag * 10) / 10).toFixed(1) },
       );
     }
@@ -526,13 +624,15 @@ function soloScript(run: Run, u: Units, replay: boolean): { script: Script<FallS
       tr.massLost > 0.05 && tr.end === 'impact'
         ? {
             id: 'recap',
-            about: 'From release to the ground took {time}, and {lost} of it burned or broke away on the way down.',
-            maxWords: 16,
+            about: 'The fall took {time} from release to impact, and {lost} of it burned or broke away on the way down.',
+            maxWords: 22,
             required: ['time'],
-            fallback: ['From release to the ground: {time}. {lost} of it never made it.'],
+            fallback: ['From release to impact took {time}, and {lost} of it burned or broke away on the way down.', 'The whole fall took {time}, and only {left} of it made it to the ground.'],
           }
-        : { id: 'recap', about: 'From release to the end took {time}.', maxWords: 10, required: ['time'], fallback: ['The whole fall took {time}.'] },
-      { time: durationText(tEnd), lost: `${Math.round(tr.massLost * 100)}%` },
+        : tr.end === 'burnup'
+          ? { id: 'recap', about: 'From release until it vanished took {time}.', maxWords: 10, required: ['time'], fallback: ['From release until it vanished took {time}.'] }
+          : { id: 'recap', about: 'From release to impact, the whole fall took {time}.', maxWords: 12, required: ['time'], fallback: ['From release to impact, the whole fall took {time}.'] },
+      { time: durationText(tEnd), lost: tr.massLost > 0.99 ? 'nearly all' : `${Math.round(tr.massLost * 100)}%`, left: 1 - tr.massLost < 0.01 ? 'a tiny fraction' : `${Math.round((1 - tr.massLost) * 100)}%` },
     );
   s.mark('outro');
   s.hold(2.6);
@@ -576,16 +676,20 @@ function versusScript(runs: Run[], u: Units, replay: boolean): { script: Script<
   const start = runs[0].start;
   const tEnd = Math.max(...runs.map((r) => endTime(r.tr)));
   const moments: Moment[] = [];
-  const list = names.length === 2 ? `${names[0]} and ${names[1]}` : `${names[0]}, ${names[1]} and ${names[2]}`;
+  const withA = runs.map((r) => aName(r.obj));
+  const list = withA.length === 2 ? `${withA[0]} and ${withA[1]}` : `${withA[0]}, ${withA[1]} and ${withA[2]}`;
   moments.push({
     t: 0,
     kind: 'say',
     beat: {
       id: 'intro',
-      about: 'A {list} are let go together, {alt} up ({how}). Which one hits the ground hardest?',
-      maxWords: 18,
+      about: '{list} are let go together, {alt} up ({how}). Which one hits the ground hardest?',
+      maxWords: 26,
       required: ['list'],
-      fallback: ['A {list}, let go together {alt} up. Which hits hardest?', '{list}. Same height, same moment. Which lands hardest?'],
+      fallback: [
+        'We drop {list} from {alt} up, all at the same moment. Which one hits the ground hardest?',
+        '{list}, released together {alt} above the Earth. Which one lands with the biggest punch?',
+      ],
     },
     facts: { list, alt: altText(start.mode === 'meteor' ? 200_000 : start.altitude, u), how: start.mode === 'drop' ? 'from rest' : start.mode === 'orbit' ? 'out of orbit' : 'as meteors' },
     cover: 1,
@@ -593,7 +697,7 @@ function versusScript(runs: Run[], u: Units, replay: boolean): { script: Script<
   moments.push({
     t: 0.5,
     kind: 'say',
-    beat: { id: 'guess', about: 'The viewer is asked to guess which one will hit hardest.', maxWords: 8, fallback: ['Make your guess now.', 'Comment your pick.'] },
+    beat: { id: 'guess', about: 'The viewer is asked to guess which one will hit hardest.', maxWords: 8, fallback: ['Make your guess now.', 'Which one’s your pick? Lock it in.'] },
     facts: {},
     cover: 1,
   });
@@ -605,10 +709,10 @@ function versusScript(runs: Run[], u: Units, replay: boolean): { script: Script<
       kind: 'say',
       beat: {
         id: 'space',
-        about: 'With no air above 100 km, they all fall exactly alike for {time}.',
+        about: 'With no air up here, they all fall exactly the same way for {time}.',
         maxWords: 14,
         required: ['time'],
-        fallback: ['No air up here: they all fall exactly alike for {time}.'],
+        fallback: ['With no air up here, they all fall exactly the same way for {time}.'],
       },
       facts: { time: durationText(tEntry) },
       cover: 0.85,
@@ -620,9 +724,9 @@ function versusScript(runs: Run[], u: Units, replay: boolean): { script: Script<
       kind: 'say',
       beat: {
         id: 'entry',
-        about: 'At the edge of space the air arrives, and now their shapes and weights start to matter.',
+        about: 'Then they reach the air, and suddenly shape and weight start to matter.',
         maxWords: 14,
-        fallback: ['Now the air arrives, and they split up.', 'The edge of space. Now shape and weight matter.'],
+        fallback: ['Then they reach the air, and suddenly shape and weight start to matter.', 'Once they hit the air, everything changes. Shape and weight start to matter.'],
       },
       facts: {},
       cover: 0.7,
@@ -645,10 +749,10 @@ function versusScript(runs: Run[], u: Units, replay: boolean): { script: Script<
       kind: 'say',
       beat: {
         id: `land${k}`,
-        about: 'The {name} lands {nth}, after {time}, at {speed}, with {tnt}.',
-        maxWords: 15,
+        about: 'The {name} lands {nth}, hitting at {speed} with the energy of {tnt}.',
+        maxWords: 18,
         required: ['name', 'speed'],
-        fallback: ['The {name} lands {nth}: {speed}, {tnt}.'],
+        fallback: ['The {name} lands {nth}, hitting at {speed} with the energy of {tnt}.', 'The {name} hits {nth}, at {speed}, with as much energy as {tnt}.'],
       },
       facts: { name: names[k], nth: n === order.length - 1 && n > 0 ? 'last' : ordinal[n], time: durationText(im.t), speed: speedText(im.v, u), tnt: tntLabel(r.energy) },
       // Real time while the line is said, so the others keep falling at their true pace.
@@ -673,17 +777,17 @@ function versusScript(runs: Run[], u: Units, replay: boolean): { script: Script<
     lose.r.energy > 0
       ? {
           id: 'result',
-          about: 'The winner: the {winner} hit {ratio} times harder than the {loser}, with {energy}.',
+          about: 'The {winner} wins, hitting {ratio} times harder than the {loser}.',
           maxWords: 16,
           required: ['winner'],
-          fallback: ['The {winner} wins: {ratio} times harder than the {loser}.'],
+          fallback: ['The {winner} wins, hitting {ratio} times harder than the {loser}.', 'And the winner is the {winner}. It hit {ratio} times harder than the {loser}.'],
         }
       : {
           id: 'result',
-          about: 'The winner: the {winner}, with {energy}; the {loser} never reached the ground.',
-          maxWords: 15,
+          about: 'The {winner} wins, with the energy of {energy}; the {loser} never even reached the ground.',
+          maxWords: 18,
           required: ['winner'],
-          fallback: ['The {winner} wins with {energy}. The {loser} never landed.'],
+          fallback: ['The {winner} wins, with the energy of {energy}. The {loser} never even reached the ground.'],
         },
     { winner: names[win.k], loser: names[lose.k], ratio: ratio > 1e6 ? 'a million' : Number(ratio.toPrecision(2)).toLocaleString('en-US'), energy: tntLabel(win.r.energy) },
   );

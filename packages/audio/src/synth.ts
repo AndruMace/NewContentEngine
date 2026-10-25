@@ -91,8 +91,11 @@ export function createBus(
   return { ctx, input, noise: seededNoise(ctx, 2, 1), panners: new Map(), t0: opts.t0 ?? 0, loopS: opts.loopS ?? 0, samples: opts.samples ?? new Map(), music, voice, lenient: opts.lenient ?? false };
 }
 
-/** Play a narrated line at `when`, dipping the music under it (lines never overlap). */
-function playLine(bus: SynthBus, clip: string, vel: number, when: number) {
+/**
+ * Play a narrated line at `when`, dipping the music under it (lines never overlap); from `offset`
+ * seconds in, to pick up a line that was cut off (a paused preview resuming).
+ */
+export function playLine(bus: SynthBus, clip: string, vel: number, when: number, offset = 0) {
   const buffer = bus.samples.get(clip);
   if (!buffer) {
     if (bus.lenient) return;
@@ -103,9 +106,9 @@ function playLine(bus: SynthBus, clip: string, vel: number, when: number) {
   const g = bus.ctx.createGain();
   g.gain.value = vel;
   src.connect(g).connect(bus.voice);
-  src.start(when);
+  src.start(when, offset);
   const gain = bus.music.gain;
-  const end = when + buffer.duration;
+  const end = when + buffer.duration - offset;
   gain.setValueAtTime(1, Math.max(0, when - DUCK.fall));
   gain.linearRampToValueAtTime(DUCK.level, when);
   gain.setValueAtTime(DUCK.level, end);

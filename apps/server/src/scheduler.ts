@@ -116,7 +116,6 @@ export class RenderScheduler extends EventEmitter {
           updateRender(job.id, { stage });
           this.emitRender(job.id);
         },
-        onWarning: (message) => console.warn(`[render ${job.id}] ${message}`),
         onProgress: (frame, est) => {
           const pct = Math.floor((frame / est) * 50);
           if (pct === lastPct) return;

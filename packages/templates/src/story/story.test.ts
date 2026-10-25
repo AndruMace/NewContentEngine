@@ -81,7 +81,7 @@ function voice(lens: Record<string, number>): VoiceTrack {
     durationS: len,
     ...(parts ? { parts: Array.from({ length: parts }, (_, k) => ({ text: `p${k}`, caption: `p${k}`, at: (k * len) / parts, durationS: len / parts - 0.12 })) } : {}),
   });
-  return { provider: 'fake', voiceId: 'v', factsHash: 'x', writer: 'fallback', lines: [line('intro', lens.intro), line('rules', lens.rules, 2), line('end', lens.end)] };
+  return { provider: 'fake', voiceId: 'v', factsHash: 'x', lines: [line('intro', lens.intro), line('rules', lens.rules, 2), line('end', lens.end)] };
 }
 
 const run = (params: Record<string, unknown>, v?: VoiceTrack) =>

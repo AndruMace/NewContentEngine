@@ -337,13 +337,13 @@ function anvil(): THREE.Group {
   s.lineTo(-0.3, -0.12);
   s.closePath();
   const geo = new THREE.ExtrudeGeometry(s, { depth: 0.22, bevelEnabled: true, bevelSize: 0.008, bevelThickness: 0.008, bevelSegments: 2 }).translate(0, 0, -0.11);
-  mesh(geo, mat(0x2c2f33, 0.45, 0.9), 0, 0, 0, g);
+  mesh(geo, mat(0x7a7f86, 0.45, 0.85), 0, 0, 0, g);
   return g;
 }
 
 function piano(): THREE.Group {
   const g = new THREE.Group();
-  const lacquer = mat(0x07070a, 0.12, 0.2, { envMapIntensity: 1.5 });
+  const lacquer = mat(0x18181d, 0.14, 0.2, { envMapIntensity: 1.5 });
   const s = new THREE.Shape();
   s.moveTo(-1.05, -0.75);
   s.lineTo(1.05, -0.75);
@@ -614,7 +614,7 @@ function cube(): THREE.Group {
 /** What survives a breakup, by name. */
 function core(name: string, shape: Shape): THREE.Group {
   const g = new THREE.Group();
-  const iron = mat(0x4a4d52, 0.55, 0.85);
+  const iron = mat(0x767a80, 0.55, 0.8);
   switch (name) {
     case 'engine block':
     case 'engine and frame':
@@ -640,9 +640,27 @@ function core(name: string, shape: Shape): THREE.Group {
     case 'titanium fuel tank':
       mesh(new THREE.SphereGeometry(0.45, 32, 24), mat(0x8e9399, 0.3, 1), 0, 0, 0, g);
       return g;
-    case 'steel docking frame':
-      mesh(new THREE.TorusGeometry(1.0, 0.25, 16, 40), iron, 0, 0, 0, g);
+    case 'steel docking frame': {
+      // A docking port torn out of the module: the collar, its flanges, the hatch, and the stubs of
+      // the struts that held it (axis along x, like the module it came from).
+      const steel = mat(0x9aa0a8, 0.45, 0.6);
+      const dark = mat(0x5c6168, 0.6, 0.5);
+      mesh(new THREE.CylinderGeometry(1.0, 1.0, 0.55, 40, 1, true).rotateZ(Math.PI / 2), mat(0x9aa0a8, 0.45, 0.6, { side: THREE.DoubleSide }), 0, 0, 0, g);
+      for (const x of [-0.3, 0.3]) mesh(new THREE.TorusGeometry(1.05, 0.08, 10, 48).rotateY(Math.PI / 2), steel, x, 0, 0, g);
+      // The hatch, shut, with its handle.
+      mesh(new THREE.CylinderGeometry(0.92, 0.92, 0.08, 40).rotateZ(Math.PI / 2), dark, 0.12, 0, 0, g);
+      mesh(new THREE.BoxGeometry(0.06, 0.12, 0.7), steel, 0.2, 0, 0, g);
+      // Torn strut stubs, each a different length.
+      const r = rand(17);
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + r() * 0.3;
+        const len = 0.18 + 0.25 * r();
+        const strut = mesh(new THREE.BoxGeometry(0.14, len, 0.12), dark, -0.15 + 0.3 * r(), Math.cos(a) * (1.08 + len / 2), Math.sin(a) * (1.08 + len / 2), g);
+        strut.rotation.x = a - Math.PI / 2;
+        strut.rotation.z = (r() - 0.5) * 0.5;
+      }
       return g;
+    }
     case 'brick chimney':
       mesh(new THREE.BoxGeometry(6, 1.2, 1.2), mat(0x8c3b2a, 0.9), 0, 0, 0, g);
       return g;
@@ -697,7 +715,7 @@ export function buildModel(id: string, shape: Shape, coreName?: string): THREE.G
     case 'cow':
       return cow();
     case 'iron-meteorite':
-      return rock(1, 4, 0x3a332c, 0.5, 0.75);
+      return rock(1, 4, 0x3a332c, 0.55, 0.45);
     case 'stony-meteorite':
       return rock(0.3, 8, 0x2a2420, 0.85, 0.05);
     case 'asteroid':
@@ -720,6 +738,7 @@ export function buildModel(id: string, shape: Shape, coreName?: string): THREE.G
 }
 
 /** Little chunks thrown off in a breakup (shapes and colours vary by seed). */
-export function debrisGeometry(): THREE.BufferGeometry {
-  return new THREE.IcosahedronGeometry(1, 0);
+export function debrisGeometry(plates = false): THREE.BufferGeometry {
+  // Torn panels for machines; chunks for rock.
+  return plates ? new THREE.IcosahedronGeometry(1, 0).scale(1, 0.2, 0.8) : new THREE.IcosahedronGeometry(1, 0);
 }

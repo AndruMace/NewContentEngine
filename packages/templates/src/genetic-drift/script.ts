@@ -84,68 +84,68 @@ function fastTps(p: DriftParams, fastGens: number, beats: number): number {
 const intro = (): BeatSpec => ({
   id: 'intro',
   about: 'A population of {n} {critters} appears, {k} colours in equal numbers. No colour has any advantage over another.',
-  maxWords: 18,
+  maxWords: 22,
   required: ['n', 'critters', 'k'],
-  fallback: ['Here are {n} {critters} in {k} colours. None of them is better than the others.', 'Meet {n} {critters}, {k} colours, perfectly equal. No colour has any advantage.'],
+  fallback: ['Here are {n} {critters}, in {k} colors and equal numbers. No color has any advantage over the others.', 'Meet {n} {critters} in {k} colors. They’re perfectly equal, and no color is any better than another.'],
 });
 
 const GUESS: BeatSpec = {
   id: 'guess',
   about: 'The viewer is asked to guess which colour will end up taking over the whole population.',
-  maxWords: 9,
-  fallback: ['So which colour takes over? Lock in your guess.', 'Guess which colour wins. Comment it now.'],
+  maxWords: 13,
+  fallback: ['So which color do you think will take over? Lock in your guess.', 'Which color ends up winning? Put your guess in the comments.'],
 };
 
 const RULE: BeatSpec = {
   id: 'rule',
   about: 'How each new generation is made.',
-  maxWords: 20,
+  maxWords: 24,
   parts: [
-    { about: 'the next generation appears below: each new one copies a single parent, picked at random', maxWords: 9 },
-    { about: 'another generation: lines show some parents were copied several times and others not at all', maxWords: 9 },
+    { about: 'the next generation appears below: each new one copies a single parent, picked at random', maxWords: 11 },
+    { about: 'another generation: lines show some parents were copied several times and others not at all', maxWords: 12 },
   ],
-  fallback: ['Each generation, everyone copies one random parent. | Some get copied twice, some not at all.', 'Every new {critter} picks a parent at random. | Lucky ones leave more copies.'],
+  fallback: ['Each generation, every newcomer copies one parent, picked at random. | So some parents get copied twice, and others not at all.', 'Every new {critter} picks a parent at random to copy. | The lucky ones end up leaving more copies.'],
 };
 
 const CHANCE: BeatSpec = {
   id: 'chance',
   about: 'A few more generations go by slowly; the colour shares start to wander. Nobody is choosing: it is pure chance.',
-  maxWords: 9,
-  fallback: ['Nobody is choosing. It is pure chance.', 'No skill, no fitness. Just luck.'],
+  maxWords: 12,
+  fallback: ['Nobody’s choosing here. It’s pure chance.', 'There’s no skill and no fitness involved. Just luck.'],
 };
 
 function lostBeat(id: string): BeatSpec {
   return {
     id,
     about: 'The last {colour} one just died out, at generation {g}: that colour is gone for good.',
-    maxWords: 12,
+    maxWords: 15,
     required: ['colour', 'g'],
-    fallback: ['And {colour} is gone, after {g} generations.', 'Generation {g}: the last {colour} one disappears.'],
+    fallback: ['And {colour} is gone for good, after {g} generations.', 'At generation {g}, the last {colour} one disappears.'],
   };
 }
 
 const TWO: BeatSpec = {
   id: 'two',
   about: 'Only two colours remain: {a} and {b}. Now it is a duel.',
-  maxWords: 10,
+  maxWords: 12,
   required: ['a', 'b'],
-  fallback: ['Now it is {a} against {b}.', 'Just two colours left: {a} and {b}.'],
+  fallback: ['Now it’s down to two: {a} against {b}.', 'Only two colors are left now, {a} and {b}.'],
 };
 
 const WIN: BeatSpec = {
   id: 'win',
   about: 'Every single individual is now {winner}: that colour has taken over, at generation {g}.',
-  maxWords: 12,
+  maxWords: 14,
   required: ['winner', 'g'],
-  fallback: ['{winner} takes over everything, at generation {g}.', 'Generation {g}: every single one is {winner}.'],
+  fallback: ['{winner} has taken over completely, at generation {g}.', 'By generation {g}, every single one is {winner}.'],
 };
 
 const LESSON: BeatSpec = {
   id: 'lesson',
   about: 'The lesson: no colour was better; random chance alone made one take over. Biologists call this genetic drift.',
-  maxWords: 18,
+  maxWords: 22,
   required: ['winner'],
-  fallback: ['No colour was better. Luck alone did this. That is genetic drift.', 'Nothing was special about {winner}. Random chance did it all. Biologists call it genetic drift.'],
+  fallback: ['No color was any better. Luck alone did this, and biologists call it genetic drift.', 'There was nothing special about {winner}. Random chance did it all, and that’s called genetic drift.'],
 };
 
 const nounOf = (p: DriftParams) => SKINS[p.skin];
@@ -232,9 +232,9 @@ function finish(plan: Plan, p: DriftParams, sim: DriftSim, m: ReturnType<typeof 
 const STILL: BeatSpec = {
   id: 'still',
   about: 'Time is up: after {g} generations no colour has won yet; {left} colours are still hanging on.',
-  maxWords: 12,
+  maxWords: 16,
   required: ['g', 'left'],
-  fallback: ['After {g} generations, {left} colours are still hanging on.', 'Generation {g}, and still {left} colours left.'],
+  fallback: ['After {g} generations, {left} colors are still hanging on.', 'We’re at generation {g}, and {left} colors are still in the game.'],
 };
 
 function selection(p: DriftParams, rng: Rng): Built {
@@ -254,26 +254,26 @@ function selection(p: DriftParams, rng: Rng): Built {
     {
       id: 'intro',
       about: 'A population of {n} {critters}, half {fav} and half {other}. The {fav} ones are {pct} percent fitter: they leave more offspring on average.',
-      maxWords: 20,
+      maxWords: 24,
       required: ['n', 'critters', 'fav', 'pct'],
-      fallback: ['Here are {n} {critters}, {fav} and {other}. The {fav} ones are {pct} percent fitter.', '{n} {critters}. Every {fav} one has {pct} percent more babies than the {other} ones.'],
+      fallback: ['Here are {n} {critters}, half {fav} and half {other}. The {fav} ones are {pct} percent fitter.', '{n} {critters}, and every {fav} one leaves {pct} percent more offspring than the {other} ones.'],
     },
     facts,
   );
   opening(plan, p, facts, {
     id: 'guess',
     about: 'The viewer is asked whether the fitter colour, {fav}, will win.',
-    maxWords: 10,
+    maxWords: 13,
     required: ['fav'],
-    fallback: ['So does {fav} win? Lock in your guess.', 'Will {fav} take over? Comment your guess.'],
+    fallback: ['So does {fav} win? Lock in your guess.', 'Will {fav} take over? Put your guess in the comments.'],
   });
   const favWon = m.winner === 0;
   const win: BeatSpec = favWon
     ? { ...WIN, about: 'The fitter colour, {winner}, has taken over at generation {g}, as you might expect.' }
-    : { ...WIN, about: 'Surprise: the less fit colour, {winner}, has taken over at generation {g}.', fallback: ['Surprise! {winner} takes over, at generation {g}.', 'Generation {g}: {winner} wins anyway.'] };
+    : { ...WIN, about: 'Surprise: the less fit colour, {winner}, has taken over at generation {g}.', fallback: ['Surprise! {winner} takes over anyway, at generation {g}.', 'By generation {g}, it’s {winner} that wins, against the odds.'] };
   const lesson: BeatSpec = favWon
-    ? { id: 'lesson', about: 'The advantage held this time. But in small populations, luck often beats a real advantage.', maxWords: 18, fallback: ['This time the advantage held. In small populations, it often does not.', 'Fitness won today. But in small groups, luck can still beat it.'] }
-    : { id: 'lesson', about: 'Being fitter was not enough: in a small population, random chance beat a real advantage. That is genetic drift.', maxWords: 18, fallback: ['Being fitter was not enough. In small populations, luck can beat a real advantage.', 'A real advantage, and it still lost. That is the power of genetic drift.'] };
+    ? { id: 'lesson', about: 'The advantage held this time. But in small populations, luck often beats a real advantage.', maxWords: 20, fallback: ['This time the advantage held. But in small populations, it often doesn’t.', 'Fitness won today. But in a small group, luck can still beat it.'] }
+    : { id: 'lesson', about: 'Being fitter was not enough: in a small population, random chance beat a real advantage. That is genetic drift.', maxWords: 20, fallback: ['Being fitter wasn’t enough. In a small population, luck can beat a real advantage.', 'It had a real advantage and still lost. That’s the power of genetic drift.'] };
   finish(plan, p, sim, m, end, facts, win, lesson);
   if (m.fixedAt > 0) sim.result = favWon ? 'fitter won' : 'underdog won';
   return { sim, script: s };
@@ -297,17 +297,17 @@ function smallVsLarge(p: DriftParams, rng: Rng): Built {
     {
       id: 'intro',
       about: 'Two populations side by side with the same {k} colours: a small one of {small} {critters} and a big one of {large}.',
-      maxWords: 20,
+      maxWords: 24,
       required: ['k', 'small', 'large'],
-      fallback: ['Two populations, the same {k} colours. One has {small} {critters}, the other {large}.', 'Same {k} colours, two sizes: {small} {critters} here, {large} there.'],
+      fallback: ['Two populations with the same {k} colors. One has {small} {critters}, and the other has {large}.', 'The same {k} colors in two populations: {small} {critters} here, and {large} over there.'],
     },
     facts,
   );
   opening(plan, p, facts, {
     id: 'guess',
     about: 'The viewer is asked which population will lose its variety, ending up all one colour, first.',
-    maxWords: 10,
-    fallback: ['Which one ends up all one colour first?', 'Which loses its colours first? Comment your guess.'],
+    maxWords: 14,
+    fallback: ['Which one do you think ends up all one color first?', 'Which population loses its colors first? Put your guess in the comments.'],
   });
   if (ms.fixedAt > 0 && plan.ahead(ms.fixedAt)) {
     plan.upTo(ms.fixedAt);
@@ -315,9 +315,9 @@ function smallVsLarge(p: DriftParams, rng: Rng): Built {
       {
         id: 'small',
         about: 'The small population is now entirely {winner}, after just {g} generations; the big one is still mixed.',
-        maxWords: 13,
+        maxWords: 16,
         required: ['winner', 'g'],
-        fallback: ['The small one is all {winner} after just {g} generations.', 'Generation {g}: the small group is all {winner} already.'],
+        fallback: ['The small population is already all {winner}, after just {g} generations.', 'By generation {g}, the small group is entirely {winner}.'],
       },
       { winner: sim.colours[ms.winner].name, g: ms.fixedAt },
       1,
@@ -331,17 +331,17 @@ function smallVsLarge(p: DriftParams, rng: Rng): Built {
   const ratio = ms.fixedAt > 0 ? Math.max(2, Math.round(end / ms.fixedAt)) : 0;
   if (bigFixed)
     plan.say(
-      { id: 'big', about: 'The big population finally ends up one colour at generation {g}, {ratio} times longer than the small one.', maxWords: 13, required: ['g', 'ratio'], fallback: ['The big one took {g} generations, {ratio} times longer.', 'It took the big one {g} generations: {ratio} times as long.'] },
+      { id: 'big', about: 'The big population finally ends up one colour at generation {g}, {ratio} times longer than the small one.', maxWords: 17, required: ['g', 'ratio'], fallback: ['The big population took {g} generations to get there, {ratio} times longer.', 'It took the big one {g} generations, {ratio} times as long.'] },
       { g: end, ratio },
     );
   else
     plan.say(
-      { id: 'big', about: 'After {g} generations, the big population still has {left} colours.', maxWords: 13, required: ['g', 'left'], fallback: ['After {g} generations, the big one still has {left} colours.', 'Generation {g}, and the big one keeps {left} colours.'] },
+      { id: 'big', about: 'After {g} generations, the big population still has {left} colours.', maxWords: 17, required: ['g', 'left'], fallback: ['After {g} generations, the big population still has {left} colors.', 'We’re at generation {g}, and the big one is still holding on to {left} colors.'] },
       { g: end, left: coloursLeft(big.counts[end]) },
     );
   sim.answer = 'SMALL LOSES FIRST';
   sim.result = bigFixed ? 'big fixed too' : 'big still mixed';
-  plan.say({ id: 'lesson', about: 'Small populations drift fast and lose variety; big ones hold on to it far longer.', maxWords: 16, fallback: ['Small populations drift fast. Big ones hold on to their variety much longer.', 'The smaller the group, the faster luck wipes out its variety.'] }, facts);
+  plan.say({ id: 'lesson', about: 'Small populations drift fast and lose variety; big ones hold on to it far longer.', maxWords: 17, fallback: ['Small populations drift fast. Big ones hold on to their variety much longer.', 'The smaller the group, the faster luck wipes out its variety.'] }, facts);
   s.mark('outro');
   s.hold(2.6);
   return { sim, script: s };
@@ -373,45 +373,45 @@ function bottleneck(p: DriftParams, rng: Rng): Built {
   const s = new Script<DriftSim>();
   const plan = new Plan(s, fastTps(p, end, 9));
   plan.say(
-    { id: 'intro', about: 'A big, healthy population: {n} {critters} in {k} colours.', maxWords: 14, required: ['n', 'critters', 'k'], fallback: ['Here are {n} {critters} in {k} colours, a big healthy population.', '{n} {critters}, {k} colours, all doing fine.'] },
+    { id: 'intro', about: 'A big, healthy population: {n} {critters} in {k} colours.', maxWords: 17, required: ['n', 'critters', 'k'], fallback: ['Here’s a big, healthy population: {n} {critters} in {k} colors.', '{n} {critters} in {k} colors, and all of them doing fine.'] },
     facts,
   );
-  opening(plan, p, facts, { id: 'guess', about: 'The viewer is asked how many colours will survive what is coming.', maxWords: 10, fallback: ['Something is coming. How many colours survive it?', 'Guess how many colours make it through.'] });
+  opening(plan, p, facts, { id: 'guess', about: 'The viewer is asked how many colours will survive what is coming.', maxWords: 12, fallback: ['Something’s about to happen. How many colors will survive it?', 'Guess how many colors make it through what’s coming.'] });
   plan.upTo(CRASH_AT);
   plan.say(
     {
       id: 'crash',
       about: 'A disaster wipes out almost everyone.',
-      maxWords: 10,
+      maxWords: 12,
       required: ['survivors'],
       parts: [
-        { about: 'the population suddenly crashes', maxWords: 4 },
-        { about: 'only {survivors} individuals are left', maxWords: 6 },
+        { about: 'the population suddenly crashes', maxWords: 5 },
+        { about: 'only {survivors} individuals are left', maxWords: 7 },
       ],
-      fallback: ['Then disaster strikes. | Only {survivors} survive.', 'Suddenly, a catastrophe. | Just {survivors} are left.'],
+      fallback: ['Then disaster strikes. | Only {survivors} of them survive.', 'Suddenly, a catastrophe. | Just {survivors} are left.'],
     },
     facts,
     [1, 1],
   );
   plan.say(
     facts.lost > 1
-      ? { id: 'lost', about: '{lost} colours vanished in the crash; {left} are left.', maxWords: 10, required: ['lost'], fallback: ['{lost} colours vanished in an instant.', 'Just like that, {lost} colours are gone.'] }
+      ? { id: 'lost', about: '{lost} colours vanished in the crash; {left} are left.', maxWords: 10, required: ['lost'], fallback: ['{lost} colors vanished in an instant.', 'Just like that, {lost} colors are gone.'] }
       : facts.lost === 1
         ? { id: 'lost', about: 'One colour, {colour}, vanished in the crash.', maxWords: 10, required: ['colour'], fallback: ['Just like that, {colour} is gone.', '{colour} vanished in an instant.'] }
-        : { id: 'lost', about: 'Every colour somehow made it through the crash.', maxWords: 10, fallback: ['Somehow, every colour made it through.', 'Every colour survived, just barely.'] },
+        : { id: 'lost', about: 'Every colour somehow made it through the crash.', maxWords: 10, fallback: ['Somehow, every color made it through.', 'Every color survived, but only just.'] },
     { ...facts, colour: lostIn(hist, CRASH_AT - 1, Math.min(end, CRASH_AT + 1)).map((c) => sim.colours[c].name).join(' and ') },
     Math.max(0, Math.min(end, regrown) - plan.pos),
   );
   plan.say(
-    { id: 'founder', about: 'The population has regrown, but everyone now descends from those few {survivors} survivors.', maxWords: 12, required: ['survivors'], fallback: ['Everyone now descends from just {survivors} survivors.', 'A whole population, rebuilt from {survivors} lucky ones.'] },
+    { id: 'founder', about: 'The population has regrown, but everyone now descends from those few {survivors} survivors.', maxWords: 13, required: ['survivors'], fallback: ['Everyone alive now descends from just {survivors} survivors.', 'A whole population, rebuilt from {survivors} lucky survivors.'] },
     facts,
     Math.min(4, Math.max(0, end - plan.pos - 3)),
   );
   finish(plan, p, sim, m, end, facts, WIN, {
     id: 'lesson',
     about: 'That was a bottleneck: a few lucky survivors decided which colours, which genes, the whole population carries.',
-    maxWords: 18,
-    fallback: ['That is a bottleneck. A few lucky survivors decide a whole population\'s future.', 'A bottleneck: luck picks the survivors, and their genes are all that is left.'],
+    maxWords: 20,
+    fallback: ['That’s called a bottleneck. A few lucky survivors decide the future of the whole population.', 'In a bottleneck, luck picks the survivors, and their genes are all that’s left.'],
   });
   sim.result = `${facts.lost} lost in the crash`;
   return { sim, script: s };
@@ -444,33 +444,33 @@ function luckyMutant(p: DriftParams, rng: Rng): Built {
   const s = new Script<DriftSim>();
   const plan = new Plan(s, fastTps(p, end, 9));
   plan.say(
-    { id: 'intro', about: '{n} grey {critters}, and one golden mutant among them. Its gene is no better and no worse.', maxWords: 18, required: ['n', 'critters'], fallback: ['Here are {n} grey {critters}, and one golden mutant. It is no better and no worse.', '{n} {critters}. One of them is a golden mutant, but it has no advantage at all.'] },
+    { id: 'intro', about: '{n} grey {critters}, and one golden mutant among them. Its gene is no better and no worse.', maxWords: 21, required: ['n', 'critters'], fallback: ['Here are {n} gray {critters}, and one golden mutant. Its gene is no better and no worse.', '{n} {critters}, and one of them is a golden mutant, with no advantage at all.'] },
     facts,
   );
-  opening(plan, p, facts, { id: 'guess', about: 'The viewer is asked whether the single mutant will take over the population.', maxWords: 10, fallback: ['Will the mutant take over? Lock in your guess.', 'Can one mutant take over? Comment your guess.'] });
+  opening(plan, p, facts, { id: 'guess', about: 'The viewer is asked whether the single mutant will take over the population.', maxWords: 15, fallback: ['Will the mutant take over? Lock in your guess.', 'Can one mutant take over the whole population? Put your guess in the comments.'] });
   const firstEnd = (starts[1] ?? hist.rows.length) - 1;
   if (fixedTrial !== 0 && plan.ahead(firstEnd)) {
     plan.upTo(firstEnd);
-    plan.say({ id: 'lost1', about: 'The mutant gene has died out, after {g} generations.', maxWords: 10, required: ['g'], fallback: ['Gone, after just {g} generations.', 'And the mutant is lost, generation {g}.'] }, { g: firstEnd - starts[0] }, 1);
-    plan.say({ id: 'again', about: 'So the experiment starts over with a fresh mutant, again and again.', maxWords: 8, fallback: ['So we try again. And again.', 'New mutant. Try again.'] }, facts, Math.min(6, Math.max(0, end - plan.pos - 4)));
+    plan.say({ id: 'lost1', about: 'The mutant gene has died out, after {g} generations.', maxWords: 12, required: ['g'], fallback: ['And it’s gone, after just {g} generations.', 'The mutant gene is lost at generation {g}.'] }, { g: firstEnd - starts[0] }, 1);
+    plan.say({ id: 'again', about: 'So the experiment starts over with a fresh mutant, again and again.', maxWords: 9, fallback: ['So we try again, and again.', 'So we start over with a new mutant.'] }, facts, Math.min(6, Math.max(0, end - plan.pos - 4)));
   }
   if (fixedTrial >= 0) {
     const winStart = starts[fixedTrial];
     if (fixedTrial > 1 && plan.ahead(winStart)) {
       plan.upTo(winStart);
-      plan.say({ id: 'try', about: 'Try number {tries} begins, with a new mutant.', maxWords: 7, required: ['tries'], fallback: ['Try number {tries}.', 'Here comes try {tries}.'] }, { tries: fixedTrial + 1 }, 2);
+      plan.say({ id: 'try', about: 'Try number {tries} begins, with a new mutant.', maxWords: 7, required: ['tries'], fallback: ['Try number {tries}.', 'Here’s try number {tries}.'] }, { tries: fixedTrial + 1 }, 2);
     }
-    const win: BeatSpec = { id: 'win', about: 'This time the mutant gene has taken over the whole population, at generation {g} of this try.', maxWords: 12, required: ['g'], fallback: ['This time it takes over everything, at generation {g}!', 'It made it! Generation {g}, and every one is golden.'] };
+    const win: BeatSpec = { id: 'win', about: 'This time the mutant gene has taken over the whole population, at generation {g} of this try.', maxWords: 15, required: ['g'], fallback: ['This time it takes over everything, at generation {g}!', 'It made it! By generation {g}, every single one is golden.'] };
     const m = { ...milestones(hist), winner: 0, fixedAt: end };
     const lesson: BeatSpec =
       fixedTrial === 0
-        ? { id: 'lesson', about: 'The lesson: with {n} individuals, a brand new neutral mutant takes over only about one time in {n}, and this one did it on the very first try.', maxWords: 20, fallback: ['With {n} {critters}, a new mutant wins about one time in {n}. This one did it first time.', 'One chance in {n}, and it won on the very first try.'] }
+        ? { id: 'lesson', about: 'The lesson: with {n} individuals, a brand new neutral mutant takes over only about one time in {n}, and this one did it on the very first try.', maxWords: 26, fallback: ['With {n} {critters}, a new mutant wins only about one time in {n}, and this one did it on the very first try.', 'The odds were one in {n}, and it won on the very first try.'] }
         : {
             id: 'lesson',
             about: 'The lesson: with {n} individuals, a brand new neutral mutant takes over only about one time in {n}. This took {tries} tries.',
-            maxWords: 20,
+            maxWords: 24,
             required: ['tries'],
-            fallback: ['With {n} {critters}, a new mutant wins about one time in {n}. This took {tries} tries.', 'One in {n}: that is the chance. Today it took {tries} tries.'],
+            fallback: ['With {n} {critters}, a new mutant wins only about one time in {n}. This one took {tries} tries.', 'The chance is one in {n}, and today it took {tries} tries.'],
           };
     finish(plan, p, sim, m, end, { ...facts, g: end - winStart }, win, lesson);
     // finish() gives the generation counted from the start: the mutant's story counts from its try.
@@ -482,8 +482,8 @@ function luckyMutant(p: DriftParams, rng: Rng): Built {
     plan.upTo(end);
     s.act(reveal);
     s.mark('reveal');
-    plan.say({ id: 'never', about: 'After {tries} tries, the mutant never managed to take over.', maxWords: 10, required: ['tries'], fallback: ['After {tries} tries, it never took over.', '{tries} tries, and the mutant always vanished.'] }, { tries: trials.length }, Math.max(0, end - plan.pos));
-    plan.say({ id: 'lesson', about: 'With {n} individuals, a new neutral mutant wins only about one time in {n}.', maxWords: 16, fallback: ['With {n} {critters}, a new mutant wins only about one time in {n}.', 'The odds were one in {n}. Most new genes simply vanish.'] }, facts);
+    plan.say({ id: 'never', about: 'After {tries} tries, the mutant never managed to take over.', maxWords: 12, required: ['tries'], fallback: ['After {tries} tries, the mutant never managed to take over.', '{tries} tries, and every single mutant vanished.'] }, { tries: trials.length }, Math.max(0, end - plan.pos));
+    plan.say({ id: 'lesson', about: 'With {n} individuals, a new neutral mutant wins only about one time in {n}.', maxWords: 18, fallback: ['With {n} {critters}, a new mutant wins only about one time in {n}.', 'The odds were one in {n}. Most new genes simply vanish.'] }, facts);
     sim.answer = 'NEVER';
     sim.result = 'never took over';
     s.mark('outro');

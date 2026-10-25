@@ -9,7 +9,7 @@ import { OMEGA, R_EARTH } from './atmosphere';
 import { buildModel } from './models';
 import { objectById } from './objects';
 import { simulate } from './physics';
-import { CRUSH, Wreck, bowl, crushFraction, subdivide, type CraterShape } from './wreck';
+import { CRUSH, Wreck, bowl, crushFraction, penetration, subdivide, type CraterShape } from './wreck';
 
 /** Edges of a triangle soup, keyed by their two (rounded) end points: how many triangles share each. */
 function edgeCounts(geo: THREE.BufferGeometry): Map<string, number> {
@@ -73,6 +73,20 @@ describe('crush', () => {
   });
 });
 
+describe('digging in', () => {
+  const sand = { rho: 1600, strength: 0.2e6 };
+  const granite = { rho: 2650, strength: 36e6 };
+  it('a dense, narrow thing digs deeper than a light, broad one; hardly at all into granite', () => {
+    // A steel docking frame on its edge at 248 km/h, against the same frame flat.
+    const edge = penetration(1500, 2.5 * 0.8 * 0.75, 69, sand);
+    const flat = penetration(1500, 2.5 * 2.5 * 0.75, 69, sand);
+    expect(edge).toBeGreaterThan(flat);
+    expect(edge).toBeGreaterThan(0.3);
+    expect(edge).toBeLessThan(2);
+    expect(penetration(1500, 1.5, 69, granite)).toBeLessThan(0.1);
+  });
+});
+
 describe('wreck', () => {
   const crater: CraterShape = { R: 1.9, depth: 0.78, rim: 0.14 };
   const landCar = (seed: number) => {
@@ -86,6 +100,7 @@ describe('wreck', () => {
       mass: 1500,
       size: 4.7,
       crater,
+      ground: { rho: 1600, strength: 0.2e6 },
     }));
     w.work(Infinity);
     return w;

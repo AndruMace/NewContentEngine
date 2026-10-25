@@ -158,15 +158,18 @@ const HISTORY: BeatSpec = {
   about: 'The history: Ernst Chladni showed these sand patterns in {year}, and violin and guitar makers still use them to tune the wood of their instruments.',
   maxWords: 20,
   required: ['year'],
-  fallback: ['Ernst Chladni first showed this in {year}. Violin makers still use it to tune their instruments.', 'These are Chladni figures, first shown in {year}. Guitar and violin makers still use them today.'],
+  fallback: [
+    'Ernst Chladni first showed these patterns in {year}. Violin makers still use them to tune their instruments.',
+    'They’re called Chladni figures, after the man who first showed them in {year}. Violin makers still use them.',
+  ],
 };
 
 /** The opening line: the plate, and what will make it ring (a speaker under it, or a bow). */
 function introBeat(p: ChladniParams, first: Mode): [BeatSpec, Record<string, string | number>] {
-  const facts = { size: p.size, metal: p.material, grains: p.sand === 'sand' ? 'sand' : 'salt' };
+  const facts = { size: p.size, metal: p.material === 'aluminium' ? 'aluminum' : p.material, grains: p.sand === 'sand' ? 'sand' : 'salt' };
   return first.exciter === 'speaker'
-    ? [{ id: 'intro', about: 'Sand is sprinkled on a {size} centimetre {metal} plate; a speaker under its centre is about to make it vibrate.', maxWords: 16, fallback: ['This is {grains} on a {metal} plate. A speaker under it is about to shake it.', 'Sand on a {metal} plate, and a speaker underneath. Watch what sound does.'] }, facts]
-    : [{ id: 'intro', about: 'Sand is sprinkled on a {size} centimetre {metal} plate; a violin bow drawn across its edge is about to make it ring.', maxWords: 16, fallback: ['This is {grains} on a {metal} plate. A violin bow is about to make it ring.', 'Sand on a {metal} plate, and a violin bow at its edge. Watch.'] }, facts];
+    ? [{ id: 'intro', about: 'Sand is sprinkled on a {size} centimetre {metal} plate; a speaker under its centre is about to make it vibrate.', maxWords: 15, fallback: ['Here’s some {grains} on a {metal} plate, with a speaker underneath to make it vibrate.', 'This is a {metal} plate covered in {grains}. Watch what sound does to it.'] }, facts]
+    : [{ id: 'intro', about: 'Sand is sprinkled on a {size} centimetre {metal} plate; a violin bow drawn across its edge is about to make it ring.', maxWords: 15, fallback: ['Here’s {grains} on a {metal} plate. A violin bow is about to make it ring.', 'This is a {metal} plate covered in {grains}. Watch what a violin bow does to it.'] }, facts];
 }
 
 function risingPitch(p: ChladniParams, rng: Rng): Built {
@@ -178,35 +181,38 @@ function risingPitch(p: ChladniParams, rng: Rng): Built {
   const s = new Script<PlateSim>();
   const plan = new Plan(s);
   plan.say(...introBeat(p, picked[0]));
-  if (p.guess) plan.say({ id: 'guess', about: 'The viewer is asked to guess what the sand will do when the note plays.', maxWords: 9, fallback: ['What will the sand do? Guess now.', 'Guess what happens when it plays.'] }, {});
+  if (p.guess) plan.say({ id: 'guess', about: 'The viewer is asked to guess what the sand will do when the note plays.', maxWords: 11, fallback: ['What do you think the sand will do? Make your guess.', 'Before the note plays, guess what the sand will do.'] }, {});
   const first = picked[0];
   plan.sound(first);
   plan.say(
     {
       id: 'first',
       about: 'The first note plays and the sand moves.',
-      maxWords: 20,
+      maxWords: 25,
       required: ['hz'],
       parts: [
-        { about: 'a note of {hz} hertz starts, from {how}, and the plate shakes', maxWords: 8 },
-        { about: 'the sand runs away from the shaking parts and gathers on the lines that stay still', maxWords: 12 },
+        { about: 'a note of {hz} hertz starts, from {how}, and the plate shakes', maxWords: 11 },
+        { about: 'the sand runs away from the shaking parts and gathers on the lines that stay still', maxWords: 14 },
       ],
-      fallback: ['A note: {hz} hertz. The plate shakes. | The sand runs to the only places that stay still.', 'Play {hz} hertz. | The sand flees the shaking and piles up where the plate is still.'],
+      fallback: [
+        'A note of {hz} hertz starts, and the plate shakes. | The sand flees the shaking parts and gathers where the plate stays still.',
+        'Here comes a note of {hz} hertz. | The sand flees the moving parts and piles up where the plate stays still.',
+      ],
     },
     hzFacts(first),
     // The first figure is the simplest, with the furthest for the sand to go: it gets longer.
     [SETTLE / 2, SETTLE],
   );
   const lines: BeatSpec[] = [
-    { id: 'next1', about: 'The note rises to {hz} hertz (played by {how}) and a new, more detailed pattern forms.', maxWords: 10, required: ['hz'], fallback: ['Higher: {hz} hertz. A new pattern.', 'Up to {hz} hertz, and it rearranges.'] },
-    { id: 'next2', about: 'Now {hz} hertz (played by {how}): even more lines appear.', maxWords: 8, required: ['hz'], fallback: ['{hz} hertz. Even more lines.', 'Now {hz} hertz. More detail.'] },
+    { id: 'next1', about: 'The note rises to {hz} hertz (played by {how}) and a new, more detailed pattern forms.', maxWords: 13, required: ['hz'], fallback: ['Now the note rises to {hz} hertz, and a new pattern forms.', 'Raise it to {hz} hertz, and a whole new pattern appears.'] },
+    { id: 'next2', about: 'Now {hz} hertz (played by {how}): even more lines appear.', maxWords: 11, required: ['hz'], fallback: ['At {hz} hertz, even more lines appear.', 'Now {hz} hertz, and the pattern gets more detailed.'] },
   ];
   for (let i = 1; i < picked.length; i++) {
     plan.glide(picked[i]);
     const last = i === picked.length - 1;
     if (last) {
       s.mark('reveal');
-      plan.say({ id: 'last', about: 'The highest note so far, {hz} hertz, makes the most complex pattern yet.', maxWords: 11, required: ['hz'], fallback: ['{hz} hertz: the most complex yet.', 'And {hz} hertz. The wildest one.'] }, hzFacts(picked[i]), SETTLE);
+      plan.say({ id: 'last', about: 'The highest note so far, {hz} hertz, makes the most complex pattern yet.', maxWords: 12, required: ['hz'], fallback: ['And at {hz} hertz, the most complex pattern yet.', 'Finally, {hz} hertz draws the most intricate pattern of all.'] }, hzFacts(picked[i]), SETTLE);
     } else if (i <= lines.length) plan.say(lines[i - 1], hzFacts(picked[i]), SETTLE);
     else plan.play(SETTLE, true);
   }
@@ -251,7 +257,7 @@ function guessPattern(p: ChladniParams, rng: Rng): Built {
   sim.revealed = options.map(() => false);
   const s = new Script<PlateSim>();
   const plan = new Plan(s);
-  plan.say({ id: 'intro', about: 'Sand on a vibrating plate: every note makes its own pattern in it.', maxWords: 12, fallback: ['Every note makes its own pattern in this sand.', 'Sand on a plate. Each note draws something different.'] }, {});
+  plan.say({ id: 'intro', about: 'Sand on a vibrating plate: every note makes its own pattern in it.', maxWords: 16, fallback: ['Every note makes its own pattern in this sand. Let’s see if you can predict them.', 'Each note draws a different pattern in the sand on this plate.'] }, {});
   options.forEach((ids, r) => {
     const correct = modes[ids[answers[r]]];
     if (r > 0) {
@@ -259,16 +265,16 @@ function guessPattern(p: ChladniParams, rng: Rng): Built {
       s.act(scatter);
     }
     plan.say(
-      { id: `ask${r + 1}`, about: `Round ${r + 1}: {count} patterns are shown, lettered. Which one will the next note make?`, maxWords: 11, required: ['count'], fallback: r === 0 ? ['Here are {count} patterns. Which one will this note make?', '{count} patterns. Which will this note draw?'] : ['Next note. Which of these {count} this time?', 'Now these {count}. Which one?'] },
+      { id: `ask${r + 1}`, about: `Round ${r + 1}: {count} patterns are shown, lettered. Which one will the next note make?`, maxWords: 15, required: ['count'], fallback: r === 0 ? ['Here are {count} patterns. Which one do you think this note will make?', 'Look at these {count} patterns. Which one will this note draw?'] : ['Here’s the next note. Which of these {count} will it be this time?', 'Another note, and {count} more patterns. Which one?'] },
       { count: ids.length },
     );
-    if (p.guess && r === 0) plan.say({ id: 'guess', about: 'The viewer is asked to comment their guess before the sand settles.', maxWords: 7, fallback: ['Comment your guess, then listen.', 'Lock in a letter. Listen.'] }, {});
+    if (p.guess && r === 0) plan.say({ id: 'guess', about: 'The viewer is asked to comment their guess before the sand settles.', maxWords: 9, fallback: ['Put your guess in the comments, then listen.', 'Lock in a letter, then listen.'] }, {});
     plan.sound(correct);
-    plan.say({ id: `play${r + 1}`, about: 'The note plays, {hz} hertz, and the sand starts to move.', maxWords: 8, required: ['hz'], fallback: ['{hz} hertz. Here it comes.', 'Listen: {hz} hertz.'] }, hzFacts(correct), SETTLE);
+    plan.say({ id: `play${r + 1}`, about: 'The note plays, {hz} hertz, and the sand starts to move.', maxWords: 10, required: ['hz'], fallback: ['Here’s the note: {hz} hertz.', 'Listen closely: {hz} hertz.'] }, hzFacts(correct), SETTLE);
     // Long enough for even a fine pattern to settle before the answer.
     plan.play(SETTLE * 1.5, true);
     if (r === options.length - 1) s.mark('reveal');
-    plan.say({ id: `reveal${r + 1}`, about: 'The sand has settled: it is pattern {letter}.', maxWords: 8, required: ['letter'], fallback: ['It is pattern {letter}!', 'Pattern {letter}. Did you get it?'] }, { letter: LETTERS[answers[r]] }, 30, [(sim) => (sim.revealed[r] = true)]);
+    plan.say({ id: `reveal${r + 1}`, about: 'The sand has settled: it is pattern {letter}.', maxWords: 8, required: ['letter'], fallback: ['It’s pattern {letter}!', 'It’s pattern {letter}. Did you get it?'] }, { letter: LETTERS[answers[r]] }, 30, [(sim) => (sim.revealed[r] = true)]);
     plan.key(correct.hz, false);
   });
   plan.say(HISTORY, { year: '1787' });
@@ -293,10 +299,10 @@ function plateShapes(p: ChladniParams): Built {
   sim.labels.circle = labelOf(p, 'circle', diameter);
   const s = new Script<PlateSim>();
   const plan = new Plan(s);
-  plan.say({ id: 'intro', about: 'One note, two plates of different shapes. Will the sand make the same pattern?', maxWords: 13, fallback: ['One note, two different plates. Same pattern?', 'Same note, square plate, then round. Watch.'] }, {});
-  if (p.guess) plan.say({ id: 'guess', about: 'The viewer is asked whether the round plate will show the same pattern as the square one.', maxWords: 9, fallback: ['Same pattern on both? Guess now.', 'Will the round one match? Guess.'] }, {});
+  plan.say({ id: 'intro', about: 'One note, two plates of different shapes. Will the sand make the same pattern?', maxWords: 17, fallback: ['Same note, two plates with different shapes. Will the sand draw the same pattern on both?', 'One note, played on a square plate and then a round one. Will the patterns match?'] }, {});
+  if (p.guess) plan.say({ id: 'guess', about: 'The viewer is asked whether the round plate will show the same pattern as the square one.', maxWords: 11, fallback: ['Will the round plate show the same pattern? Make your guess.', 'Do you think the two patterns will match? Guess now.'] }, {});
   plan.sound(sq);
-  plan.say({ id: 'square', about: 'On the square plate, a note of {hz} hertz makes this pattern.', maxWords: 11, required: ['hz'], fallback: ['On a square plate, {hz} hertz makes this.', 'Square plate, {hz} hertz.'] }, hzFacts(sq), SETTLE);
+  plan.say({ id: 'square', about: 'On the square plate, a note of {hz} hertz makes this pattern.', maxWords: 14, required: ['hz'], fallback: ['On the square plate, a note of {hz} hertz makes this pattern.', 'Here’s the square plate at {hz} hertz.'] }, hzFacts(sq), SETTLE);
   // Time to look (stretched or cut to fit the length), still sounding.
   plan.play(SETTLE, true);
   plan.key(sq.hz, false);
@@ -305,12 +311,12 @@ function plateShapes(p: ChladniParams): Built {
     sim.round = 1;
     scatter(sim, emit);
   });
-  plan.say({ id: 'swap', about: 'The plate is swapped for a round one, {diameter} centimetres across, that rings at the same note; the sand is spread out again.', maxWords: 11, fallback: ['Now a round plate. Same note.', 'Swap in a round plate. Same note.'] }, { diameter: Math.round(diameter) });
+  plan.say({ id: 'swap', about: 'The plate is swapped for a round one, {diameter} centimetres across, that rings at the same note; the sand is spread out again.', maxWords: 14, fallback: ['Now we swap in a round plate that rings at exactly the same note.', 'Next, a round plate, tuned to the very same note.'] }, { diameter: Math.round(diameter) });
   plan.sound(modes[1]);
   s.mark('reveal');
-  plan.say({ id: 'round', about: 'The same note makes a completely different pattern on the round plate: rings and spokes.', maxWords: 11, fallback: ['A completely different pattern. Rings and spokes.', 'Totally different: circles and spokes.'] }, {}, SETTLE);
+  plan.say({ id: 'round', about: 'The same note makes a completely different pattern on the round plate: rings and spokes.', maxWords: 14, fallback: ['And the same note makes a completely different pattern here: rings and spokes.', 'Same note, but a totally different pattern this time: circles and spokes.'] }, {}, SETTLE);
   plan.play(SETTLE, true);
-  plan.say({ id: 'lesson', about: 'The lesson: the pattern depends on the shape as much as the note, which is why every violin body sounds slightly different.', maxWords: 18, fallback: ['The shape matters as much as the note. That is why no two violins sound the same.', 'Change the shape, change the pattern. Every violin body rings in its own way.'] }, {}, 60);
+  plan.say({ id: 'lesson', about: 'The lesson: the pattern depends on the shape as much as the note, which is why every violin body sounds slightly different.', maxWords: 20, fallback: ['So the shape matters just as much as the note. That’s why no two violins sound quite the same.', 'Change the shape and you change the pattern. That’s why every violin body rings in its own way.'] }, {}, 60);
   plan.key(sq.hz, false);
   sim.answer = 'DIFFERENT';
   s.mark('outro');

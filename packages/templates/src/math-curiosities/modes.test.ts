@@ -155,7 +155,6 @@ describe('math curiosities: narration', () => {
       provider: 'test',
       voiceId: 'v',
       factsHash: 'x',
-      writer: 'fallback',
       lines: beats.map((b) => ({ beat: b.id, text: b.id, caption: `${b.id} line`, clip: `${b.id}.wav`, durationS: seconds })),
     };
   }
