@@ -57,6 +57,9 @@ describe('line checks', () => {
   it('counts placeholders as the words they take to say', () => {
     expect(wordCount('{prev} is odd', beat.facts)).toBe(5);
     expect(wordCount('{prev} is odd')).toBe(3);
+    // A fact with digits and a unit counts as it's said: "twenty-four thousand seven hundred kilometers per hour".
+    expect(wordCount('It hits at {v}.', { v: '24,700 km/h' })).toBe(10);
+    expect(wordCount('{x} the energy', { x: '3.8 times' })).toBe(6);
   });
 
   it('rejects unknown or missing placeholders, digits, symbols and long lines', () => {

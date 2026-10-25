@@ -7,8 +7,15 @@ export type Lines = Record<string, string>;
 
 const PLACEHOLDER = /\{(\w+)\}/g;
 
-/** Words a fact takes to say ("250504" is seven). */
-const spokenWords = (v: string | number) => (typeof v === 'number' ? numberToWords(v) : String(v)).split(/\s+/).length;
+/** Digits in a fact as they're said: "24,700" → "twenty-four thousand seven hundred", "3.8" → "three point eight". */
+const sayDigits = (s: string) =>
+  s.replace(/\d[\d,]*(?:\.\d+)?/g, (n) => {
+    const [whole, frac] = n.replace(/,/g, '').split('.');
+    return [numberToWords(Number(whole)), ...(frac ? ['point', ...[...frac].map((d) => numberToWords(Number(d)))] : [])].join(' ');
+  });
+
+/** Words a fact takes to say ("250504" is seven; "24,700 km/h" is eight, with its unit said in full). */
+const spokenWords = (v: string | number) => (typeof v === 'number' ? numberToWords(v) : sayDigits(spokenText(String(v)))).split(/\s+/).filter(Boolean).length;
 
 /** Words in a line as spoken: placeholders count as the words their values take to say. */
 export const wordCount = (line: string, facts: Record<string, string | number> = {}) =>
